@@ -678,7 +678,7 @@ function FiltersBar({ gigs, filters, setFilters, onExport }) {
         <Input label="TO DATE" type="date" value={filters.dateTo} onChange={e=>setFilters(f=>({...f,dateTo:e.target.value}))} />
       </div>
       <div className="msm-filter-btns" style={{ display:"flex", gap:8 }}>
-        <Btn variant="ghost" onClick={()=>setFilters({ city:"All", genre:"All", dateFrom:"", dateTo:"" })}>CLEAR</Btn>
+        <Btn variant="ghost" onClick={()=>{ setFilters({ city:"All", genre:"All", dateFrom:"", dateTo:"" }); }}>CLEAR</Btn>
         <Btn variant="secondary" onClick={onExport} style={{ whiteSpace:"nowrap" }}>⬇ iCAL</Btn>
       </div>
     </div>
@@ -907,6 +907,7 @@ export default function App() {
   const [tab,     setTab]     = useState("calendar"); // calendar | list | submit | admin
   const [selGig,  setSelGig]  = useState(null);
   const [filters, setFilters] = useState({ city:"All", genre:"All", dateFrom:"", dateTo:"" });
+  const [search, setSearch]   = useState("");
 
   const isAdmin = auth?.profile?.role === "admin";
 
@@ -937,8 +938,14 @@ export default function App() {
     if (filters.genre !== "All" && g.genre !== filters.genre) return false;
     if (filters.dateFrom && g.date < filters.dateFrom) return false;
     if (filters.dateTo   && g.date > filters.dateTo)   return false;
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      if (!g.band_name.toLowerCase().includes(q) &&
+          !g.venue.toLowerCase().includes(q) &&
+          !g.city.toLowerCase().includes(q)) return false;
+    }
     return true;
-  }), [gigs, filters]);
+  }), [gigs, filters, search]);
 
   // If user clicked Submit Gig or Admin tab and isn't logged in, show auth panel
   if (!auth && (tab === "submit" || tab === "admin")) {
@@ -1020,6 +1027,22 @@ export default function App() {
             {loading
               ? <div style={{ color:C.muted, fontSize:16 }}>Loading gigs...</div>
               : <>
+                  {/* Search bar */}
+                  <div style={{ marginBottom:12, position:"relative" }}>
+                    <span style={{ position:"absolute", left:14, top:"50%", transform:"translateY(-50%)", fontSize:16, color:C.muted, pointerEvents:"none" }}>🔍</span>
+                    <input
+                      type="text"
+                      placeholder="Search bands, venues or cities..."
+                      value={search}
+                      onChange={e=>setSearch(e.target.value)}
+                      style={{ ...inputCss, paddingLeft:42, fontSize:15 }}
+                      onFocus={e=>e.target.style.borderColor=C.red}
+                      onBlur={e=>e.target.style.borderColor=C.border}
+                    />
+                    {search && (
+                      <span onClick={()=>setSearch("")} style={{ position:"absolute", right:14, top:"50%", transform:"translateY(-50%)", cursor:"pointer", color:C.muted, fontSize:18 }}>✕</span>
+                    )}
+                  </div>
                   <FiltersBar
                     gigs={gigs}
                     filters={filters}
