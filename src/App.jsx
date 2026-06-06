@@ -663,16 +663,16 @@ function CalendarView({ gigs, onGigClick }) {
           const isToday = ds===todayStr;
           return (
             <div key={ds} style={{
-              minHeight:80, background: isToday?"rgba(232,32,58,0.1)":"rgba(255,255,255,0.02)",
+              minHeight:110, background: isToday?"rgba(232,32,58,0.1)":"rgba(255,255,255,0.02)",
               border: isToday?`1px solid ${C.red}`:`1px solid ${C.border}`,
-              borderRadius:4, padding:"7px 6px 4px",
+              borderRadius:4, padding:"9px 8px 6px",
             }}>
               <div style={{ fontSize:13, color:isToday?C.red:C.dim, fontFamily:F.display, letterSpacing:1, marginBottom:3 }}>{day}</div>
               <div style={{ display:"flex", flexWrap:"wrap", gap:1 }}>
                 {dayGigs.map(g=>(
                   <span key={g.id} onClick={()=>onGigClick(g)} title={`${g.band_name} @ ${g.venue}`}
-                    style={{ width:7, height:7, borderRadius:"50%", background:GENRE_COLORS[g.genre]||"#888",
-                      display:"inline-block", cursor:"pointer", boxShadow:`0 0 4px ${GENRE_COLORS[g.genre]||"#888"}88` }}
+                    style={{ width:11, height:11, borderRadius:"50%", background:GENRE_COLORS[g.genre]||"#888",
+                      display:"inline-block", cursor:"pointer", margin:"1px", boxShadow:`0 0 5px ${GENRE_COLORS[g.genre]||"#888"}88` }}
                   />
                 ))}
               </div>
@@ -682,10 +682,10 @@ function CalendarView({ gigs, onGigClick }) {
       </div>
 
       {/* Legend */}
-      <div style={{ marginTop:18, display:"flex", flexWrap:"wrap", gap:"8px 16px" }}>
+      <div style={{ marginTop:20, display:"flex", flexWrap:"wrap", gap:"10px 20px" }}>
         {Object.entries(GENRE_COLORS).map(([g,c])=>(
-          <div key={g} style={{ display:"flex", alignItems:"center", gap:5, fontSize:10, color:C.muted }}>
-            <span style={{ width:7, height:7, borderRadius:"50%", background:c, display:"inline-block", boxShadow:`0 0 4px ${c}88` }} />
+          <div key={g} style={{ display:"flex", alignItems:"center", gap:7, fontSize:13, color:C.muted }}>
+            <span style={{ width:10, height:10, borderRadius:"50%", background:c, display:"inline-block", boxShadow:`0 0 4px ${c}88` }} />
             {g}
           </div>
         ))}
@@ -880,7 +880,7 @@ export default function App() {
       </div>
 
       {/* ── Main ── */}
-      <div style={{ maxWidth:"100%", margin:"0 auto", padding:"32px 48px" }}>
+      <div style={{ width:"100%", padding:"32px 48px" }}>
 
         {/* ADMIN */}
         {tab==="admin" && isAdmin && (
