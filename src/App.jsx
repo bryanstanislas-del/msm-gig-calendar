@@ -108,8 +108,15 @@ const DB = {
       MOCK_PROFILE = { id, role:"band", band_name: bandName };
       return { user: MOCK_USER, profile: MOCK_PROFILE };
     }
-    const { user } = await sbFetch("/auth/v1/signup", { method:"POST", body: JSON.stringify({ email, password }) });
-    await sbFetch("/rest/v1/profiles", { method:"POST", body: JSON.stringify({ id: user.id, band_name: bandName, role:"band" }) });
+    const data = await sbFetch("/auth/v1/signup", {
+      method:"POST",
+      body: JSON.stringify({
+        email, password,
+        data: { band_name: bandName }
+      })
+    });
+    const user = data.user || data;
+    if (!user || !user.id) throw new Error("Account created! Please sign in.");
     return { user, profile: { role:"band", band_name: bandName } };
   },
 
@@ -121,8 +128,20 @@ const DB = {
       MOCK_PROFILE = { id: u.id, role: u.role, band_name: u.band_name };
       return { user: MOCK_USER, profile: MOCK_PROFILE };
     }
-    const { access_token, user } = await sbFetch("/auth/v1/token?grant_type=password", { method:"POST", body: JSON.stringify({ email, password }) });
-    const [profile] = await sbFetch(`/rest/v1/profiles?id=eq.${user.id}`);
+    const authData = await sbFetch("/auth/v1/token?grant_type=password", {
+      method:"POST",
+      body: JSON.stringify({ email, password })
+    });
+    if (authData.error) throw new Error(authData.error_description || authData.error);
+    const { access_token, user } = authData;
+    // Fetch profile using the user's token so RLS allows it
+    let profile = { role:"band", band_name:"" };
+    try {
+      const profiles = await sbFetch(`/rest/v1/profiles?id=eq.${user.id}&select=*`, {
+        headers: { "Authorization": `Bearer ${access_token}` }
+      });
+      if (profiles && profiles.length > 0) profile = profiles[0];
+    } catch(e) { console.warn("Profile fetch failed", e); }
     return { user, profile, token: access_token };
   },
 
