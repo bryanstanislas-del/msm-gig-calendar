@@ -180,7 +180,14 @@ const DB = {
   },
 
   // Gigs
-  async getApprovedGigs() {
+  async getBands(token) {
+    if (USE_MOCK) return [
+      { id:"band1", band_name:"The Velvet Wolves", city:"London", genre:"Indie Rock", website:"https://example.com", instagram:"@velvetwolves", facebook:"", twitter:"", spotify:"", phone:"07700900123", bio:"Indie rock four-piece from London.", photo_url:"", role:"band" },
+    ];
+    return sbFetch("/rest/v1/profiles?role=eq.band&order=band_name.asc&select=*", {
+      headers: { "Authorization": `Bearer ${token}` }
+    });
+  },
     if (USE_MOCK) return MOCK_GIGS.filter(g => g.status === "approved");
     return sbFetch("/rest/v1/gigs?status=eq.approved&order=date.asc");
   },
@@ -1084,6 +1091,102 @@ function StatsPanel({ gigs }) {
 }
 
 // ════════════════════════════════════════════════════════════════════
+//  BAND DIRECTORY
+// ════════════════════════════════════════════════════════════════════
+function BandDirectory({ bands }) {
+  const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState(null);
+
+  const filtered = bands.filter(b => {
+    if (!search.trim()) return true;
+    const q = search.toLowerCase();
+    return (b.band_name||"").toLowerCase().includes(q) ||
+           (b.city||"").toLowerCase().includes(q) ||
+           (b.genre||"").toLowerCase().includes(q);
+  });
+
+  return (
+    <div>
+      <SectionLabel>REGISTERED BANDS</SectionLabel>
+
+      {/* Search */}
+      <div style={{ position:"relative", marginBottom:20 }}>
+        <span style={{ position:"absolute", left:14, top:"50%", transform:"translateY(-50%)", fontSize:16, color:C.muted }}>🔍</span>
+        <input
+          type="text" placeholder="Search bands, city or genre..."
+          value={search} onChange={e=>setSearch(e.target.value)}
+          style={{ ...inputCss, paddingLeft:42 }}
+          onFocus={e=>e.target.style.borderColor=C.red}
+          onBlur={e=>e.target.style.borderColor=C.border}
+        />
+      </div>
+
+      <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+        {filtered.length === 0 && <div style={{ color:C.dim, fontSize:13 }}>No bands found.</div>}
+        {filtered.map(b => {
+          const color = GENRE_COLORS[b.genre] || "#888";
+          return (
+            <div key={b.id} onClick={()=>setSelected(selected?.id===b.id ? null : b)}
+              style={{
+                background: selected?.id===b.id ? "rgba(232,32,58,0.08)" : C.surfaceHigh,
+                border:`1px solid ${selected?.id===b.id ? C.red : C.border}`,
+                borderLeft:`3px solid ${color}`,
+                borderRadius:8, padding:"14px 18px", cursor:"pointer",
+              }}
+            >
+              {/* Header row */}
+              <div style={{ display:"flex", alignItems:"center", gap:14, flexWrap:"wrap" }}>
+                {b.photo_url && (
+                  <img src={b.photo_url} alt={b.band_name}
+                    style={{ width:48, height:48, borderRadius:"50%", objectFit:"cover", flexShrink:0, border:`2px solid ${color}` }}
+                  />
+                )}
+                <div style={{ flex:1 }}>
+                  <div style={{ fontFamily:F.display, fontSize:18, letterSpacing:1.5, color:C.white }}>{b.band_name}</div>
+                  <div style={{ fontSize:12, color:C.muted, marginTop:2 }}>
+                    {[b.city, b.genre].filter(Boolean).join(" · ")}
+                  </div>
+                </div>
+                <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                  {b.spotify   && <a href={b.spotify}   target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()} style={{ fontSize:11, color:"#1DB954", textDecoration:"none" }}>SPOTIFY</a>}
+                  {b.website   && <a href={b.website}   target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()} style={{ fontSize:11, color:C.red,    textDecoration:"none" }}>WEBSITE</a>}
+                  {b.instagram && <a href={`https://instagram.com/${b.instagram.replace("@","")}`} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()} style={{ fontSize:11, color:"#e1306c", textDecoration:"none" }}>INSTAGRAM</a>}
+                </div>
+              </div>
+
+              {/* Expanded details */}
+              {selected?.id === b.id && (
+                <div style={{ marginTop:16, paddingTop:16, borderTop:`1px solid ${C.border}`, display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+                  {[
+                    ["CONTACT",  b.phone],
+                    ["CITY",     b.city],
+                    ["GENRE",    b.genre],
+                    ["FACEBOOK", b.facebook],
+                    ["TWITTER",  b.twitter],
+                    ["WEBSITE",  b.website],
+                  ].filter(([,v])=>v).map(([label, val])=>(
+                    <div key={label}>
+                      <div style={{ fontSize:9, color:C.dim, letterSpacing:2, marginBottom:3 }}>{label}</div>
+                      <div style={{ fontSize:13, color:C.white }}>{val}</div>
+                    </div>
+                  ))}
+                  {b.bio && (
+                    <div style={{ gridColumn:"1/-1" }}>
+                      <div style={{ fontSize:9, color:C.dim, letterSpacing:2, marginBottom:3 }}>BIO</div>
+                      <div style={{ fontSize:13, color:C.white, lineHeight:1.6 }}>{b.bio}</div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════
 //  GLOBAL CSS
 // ════════════════════════════════════════════════════════════════════
 const GLOBAL_CSS = `
@@ -1133,6 +1236,7 @@ export default function App() {
   const [auth,    setAuth]    = useState(null); // { user, profile, token }
   const [gigs,    setGigs]    = useState([]);
   const [allGigs, setAllGigs] = useState([]);   // admin only
+  const [bands,   setBands]   = useState([]);    // admin only
   const [loading, setLoading] = useState(true);
   const [tab,     setTab]     = useState("calendar"); // calendar | list | submit | admin
   const [selGig,  setSelGig]  = useState(null);
@@ -1148,8 +1252,13 @@ export default function App() {
 
   // Load all gigs when admin logs in
   useEffect(() => {
-    if (isAdmin && auth?.token) DB.getAllGigs(auth.token).then(setAllGigs);
-    else if (isAdmin) DB.getAllGigs(null).then(setAllGigs);
+    if (isAdmin && auth?.token) {
+      DB.getAllGigs(auth.token).then(setAllGigs);
+      DB.getBands(auth.token).then(setBands);
+    } else if (isAdmin) {
+      DB.getAllGigs(null).then(setAllGigs);
+      DB.getBands(null).then(setBands);
+    }
   }, [isAdmin, auth]);
 
   const refreshAdmin = useCallback(async () => {
@@ -1192,7 +1301,10 @@ export default function App() {
     { id:"list",     label:"LIST VIEW" },
     { id:"stats",    label:"STATS" },
     { id:"submit",   label:"SUBMIT GIG" },
-    ...(isAdmin ? [{ id:"admin", label:`ADMIN (${allGigs.filter(g=>g.status==="pending").length})` }] : []),
+    ...(isAdmin ? [
+      { id:"admin", label:`ADMIN (${allGigs.filter(g=>g.status==="pending").length})` },
+      { id:"bands", label:`BANDS (${bands.length})` },
+    ] : []),
   ];
 
   const navTabStyle = (id) => ({
@@ -1248,6 +1360,11 @@ export default function App() {
         {/* STATS */}
         {tab==="stats" && (
           <StatsPanel gigs={gigs} />
+        )}
+
+        {/* BANDS */}
+        {tab==="bands" && isAdmin && (
+          <BandDirectory bands={bands} />
         )}
 
         {/* ADMIN */}
