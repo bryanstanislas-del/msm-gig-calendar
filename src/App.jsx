@@ -365,7 +365,7 @@ const Select = ({ label, value, onChange, options }) => (
 // ════════════════════════════════════════════════════════════════════
 //  AUTH PANEL
 // ════════════════════════════════════════════════════════════════════
-function AuthPanel({ onAuth }) {
+function AuthPanel({ onAuth, onBack }) {
   const [mode, setMode]   = useState("login"); // login | register
   const [email, setEmail] = useState("");
   const [pass,  setPass]  = useState("");
@@ -430,6 +430,13 @@ function AuthPanel({ onAuth }) {
               <div style={{ color:C.red, fontFamily:F.display, letterSpacing:2, fontSize:11, marginBottom:4 }}>DEMO CREDENTIALS</div>
               <div>Admin: <span style={{color:C.white}}>admin@msm.co.uk</span> / admin123</div>
               <div>Band:  <span style={{color:C.white}}>band@example.com</span> / band123</div>
+            </div>
+          )}
+          {onBack && (
+            <div style={{ marginTop:16, textAlign:"center" }}>
+              <span onClick={onBack} style={{ fontSize:12, color:C.muted, cursor:"pointer", letterSpacing:1 }}>
+                ← Back to calendar
+              </span>
             </div>
           )}
         </div>
@@ -829,7 +836,10 @@ export default function App() {
     return true;
   }), [gigs, filters]);
 
-  if (!auth) return <AuthPanel onAuth={handleAuth} />;
+  // If user clicked Submit Gig or Admin tab and isn't logged in, show auth panel
+  if (!auth && (tab === "submit" || tab === "admin")) {
+    return <AuthPanel onAuth={handleAuth} onBack={()=>setTab("calendar")} />;
+  }
 
   const tabDef = [
     { id:"calendar", label:"CALENDAR" },
@@ -856,11 +866,17 @@ export default function App() {
           <MSMLogo height={56} showWordmark={true} />
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-          <div style={{ textAlign:"right" }}>
-            <div style={{ fontSize:15, color:C.white }}>{auth.profile?.band_name}</div>
-            <div style={{ fontSize:11, color: isAdmin ? C.red : C.muted, letterSpacing:1 }}>{isAdmin?"ADMINISTRATOR":"BAND ACCOUNT"}</div>
-          </div>
-          <Btn variant="ghost" onClick={handleSignOut} style={{ fontSize:13, padding:"9px 18px" }}>SIGN OUT</Btn>
+          {auth ? (
+            <>
+              <div style={{ textAlign:"right" }}>
+                <div style={{ fontSize:15, color:C.white }}>{auth.profile?.band_name}</div>
+                <div style={{ fontSize:11, color: isAdmin ? C.red : C.muted, letterSpacing:1 }}>{isAdmin?"ADMINISTRATOR":"BAND ACCOUNT"}</div>
+              </div>
+              <Btn variant="ghost" onClick={handleSignOut} style={{ fontSize:13, padding:"9px 18px" }}>SIGN OUT</Btn>
+            </>
+          ) : (
+            <Btn variant="ghost" onClick={()=>setTab("submit")} style={{ fontSize:13, padding:"9px 18px" }}>BAND LOGIN</Btn>
+          )}
         </div>
       </header>
 
@@ -869,7 +885,7 @@ export default function App() {
         {["REAL MUSIC.","REAL PEOPLE.","REAL SCENES."].map((s,i)=>(
           <span key={i} style={{ fontSize:13, color:C.red, letterSpacing:3, fontFamily:F.display }}>{s}{i<2&&<span style={{ color:"rgba(255,255,255,0.1)", margin:"0 8px" }}>|</span>}</span>
         ))}
-        <div style={{ marginLeft:"auto", fontSize:10, color:C.dim, letterSpacing:1 }}>{gigs.length} GIGS LIVE</div>
+        <div style={{ marginLeft:"auto", fontSize:13, color:C.dim, letterSpacing:1 }}>{gigs.length} GIGS LIVE</div>
       </div>
 
       {/* ── Nav tabs ── */}
@@ -888,7 +904,7 @@ export default function App() {
         )}
 
         {/* SUBMIT */}
-        {tab==="submit" && (
+        {tab==="submit" && auth && (
           <div style={{ maxWidth:700 }}>
             <SubmitGigForm user={auth.user} profile={auth.profile} token={auth?.token} onSubmitted={()=>{}} />
           </div>
@@ -898,7 +914,7 @@ export default function App() {
         {(tab==="calendar"||tab==="list") && (
           <div>
             {loading
-              ? <div style={{ color:C.muted, fontSize:13 }}>Loading gigs...</div>
+              ? <div style={{ color:C.muted, fontSize:16 }}>Loading gigs...</div>
               : <>
                   <FiltersBar
                     gigs={gigs}
@@ -910,7 +926,7 @@ export default function App() {
                     ? <CalendarView gigs={filteredGigs} onGigClick={setSelGig} />
                     : <ListView     gigs={filteredGigs} onGigClick={setSelGig} />
                   }
-                  <div style={{ marginTop:12, fontSize:10, color:C.dim }}>
+                  <div style={{ marginTop:16, fontSize:13, color:C.dim }}>
                     Showing {filteredGigs.length} of {gigs.length} gigs
                     {filteredGigs.length>0 && (
                       <span> · <span style={{ color:C.red, cursor:"pointer" }} onClick={()=>exportICal(filteredGigs)}>Export all to iCal</span></span>
