@@ -564,6 +564,9 @@ function SubmitGigForm({ user, profile, token, onSubmitted }) {
           <Input label="TICKET LINK (OPTIONAL)" type="url" value={form.tickets} onChange={set("tickets")} placeholder="https://" />
         </div>
         <div style={{ gridColumn:"1/-1" }}>
+          <Input label="SPOTIFY ARTIST URL (OPTIONAL)" type="url" value={form.spotify} onChange={set("spotify")} placeholder="https://open.spotify.com/artist/..." />
+        </div>
+        <div style={{ gridColumn:"1/-1" }}>
           <Input label="NOTES (OPTIONAL)" value={form.notes} onChange={set("notes")} placeholder="Support acts, age restrictions, etc." />
         </div>
 
@@ -706,6 +709,7 @@ function AdminPanel({ token, allGigs, onRefresh }) {
 function FiltersBar({ gigs, filters, setFilters, onExport }) {
   const cities  = ["All", ...Array.from(new Set(gigs.map(g=>g.city))).sort()];
   const genres  = ["All", ...GENRES];
+  const venues  = ["All", ...Array.from(new Set(gigs.map(g=>g.venue))).sort()];
 
   return (
     <div className="msm-filters" style={{
@@ -718,6 +722,9 @@ function FiltersBar({ gigs, filters, setFilters, onExport }) {
         <Select label="CITY" value={filters.city} onChange={e=>setFilters(f=>({...f,city:e.target.value}))} options={cities} />
       </div>
       <div style={{ flex:1, minWidth:130 }}>
+        <Select label="VENUE" value={filters.venue} onChange={e=>setFilters(f=>({...f,venue:e.target.value}))} options={venues} />
+      </div>
+      <div style={{ flex:1, minWidth:130 }}>
         <Select label="GENRE" value={filters.genre} onChange={e=>setFilters(f=>({...f,genre:e.target.value}))} options={genres} />
       </div>
       <div style={{ flex:1, minWidth:130 }}>
@@ -727,7 +734,7 @@ function FiltersBar({ gigs, filters, setFilters, onExport }) {
         <Input label="TO DATE" type="date" value={filters.dateTo} onChange={e=>setFilters(f=>({...f,dateTo:e.target.value}))} />
       </div>
       <div className="msm-filter-btns" style={{ display:"flex", gap:8 }}>
-        <Btn variant="ghost" onClick={()=>{ setFilters({ city:"All", genre:"All", dateFrom:"", dateTo:"" }); }}>CLEAR</Btn>
+        <Btn variant="ghost" onClick={()=>{ setFilters({ city:"All", venue:"All", genre:"All", dateFrom:"", dateTo:"" }); }}>CLEAR</Btn>
         <Btn variant="secondary" onClick={onExport} style={{ whiteSpace:"nowrap" }}>⬇ iCAL</Btn>
       </div>
     </div>
@@ -1086,7 +1093,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [tab,     setTab]     = useState("calendar"); // calendar | list | submit | admin
   const [selGig,  setSelGig]  = useState(null);
-  const [filters, setFilters] = useState({ city:"All", genre:"All", dateFrom:"", dateTo:"" });
+  const [filters, setFilters] = useState({ city:"All", venue:"All", genre:"All", dateFrom:"", dateTo:"" });
   const [search, setSearch]   = useState("");
 
   const isAdmin = auth?.profile?.role === "admin";
@@ -1119,6 +1126,7 @@ export default function App() {
   // Apply filters to public gigs
   const filteredGigs = useMemo(() => gigs.filter(g => {
     if (filters.city  !== "All" && g.city  !== filters.city)  return false;
+    if (filters.venue !== "All" && g.venue !== filters.venue) return false;
     if (filters.genre !== "All" && g.genre !== filters.genre) return false;
     if (filters.dateFrom && g.date < filters.dateFrom) return false;
     if (filters.dateTo   && g.date > filters.dateTo)   return false;
