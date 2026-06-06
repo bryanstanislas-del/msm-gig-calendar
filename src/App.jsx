@@ -100,24 +100,32 @@ async function sbFetch(path, opts = {}) {
 // ── DB abstraction (mock or real) ──────────────────────────────────
 const DB = {
   // Auth
-  async signUp(email, password, bandName) {
+  async signUp(email, password, profile) {
     if (USE_MOCK) {
       const id = `user_${Date.now()}`;
-      MOCK_USERS[email] = { id, email, password, role:"band", band_name: bandName };
+      MOCK_USERS[email] = { id, email, password, role:"band", band_name: profile.band_name };
       MOCK_USER    = { id, email };
-      MOCK_PROFILE = { id, role:"band", band_name: bandName };
+      MOCK_PROFILE = { id, role:"band", ...profile };
       return { user: MOCK_USER, profile: MOCK_PROFILE };
     }
     const data = await sbFetch("/auth/v1/signup", {
       method:"POST",
       body: JSON.stringify({
         email, password,
-        data: { band_name: bandName }
+        data: { band_name: profile.band_name }
       })
     });
     const user = data.user || data;
     if (!user || !user.id) throw new Error("Account created! Please sign in.");
-    return { user, profile: { role:"band", band_name: bandName } };
+    // Update profile with all fields
+    try {
+      await sbFetch(`/rest/v1/profiles?id=eq.${user.id}`, {
+        method:"PATCH",
+        body: JSON.stringify(profile),
+        headers:{ "Authorization": `Bearer ${data.access_token||SUPABASE_ANON_KEY}` }
+      });
+    } catch(e) { console.warn("Profile update failed", e); }
+    return { user, profile: { role:"band", ...profile } };
   },
 
   async signIn(email, password) {
@@ -366,32 +374,45 @@ const Select = ({ label, value, onChange, options }) => (
 //  AUTH PANEL
 // ════════════════════════════════════════════════════════════════════
 function AuthPanel({ onAuth, onBack }) {
-  const [mode, setMode]   = useState("login"); // login | register
-  const [email, setEmail] = useState("");
-  const [pass,  setPass]  = useState("");
-  const [band,  setBand]  = useState("");
+  const [mode, setMode]   = useState("login");
   const [err,   setErr]   = useState("");
   const [loading, setLoading] = useState(false);
+
+  // Login fields
+  const [email, setEmail] = useState("");
+  const [pass,  setPass]  = useState("");
+
+  // Register fields
+  const emptyReg = { band_name:"", city:"", website:"", instagram:"", facebook:"", twitter:"", genre:"Indie Rock", phone:"", bio:"", photo_url:"" };
+  const [reg, setReg] = useState(emptyReg);
+  const [regEmail, setRegEmail] = useState("");
+  const [regPass,  setRegPass]  = useState("");
+  const [regPass2, setRegPass2] = useState("");
+
+  const setR = k => e => setReg(r=>({...r,[k]:e.target.value}));
 
   const submit = async () => {
     setErr(""); setLoading(true);
     try {
-      let result;
       if (mode === "login") {
-        result = await DB.signIn(email, pass);
+        const result = await DB.signIn(email, pass);
+        onAuth(result);
       } else {
-        if (!band.trim()) { setErr("Band name is required"); setLoading(false); return; }
-        result = await DB.signUp(email, pass, band);
+        if (!reg.band_name.trim()) { setErr("Band name is required"); setLoading(false); return; }
+        if (!regEmail.trim())      { setErr("Email is required"); setLoading(false); return; }
+        if (regPass.length < 6)    { setErr("Password must be at least 6 characters"); setLoading(false); return; }
+        if (regPass !== regPass2)  { setErr("Passwords don't match"); setLoading(false); return; }
+        const result = await DB.signUp(regEmail, regPass, reg);
+        onAuth(result);
       }
-      onAuth(result);
     } catch(e) { setErr(e.message); }
     finally { setLoading(false); }
   };
 
   return (
-    <div style={{ minHeight:"100vh", background:C.bg, display:"flex", alignItems:"center", justifyContent:"center", padding:24 }}>
+    <div style={{ minHeight:"100vh", background:C.bg, display:"flex", alignItems:"flex-start", justifyContent:"center", padding:"40px 24px" }}>
       <style>{GLOBAL_CSS}</style>
-      <div style={{ width:"100%", maxWidth:400 }}>
+      <div style={{ width:"100%", maxWidth: mode==="register" ? 620 : 420 }}>
         {/* Logo */}
         <div style={{ textAlign:"center", marginBottom:36, display:"flex", flexDirection:"column", alignItems:"center" }}>
           <MSMLogo height={130} showWordmark={true} />
@@ -411,35 +432,73 @@ function AuthPanel({ onAuth, onBack }) {
             ))}
           </div>
 
-          <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
-            {mode === "register" && (
-              <Input label="BAND / ARTIST NAME" value={band} onChange={e=>setBand(e.target.value)} required />
-            )}
-            <Input label="EMAIL ADDRESS" type="email" value={email} onChange={e=>setEmail(e.target.value)} required />
-            <Input label="PASSWORD" type="password" value={pass} onChange={e=>setPass(e.target.value)} required />
-          </div>
+          {/* ── LOGIN ── */}
+          {mode === "login" && (
+            <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+              <Input label="EMAIL ADDRESS" type="email" value={email} onChange={e=>setEmail(e.target.value)} required />
+              <Input label="PASSWORD" type="password" value={pass} onChange={e=>setPass(e.target.value)} required />
+            </div>
+          )}
+
+          {/* ── REGISTER ── */}
+          {mode === "register" && (
+            <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+              <div style={{ fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginBottom:4 }}>ACCOUNT DETAILS</div>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+                <div style={{ gridColumn:"1/-1" }}>
+                  <Input label="BAND / ARTIST NAME" value={reg.band_name} onChange={setR("band_name")} required />
+                </div>
+                <Input label="EMAIL ADDRESS" type="email" value={regEmail} onChange={e=>setRegEmail(e.target.value)} required />
+                <Select label="MAIN GENRE" value={reg.genre} onChange={setR("genre")} options={GENRES} />
+                <Input label="PASSWORD" type="password" value={regPass} onChange={e=>setRegPass(e.target.value)} required />
+                <Input label="CONFIRM PASSWORD" type="password" value={regPass2} onChange={e=>setRegPass2(e.target.value)} required />
+              </div>
+
+              <div style={{ fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8, marginBottom:4 }}>BAND DETAILS</div>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+                <Input label="BASE CITY" value={reg.city} onChange={setR("city")} />
+                <Input label="CONTACT NUMBER" type="tel" value={reg.phone} onChange={setR("phone")} />
+                <div style={{ gridColumn:"1/-1" }}>
+                  <Input label="WEBSITE URL" type="url" value={reg.website} onChange={setR("website")} placeholder="https://" />
+                </div>
+                <div style={{ gridColumn:"1/-1" }}>
+                  <label style={{ display:"block", fontSize:9, color:C.muted, letterSpacing:2, marginBottom:5 }}>BIO</label>
+                  <textarea
+                    value={reg.bio} onChange={setR("bio")}
+                    placeholder="Tell us about your band..."
+                    rows={3}
+                    style={{ ...inputCss, resize:"vertical" }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8, marginBottom:4 }}>SOCIAL MEDIA</div>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12 }}>
+                <Input label="INSTAGRAM" value={reg.instagram} onChange={setR("instagram")} placeholder="@handle" />
+                <Input label="FACEBOOK" value={reg.facebook} onChange={setR("facebook")} placeholder="@handle" />
+                <Input label="X / TWITTER" value={reg.twitter} onChange={setR("twitter")} placeholder="@handle" />
+              </div>
+
+              <div style={{ fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8, marginBottom:4 }}>PROFILE PHOTO</div>
+              <Input label="PHOTO URL (link to an image)" type="url" value={reg.photo_url} onChange={setR("photo_url")} placeholder="https://..." />
+              <div style={{ fontSize:11, color:C.dim }}>Tip: Upload your photo to Instagram or your website and paste the image link here.</div>
+            </div>
+          )}
 
           {err && <div style={{ color:C.red, fontSize:12, marginTop:12 }}>{err}</div>}
 
           <Btn onClick={submit} disabled={loading} style={{ width:"100%", marginTop:20, padding:"13px" }}>
             {loading ? "PLEASE WAIT..." : mode==="login" ? "SIGN IN →" : "CREATE ACCOUNT →"}
           </Btn>
-
-          {USE_MOCK && (
-            <div style={{ marginTop:18, padding:12, background:"rgba(232,32,58,0.06)", borderRadius:5, fontSize:11, color:C.muted, lineHeight:1.7 }}>
-              <div style={{ color:C.red, fontFamily:F.display, letterSpacing:2, fontSize:11, marginBottom:4 }}>DEMO CREDENTIALS</div>
-              <div>Admin: <span style={{color:C.white}}>admin@msm.co.uk</span> / admin123</div>
-              <div>Band:  <span style={{color:C.white}}>band@example.com</span> / band123</div>
-            </div>
-          )}
-          {onBack && (
-            <div style={{ marginTop:16, textAlign:"center" }}>
-              <span onClick={onBack} style={{ fontSize:12, color:C.muted, cursor:"pointer", letterSpacing:1 }}>
-                ← Back to calendar
-              </span>
-            </div>
-          )}
         </div>
+
+        {onBack && (
+          <div style={{ marginTop:16, textAlign:"center" }}>
+            <span onClick={onBack} style={{ fontSize:12, color:C.muted, cursor:"pointer", letterSpacing:1 }}>
+              ← Back to calendar
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );
