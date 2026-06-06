@@ -298,8 +298,8 @@ const F = { display:"'Bebas Neue',sans-serif", body:"'Barlow',sans-serif" };
 
 const inputCss = {
   width:"100%", padding:"12px 14px",
-  background:"rgba(255,255,255,0.06)",
-  border:`1px solid ${C.border}`,
+  background:"rgba(255,255,255,0.10)",
+  border:`1px solid rgba(255,255,255,0.2)`,
   borderRadius:5, color:"#ffffff", fontSize:15,
   outline:"none", boxSizing:"border-box",
   fontFamily:F.body, transition:"border-color 0.2s",
@@ -349,7 +349,7 @@ const Btn = ({ children, onClick, variant="primary", style={}, disabled=false })
 
 const Input = ({ label, value, onChange, type="text", required, error, placeholder }) => (
   <div>
-    {label && <label style={{ display:"block", fontSize:11, color:error?"#e8203a":"#aaaaaa", letterSpacing:2, marginBottom:6, fontFamily:F.display }}>
+    {label && <label style={{ display:"block", fontSize:13, color:error?"#e8203a":"#ffffff", letterSpacing:2, marginBottom:6, fontFamily:F.display }}>
       {label}{required && " *"}
     </label>}
     <input
@@ -363,7 +363,7 @@ const Input = ({ label, value, onChange, type="text", required, error, placehold
 
 const Select = ({ label, value, onChange, options }) => (
   <div>
-    {label && <label style={{ display:"block", fontSize:11, color:"#aaaaaa", letterSpacing:2, marginBottom:6, fontFamily:F.display }}>{label}</label>}
+    {label && <label style={{ display:"block", fontSize:13, color:"#ffffff", letterSpacing:2, marginBottom:6, fontFamily:F.display }}>{label}</label>}
     <select value={value} onChange={onChange} style={{ ...inputCss, cursor:"pointer" }}>
       {options.map(o => <option key={o.value||o} value={o.value||o}>{o.label||o}</option>)}
     </select>
