@@ -289,10 +289,10 @@ const C = {
 const F = { display:"'Bebas Neue',sans-serif", body:"'Barlow',sans-serif" };
 
 const inputCss = {
-  width:"100%", padding:"10px 12px",
+  width:"100%", padding:"12px 14px",
   background:"rgba(255,255,255,0.03)",
   border:`1px solid ${C.border}`,
-  borderRadius:5, color:C.white, fontSize:13,
+  borderRadius:5, color:C.white, fontSize:15,
   outline:"none", boxSizing:"border-box",
   fontFamily:F.body, transition:"border-color 0.2s",
 };
@@ -311,9 +311,9 @@ const btnCss = (variant="primary") => ({
 //  SHARED UI
 // ════════════════════════════════════════════════════════════════════
 const SectionLabel = ({ children }) => (
-  <div style={{ marginBottom:16 }}>
-    <div style={{ fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:3 }}>{children}</div>
-    <div style={{ width:24, height:2, background:C.red, marginTop:4 }} />
+  <div style={{ marginBottom:20 }}>
+    <div style={{ fontFamily:F.display, fontSize:18, color:C.red, letterSpacing:3 }}>{children}</div>
+    <div style={{ width:28, height:2, background:C.red, marginTop:5 }} />
   </div>
 );
 
@@ -645,14 +645,14 @@ function CalendarView({ gigs, onGigClick }) {
       <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:20 }}>
         <button onClick={prevM} style={{ background:"none", border:`1px solid ${C.border}`, color:C.white, width:36, height:36, borderRadius:5, cursor:"pointer", fontSize:20 }}>‹</button>
         <div style={{ textAlign:"center" }}>
-          <div style={{ fontFamily:F.display, fontSize:22, letterSpacing:4, color:C.white }}>{MONTHS[m].toUpperCase()} {y}</div>
+          <div style={{ fontFamily:F.display, fontSize:30, letterSpacing:4, color:C.white }}>{MONTHS[m].toUpperCase()} {y}</div>
           <div style={{ width:36, height:2, background:C.red, margin:"4px auto 0" }} />
         </div>
         <button onClick={nextM} style={{ background:"none", border:`1px solid ${C.border}`, color:C.white, width:36, height:36, borderRadius:5, cursor:"pointer", fontSize:20 }}>›</button>
       </div>
 
       <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:3, marginBottom:3 }}>
-        {DAYS.map(d=><div key={d} style={{ textAlign:"center", fontSize:9, color:C.dim, letterSpacing:1.5, padding:"4px 0", fontFamily:F.display }}>{d}</div>)}
+        {DAYS.map(d=><div key={d} style={{ textAlign:"center", fontSize:13, color:C.dim, letterSpacing:1.5, padding:"6px 0", fontFamily:F.display }}>{d}</div>)}
       </div>
 
       <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:3 }}>
@@ -663,11 +663,11 @@ function CalendarView({ gigs, onGigClick }) {
           const isToday = ds===todayStr;
           return (
             <div key={ds} style={{
-              minHeight:58, background: isToday?"rgba(232,32,58,0.1)":"rgba(255,255,255,0.02)",
+              minHeight:80, background: isToday?"rgba(232,32,58,0.1)":"rgba(255,255,255,0.02)",
               border: isToday?`1px solid ${C.red}`:`1px solid ${C.border}`,
-              borderRadius:4, padding:"5px 4px 3px",
+              borderRadius:4, padding:"7px 6px 4px",
             }}>
-              <div style={{ fontSize:10, color:isToday?C.red:C.dim, fontFamily:F.display, letterSpacing:1, marginBottom:2 }}>{day}</div>
+              <div style={{ fontSize:13, color:isToday?C.red:C.dim, fontFamily:F.display, letterSpacing:1, marginBottom:3 }}>{day}</div>
               <div style={{ display:"flex", flexWrap:"wrap", gap:1 }}>
                 {dayGigs.map(g=>(
                   <span key={g.id} onClick={()=>onGigClick(g)} title={`${g.band_name} @ ${g.venue}`}
@@ -880,7 +880,7 @@ export default function App() {
       </div>
 
       {/* ── Main ── */}
-      <div style={{ maxWidth:1160, margin:"0 auto", padding:"28px 24px" }}>
+      <div style={{ maxWidth:"100%", margin:"0 auto", padding:"32px 48px" }}>
 
         {/* ADMIN */}
         {tab==="admin" && isAdmin && (
@@ -889,7 +889,7 @@ export default function App() {
 
         {/* SUBMIT */}
         {tab==="submit" && (
-          <div style={{ maxWidth:560 }}>
+          <div style={{ maxWidth:700 }}>
             <SubmitGigForm user={auth.user} profile={auth.profile} token={auth?.token} onSubmitted={()=>{}} />
           </div>
         )}
