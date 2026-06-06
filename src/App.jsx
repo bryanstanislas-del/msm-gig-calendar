@@ -729,35 +729,33 @@ function CalendarView({ gigs, onGigClick }) {
           const isToday = ds===todayStr;
           return (
             <div key={ds} style={{
-              minHeight:90, background: isToday?"rgba(232,32,58,0.1)":"rgba(255,255,255,0.02)",
+              minHeight:120, background: isToday?"rgba(232,32,58,0.1)":"rgba(255,255,255,0.02)",
               border: isToday?`1px solid ${C.red}`:`1px solid ${C.border}`,
               borderRadius:4, padding:"9px 8px 6px",
+              verticalAlign:"top",
             }}>
               <div style={{ fontSize:13, color:isToday?C.red:C.dim, fontFamily:F.display, letterSpacing:1, marginBottom:3 }}>{day}</div>
-              <div style={{ display:"flex", flexDirection:"column", gap:2 }}>
+              <div style={{ display:"flex", flexDirection:"column", gap:2, marginTop:4 }}>
                 {dayGigs.map(g=>(
-                  <div key={g.id} onClick={()=>onGigClick(g)} title={`${g.band_name} @ ${g.venue}`}
+                  <div key={g.id} onClick={()=>onGigClick(g)}
                     style={{
-                      display:"flex", alignItems:"center", gap:5,
-                      background:`${GENRE_COLORS[g.genre]||"#888"}22`,
-                      border:`1px solid ${GENRE_COLORS[g.genre]||"#888"}66`,
+                      display:"flex", alignItems:"center", gap:4,
+                      background:`${GENRE_COLORS[g.genre]||"#888"}40`,
                       borderLeft:`3px solid ${GENRE_COLORS[g.genre]||"#888"}`,
-                      borderRadius:3, padding:"2px 5px",
-                      cursor:"pointer", overflow:"hidden",
+                      borderRadius:2, padding:"3px 6px",
+                      cursor:"pointer",
                     }}
-                    onMouseEnter={e=>e.currentTarget.style.background=`${GENRE_COLORS[g.genre]||"#888"}44`}
-                    onMouseLeave={e=>e.currentTarget.style.background=`${GENRE_COLORS[g.genre]||"#888"}22`}
+                    onMouseEnter={e=>e.currentTarget.style.background=`${GENRE_COLORS[g.genre]||"#888"}65`}
+                    onMouseLeave={e=>e.currentTarget.style.background=`${GENRE_COLORS[g.genre]||"#888"}40`}
                   >
                     <span style={{
-                      width:7, height:7, borderRadius:"50%", flexShrink:0,
+                      width:6, height:6, borderRadius:"50%", flexShrink:0,
                       background:GENRE_COLORS[g.genre]||"#888",
-                      boxShadow:`0 0 4px ${GENRE_COLORS[g.genre]||"#888"}99`,
                       display:"inline-block",
                     }} />
                     <span style={{
-                      fontSize:11, color:"#fff", fontFamily:F.display,
-                      letterSpacing:0.5, whiteSpace:"nowrap",
-                      overflow:"hidden", textOverflow:"ellipsis",
+                      fontSize:13, color:"#ffffff", fontFamily:F.display,
+                      letterSpacing:1, lineHeight:1.2, fontWeight:"bold",
                     }}>{g.band_name}</span>
                   </div>
                 ))}
