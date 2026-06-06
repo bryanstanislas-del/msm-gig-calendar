@@ -659,7 +659,7 @@ function FiltersBar({ gigs, filters, setFilters, onExport }) {
   const genres  = ["All", ...GENRES];
 
   return (
-    <div style={{
+    <div className="msm-filters" style={{
       background:C.surfaceHigh, border:`1px solid ${C.border}`,
       borderRadius:8, padding:"14px 18px",
       display:"flex", gap:12, flexWrap:"wrap", alignItems:"flex-end",
@@ -677,7 +677,7 @@ function FiltersBar({ gigs, filters, setFilters, onExport }) {
       <div style={{ flex:1, minWidth:130 }}>
         <Input label="TO DATE" type="date" value={filters.dateTo} onChange={e=>setFilters(f=>({...f,dateTo:e.target.value}))} />
       </div>
-      <div style={{ display:"flex", gap:8 }}>
+      <div className="msm-filter-btns" style={{ display:"flex", gap:8 }}>
         <Btn variant="ghost" onClick={()=>setFilters({ city:"All", genre:"All", dateFrom:"", dateTo:"" })}>CLEAR</Btn>
         <Btn variant="secondary" onClick={onExport} style={{ whiteSpace:"nowrap" }}>⬇ iCAL</Btn>
       </div>
@@ -711,14 +711,14 @@ function CalendarView({ gigs, onGigClick }) {
       <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:20 }}>
         <button onClick={prevM} style={{ background:"none", border:`1px solid ${C.border}`, color:C.white, width:36, height:36, borderRadius:5, cursor:"pointer", fontSize:20 }}>‹</button>
         <div style={{ textAlign:"center" }}>
-          <div style={{ fontFamily:F.display, fontSize:30, letterSpacing:4, color:C.white }}>{MONTHS[m].toUpperCase()} {y}</div>
+          <div className="msm-month-title" style={{ fontFamily:F.display, fontSize:30, letterSpacing:4, color:C.white }}>{MONTHS[m].toUpperCase()} {y}</div>
           <div style={{ width:36, height:2, background:C.red, margin:"4px auto 0" }} />
         </div>
         <button onClick={nextM} style={{ background:"none", border:`1px solid ${C.border}`, color:C.white, width:36, height:36, borderRadius:5, cursor:"pointer", fontSize:20 }}>›</button>
       </div>
 
       <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:3, marginBottom:3 }}>
-        {DAYS.map(d=><div key={d} style={{ textAlign:"center", fontSize:13, color:C.dim, letterSpacing:1.5, padding:"6px 0", fontFamily:F.display }}>{d}</div>)}
+        {DAYS.map(d=><div key={d} className="msm-day-header" style={{ textAlign:"center", fontSize:13, color:C.dim, letterSpacing:1.5, padding:"6px 0", fontFamily:F.display }}>{d}</div>)}
       </div>
 
       <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:3 }}>
@@ -728,16 +728,17 @@ function CalendarView({ gigs, onGigClick }) {
           const dayGigs = gigMap[ds]||[];
           const isToday = ds===todayStr;
           return (
-            <div key={ds} style={{
+            <div key={ds} className="msm-cal-cell" style={{
               minHeight:120, background: isToday?"rgba(232,32,58,0.1)":"rgba(255,255,255,0.02)",
               border: isToday?`1px solid ${C.red}`:`1px solid ${C.border}`,
               borderRadius:4, padding:"9px 8px 6px",
               verticalAlign:"top",
             }}>
-              <div style={{ fontSize:13, color:isToday?C.red:C.dim, fontFamily:F.display, letterSpacing:1, marginBottom:3 }}>{day}</div>
+              <div className="msm-cal-day" style={{ fontSize:13, color:isToday?C.red:C.dim, fontFamily:F.display, letterSpacing:1, marginBottom:3 }}>{day}</div>
               <div style={{ display:"flex", flexDirection:"column", gap:2, marginTop:4 }}>
                 {dayGigs.map(g=>(
                   <div key={g.id} onClick={()=>onGigClick(g)}
+                    className="msm-gig-label"
                     style={{
                       display:"flex", alignItems:"center", gap:4,
                       background:`${GENRE_COLORS[g.genre]||"#888"}40`,
@@ -748,7 +749,7 @@ function CalendarView({ gigs, onGigClick }) {
                     onMouseEnter={e=>e.currentTarget.style.background=`${GENRE_COLORS[g.genre]||"#888"}65`}
                     onMouseLeave={e=>e.currentTarget.style.background=`${GENRE_COLORS[g.genre]||"#888"}40`}
                   >
-                    <span style={{
+                    <span className="msm-gig-dot" style={{
                       width:6, height:6, borderRadius:"50%", flexShrink:0,
                       background:GENRE_COLORS[g.genre]||"#888",
                       display:"inline-block",
@@ -766,7 +767,7 @@ function CalendarView({ gigs, onGigClick }) {
       </div>
 
       {/* Legend */}
-      <div style={{ marginTop:20, display:"flex", flexWrap:"wrap", gap:"12px 24px" }}>
+      <div className="msm-legend" style={{ marginTop:20, display:"flex", flexWrap:"wrap", gap:"12px 24px" }}>
         {Object.entries(GENRE_COLORS).map(([g,c])=>(
           <div key={g} style={{ display:"flex", alignItems:"center", gap:8, fontSize:15, color:C.muted }}>
             <span style={{ width:14, height:14, borderRadius:"50%", background:c, display:"inline-block", flexShrink:0, boxShadow:`0 0 6px ${c}99` }} />
@@ -867,6 +868,32 @@ const GLOBAL_CSS = `
   ::-webkit-scrollbar-thumb { background:#2a2a2a; border-radius:3px; }
   select option { background:#111; color:#fff; }
   input::placeholder, textarea::placeholder { color:#2a2a2a; }
+
+  /* ── Mobile ── */
+  @media (max-width: 600px) {
+    .msm-header { height:56px !important; padding:0 14px !important; }
+    .msm-logo-wrap img { height:40px !important; }
+    .msm-tagline { padding:7px 14px !important; flex-wrap:wrap; gap:6px !important; }
+    .msm-tagline span { font-size:10px !important; }
+    .msm-nav { padding:0 8px !important; gap:0 !important; overflow-x:auto; }
+    .msm-nav button { padding:12px 10px !important; font-size:12px !important; white-space:nowrap; }
+    .msm-main { padding:16px 10px !important; }
+    .msm-filters { flex-direction:column !important; gap:8px !important; padding:12px !important; }
+    .msm-filters > div { flex:unset !important; width:100% !important; }
+    .msm-filter-btns { width:100% !important; justify-content:stretch !important; }
+    .msm-filter-btns button { flex:1 !important; }
+    .msm-cal-cell { min-height:60px !important; padding:4px 3px !important; }
+    .msm-cal-day { font-size:10px !important; }
+    .msm-gig-label { padding:2px 3px !important; }
+    .msm-gig-label span:last-child { font-size:9px !important; }
+    .msm-gig-dot { width:5px !important; height:5px !important; }
+    .msm-legend { gap:6px 12px !important; margin-top:12px !important; }
+    .msm-legend > div { font-size:11px !important; }
+    .msm-month-title { font-size:20px !important; }
+    .msm-day-header { font-size:9px !important; }
+    .msm-signin-btn { font-size:11px !important; padding:6px 10px !important; }
+    .msm-account { display:none !important; }
+  }
 `;
 
 // ════════════════════════════════════════════════════════════════════
@@ -938,27 +965,27 @@ export default function App() {
       <style>{GLOBAL_CSS}</style>
 
       {/* ── Header ── */}
-      <header style={{ background:"#0a0a0a", borderBottom:`1px solid ${C.border}`, padding:"0 28px", display:"flex", alignItems:"center", justifyContent:"space-between", height:80, position:"sticky", top:0, zIndex:100 }}>
+      <header className="msm-header" style={{ background:"#0a0a0a", borderBottom:`1px solid ${C.border}`, padding:"0 28px", display:"flex", alignItems:"center", justifyContent:"space-between", height:80, position:"sticky", top:0, zIndex:100 }}>
         <div style={{ display:"flex", alignItems:"center", gap:14 }}>
           <MSMLogo height={56} showWordmark={true} />
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:12 }}>
           {auth ? (
             <>
-              <div style={{ textAlign:"right" }}>
+              <div className="msm-account" style={{ textAlign:"right" }}>
                 <div style={{ fontSize:15, color:C.white }}>{auth.profile?.band_name}</div>
                 <div style={{ fontSize:11, color: isAdmin ? C.red : C.muted, letterSpacing:1 }}>{isAdmin?"ADMINISTRATOR":"BAND ACCOUNT"}</div>
               </div>
-              <Btn variant="ghost" onClick={handleSignOut} style={{ fontSize:13, padding:"9px 18px" }}>SIGN OUT</Btn>
+              <Btn variant="ghost" onClick={handleSignOut} className="msm-signin-btn" style={{ fontSize:13, padding:"9px 18px" }}>SIGN OUT</Btn>
             </>
           ) : (
-            <Btn variant="ghost" onClick={()=>setTab("submit")} style={{ fontSize:13, padding:"9px 18px" }}>BAND LOGIN</Btn>
+            <Btn variant="ghost" onClick={()=>setTab("submit")} className="msm-signin-btn" style={{ fontSize:13, padding:"9px 18px" }}>BAND LOGIN</Btn>
           )}
         </div>
       </header>
 
       {/* ── Hero tagline ── */}
-      <div style={{ background:"linear-gradient(90deg,#1a0000,#0d0d0d 40%,#0d0d0d 60%,#0a0018)", borderBottom:`1px solid rgba(232,32,58,0.2)`, padding:"10px 28px", display:"flex", alignItems:"center", gap:10 }}>
+      <div className="msm-tagline" style={{ background:"linear-gradient(90deg,#1a0000,#0d0d0d 40%,#0d0d0d 60%,#0a0018)", borderBottom:`1px solid rgba(232,32,58,0.2)`, padding:"10px 28px", display:"flex", alignItems:"center", gap:10 }}>
         {["REAL MUSIC.","REAL PEOPLE.","REAL SCENES."].map((s,i)=>(
           <span key={i} style={{ fontSize:13, color:C.red, letterSpacing:3, fontFamily:F.display }}>{s}{i<2&&<span style={{ color:"rgba(255,255,255,0.1)", margin:"0 8px" }}>|</span>}</span>
         ))}
@@ -966,14 +993,14 @@ export default function App() {
       </div>
 
       {/* ── Nav tabs ── */}
-      <div style={{ background:"#0a0a0a", borderBottom:`1px solid ${C.border}`, padding:"0 28px", display:"flex", gap:4 }}>
+      <div className="msm-nav" style={{ background:"#0a0a0a", borderBottom:`1px solid ${C.border}`, padding:"0 28px", display:"flex", gap:4 }}>
         {tabDef.map(({ id, label }) => (
           <button key={id} onClick={()=>setTab(id)} style={navTabStyle(id)}>{label}</button>
         ))}
       </div>
 
       {/* ── Main ── */}
-      <div style={{ width:"100%", padding:"32px 48px" }}>
+      <div className="msm-main" style={{ width:"100%", padding:"32px 48px" }}>
 
         {/* ADMIN */}
         {tab==="admin" && isAdmin && (
