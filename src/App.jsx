@@ -52,15 +52,36 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 const USE_MOCK = SUPABASE_URL === "YOUR_SUPABASE_URL";
 
 // ── Constants ──────────────────────────────────────────────────────
-const GENRES = ["Indie Rock","Electronic","Folk","Shoegaze","Jazz","Metal","Hip-Hop","Pop","Classical","Punk","Other"];
+const GENRES = ["Indie Rock","Electronic","Folk","Shoegaze","Jazz","Metal","Hip-Hop","Pop","Classical","Punk","Country","Blues","Reggae","Soul","R&B","Acoustic","Alternative","Rock","Hard Rock","Dance","Americana","World Music","Comedy","Spoken Word","Other"];
 const MONTHS  = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const DAYS    = ["SUN","MON","TUE","WED","THU","FRI","SAT"];
 
 const GENRE_COLORS = {
-  "Indie Rock":"#e8203a","Electronic":"#9b5de5","Folk":"#f4a261",
-  "Shoegaze":"#c77dff","Jazz":"#43aa8b","Metal":"#ff595e",
-  "Hip-Hop":"#ff9f1c","Pop":"#ff6b9d","Classical":"#90e0ef",
-  "Punk":"#ff4d00","Other":"#888888",
+  "Indie Rock":   "#e8203a",
+  "Electronic":   "#9b5de5",
+  "Folk":         "#f4a261",
+  "Shoegaze":     "#c77dff",
+  "Jazz":         "#43aa8b",
+  "Metal":        "#ff595e",
+  "Hip-Hop":      "#ff9f1c",
+  "Pop":          "#ff6b9d",
+  "Classical":    "#90e0ef",
+  "Punk":         "#ff4d00",
+  "Country":      "#c9a227",
+  "Blues":        "#1a78c2",
+  "Reggae":       "#2dc653",
+  "Soul":         "#e040fb",
+  "R&B":          "#ce93d8",
+  "Acoustic":     "#a5d6a7",
+  "Alternative":  "#ef5350",
+  "Rock":         "#ff7043",
+  "Hard Rock":    "#b71c1c",
+  "Dance":        "#00e5ff",
+  "Americana":    "#d4a373",
+  "World Music":  "#52b788",
+  "Comedy":       "#ffd600",
+  "Spoken Word":  "#90a4ae",
+  "Other":        "#888888",
 };
 
 // ── Mock DB ────────────────────────────────────────────────────────
