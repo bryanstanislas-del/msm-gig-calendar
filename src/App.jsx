@@ -508,7 +508,7 @@ function AuthPanel({ onAuth, onBack }) {
 //  SUBMIT GIG FORM
 // ════════════════════════════════════════════════════════════════════
 function SubmitGigForm({ user, profile, token, onSubmitted }) {
-  const empty = { band_name: profile?.band_name||"", venue:"", city:"", date:"", time:"20:00", genre:"Indie Rock", tickets:"", notes:"" };
+  const empty = { band_name: profile?.band_name||"", venue:"", city:"", date:"", time:"20:00", genre:"Indie Rock", tickets:"", notes:"", is_recurring:false, recurrence:"none" };
   const [form, setForm]     = useState(empty);
   const [errors, setErrors] = useState({});
   const [status, setStatus] = useState("idle"); // idle | loading | success | error
@@ -562,6 +562,43 @@ function SubmitGigForm({ user, profile, token, onSubmitted }) {
         </div>
         <div style={{ gridColumn:"1/-1" }}>
           <Input label="NOTES (OPTIONAL)" value={form.notes} onChange={set("notes")} placeholder="Support acts, age restrictions, etc." />
+        </div>
+
+        {/* Recurring */}
+        <div style={{ gridColumn:"1/-1", background:"rgba(255,255,255,0.03)", border:`1px solid ${C.border}`, borderRadius:6, padding:"14px 16px" }}>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom: form.is_recurring ? 14 : 0 }}>
+            <div>
+              <div style={{ fontSize:13, color:C.white, fontFamily:F.display, letterSpacing:1 }}>RECURRING GIG</div>
+              <div style={{ fontSize:11, color:C.dim, marginTop:2 }}>Does this gig happen regularly?</div>
+            </div>
+            <div
+              onClick={()=>setForm(f=>({...f, is_recurring:!f.is_recurring, recurrence: f.is_recurring ? "none" : "weekly"}))}
+              style={{
+                width:48, height:26, borderRadius:13, cursor:"pointer", transition:"background 0.2s",
+                background: form.is_recurring ? C.red : "rgba(255,255,255,0.1)",
+                position:"relative", flexShrink:0,
+              }}
+            >
+              <div style={{
+                width:20, height:20, borderRadius:"50%", background:"#fff",
+                position:"absolute", top:3,
+                left: form.is_recurring ? 25 : 3,
+                transition:"left 0.2s",
+              }} />
+            </div>
+          </div>
+          {form.is_recurring && (
+            <Select
+              label="HOW OFTEN?"
+              value={form.recurrence}
+              onChange={set("recurrence")}
+              options={[
+                { value:"weekly",      label:"Weekly" },
+                { value:"fortnightly", label:"Fortnightly (every 2 weeks)" },
+                { value:"monthly",     label:"Monthly" },
+              ]}
+            />
+          )}
         </div>
       </div>
 
@@ -641,6 +678,7 @@ function AdminPanel({ token, allGigs, onRefresh }) {
                     <span style={{ fontFamily:F.display, fontSize:16, letterSpacing:1.5, color:C.white }}>{g.band_name}</span>
                     <StatusBadge status={g.status} />
                     <Badge label={g.genre} color={color} />
+              {g.is_recurring && <Badge label="↻" color={C.amber} />}
                   </div>
                   <div style={{ fontSize:12, color:C.muted }}>{g.venue} · {g.city}</div>
                   <div style={{ fontSize:11, color:C.dim, marginTop:2 }}>{fmtDate(g.date)} at {g.time}{g.notes ? ` · ${g.notes}` : ""}</div>
@@ -765,7 +803,7 @@ function CalendarView({ gigs, onGigClick }) {
                     <span style={{
                       fontSize:13, color:"#ffffff", fontFamily:F.display,
                       letterSpacing:1, lineHeight:1.2, fontWeight:"bold",
-                    }}>{g.band_name}</span>
+                    }}>{g.is_recurring ? "↻ " : ""}{g.band_name}</span>
                   </div>
                 ))}
               </div>
@@ -838,6 +876,7 @@ function GigModal({ gig, onClose }) {
       }}>
         <button onClick={onClose} style={{ position:"absolute", top:14, right:16, background:"none", border:"none", color:C.muted, fontSize:20, cursor:"pointer" }}>✕</button>
         <Badge label={gig.genre} color={color} />
+        {gig.is_recurring && <Badge label={`↻ ${gig.recurrence}`} color={C.amber} />}
         <div style={{ fontFamily:F.display, fontSize:30, letterSpacing:2, color:C.white, marginTop:10, lineHeight:1 }}>{gig.band_name}</div>
         <div style={{ fontSize:13, color:C.muted, margin:"6px 0 20px" }}>{gig.venue} · {gig.city}</div>
         <div style={{ display:"flex", gap:24, marginBottom:20 }}>
@@ -855,6 +894,123 @@ function GigModal({ gig, onClose }) {
             : <span style={{ fontSize:12, color:C.dim, fontStyle:"italic" }}>No ticket link provided</span>
           }
           <Btn variant="ghost" onClick={()=>exportICal([gig])} style={{ fontSize:12 }}>⬇ ADD TO CALENDAR</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  STATS PANEL
+// ════════════════════════════════════════════════════════════════════
+function StatsPanel({ gigs }) {
+  // Top cities
+  const cityCounts = gigs.reduce((acc, g) => { acc[g.city] = (acc[g.city]||0)+1; return acc; }, {});
+  const topCities  = Object.entries(cityCounts).sort((a,b)=>b[1]-a[1]).slice(0,8);
+
+  // Top genres
+  const genreCounts = gigs.reduce((acc, g) => { acc[g.genre] = (acc[g.genre]||0)+1; return acc; }, {});
+  const topGenres   = Object.entries(genreCounts).sort((a,b)=>b[1]-a[1]);
+
+  // Top bands
+  const bandCounts  = gigs.reduce((acc, g) => { acc[g.band_name] = (acc[g.band_name]||0)+1; return acc; }, {});
+  const topBands    = Object.entries(bandCounts).sort((a,b)=>b[1]-a[1]).slice(0,8);
+
+  // Gigs per month
+  const monthCounts = gigs.reduce((acc, g) => {
+    const m = g.date.slice(0,7); // YYYY-MM
+    acc[m] = (acc[m]||0)+1; return acc;
+  }, {});
+  const months = Object.entries(monthCounts).sort((a,b)=>a[0].localeCompare(b[0])).slice(-6);
+  const maxMonth = Math.max(...months.map(([,v])=>v), 1);
+
+  const StatCard = ({ label, value, sub }) => (
+    <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderTop:`3px solid ${C.red}`, borderRadius:8, padding:"20px 24px" }}>
+      <div style={{ fontSize:11, color:C.muted, letterSpacing:2, fontFamily:F.display }}>{label}</div>
+      <div style={{ fontSize:48, fontFamily:F.display, color:C.red, lineHeight:1.1, marginTop:4 }}>{value}</div>
+      {sub && <div style={{ fontSize:12, color:C.dim, marginTop:4 }}>{sub}</div>}
+    </div>
+  );
+
+  const Bar = ({ label, count, max, color }) => (
+    <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:10 }}>
+      <div style={{ width:140, fontSize:13, color:C.white, fontFamily:F.display, letterSpacing:1, flexShrink:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{label}</div>
+      <div style={{ flex:1, background:"rgba(255,255,255,0.05)", borderRadius:3, height:24, position:"relative", overflow:"hidden" }}>
+        <div style={{
+          width:`${(count/max)*100}%`, height:"100%",
+          background: color || C.red,
+          borderRadius:3, transition:"width 0.5s ease",
+          minWidth:4,
+        }} />
+        <span style={{ position:"absolute", right:8, top:"50%", transform:"translateY(-50%)", fontSize:11, color:C.white, fontFamily:F.display }}>{count}</span>
+      </div>
+    </div>
+  );
+
+  return (
+    <div>
+      <SectionLabel>GIG CALENDAR STATS</SectionLabel>
+
+      {/* Summary cards */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(160px,1fr))", gap:16, marginBottom:36 }}>
+        <StatCard label="TOTAL GIGS" value={gigs.length} sub="approved & live" />
+        <StatCard label="CITIES" value={Object.keys(cityCounts).length} sub="across the UK" />
+        <StatCard label="BANDS" value={Object.keys(bandCounts).length} sub="registered artists" />
+        <StatCard label="GENRES" value={Object.keys(genreCounts).length} sub="music styles" />
+      </div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:32, marginBottom:36 }}>
+
+        {/* Top Cities */}
+        <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, padding:24 }}>
+          <SectionLabel>TOP CITIES</SectionLabel>
+          {topCities.length === 0 && <div style={{ color:C.dim, fontSize:13 }}>No data yet</div>}
+          {topCities.map(([city, count]) => (
+            <Bar key={city} label={city} count={count} max={topCities[0]?.[1]||1} color={C.red} />
+          ))}
+        </div>
+
+        {/* Top Bands */}
+        <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, padding:24 }}>
+          <SectionLabel>MOST ACTIVE BANDS</SectionLabel>
+          {topBands.length === 0 && <div style={{ color:C.dim, fontSize:13 }}>No data yet</div>}
+          {topBands.map(([band, count]) => (
+            <Bar key={band} label={band} count={count} max={topBands[0]?.[1]||1} color="#9b5de5" />
+          ))}
+        </div>
+      </div>
+
+      {/* Genres */}
+      <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, padding:24, marginBottom:32 }}>
+        <SectionLabel>GIGS BY GENRE</SectionLabel>
+        {topGenres.length === 0 && <div style={{ color:C.dim, fontSize:13 }}>No data yet</div>}
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"0 32px" }}>
+          {topGenres.map(([genre, count]) => (
+            <Bar key={genre} label={genre} count={count} max={topGenres[0]?.[1]||1} color={GENRE_COLORS[genre]||C.red} />
+          ))}
+        </div>
+      </div>
+
+      {/* Gigs per month */}
+      <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, padding:24 }}>
+        <SectionLabel>GIGS PER MONTH</SectionLabel>
+        {months.length === 0 && <div style={{ color:C.dim, fontSize:13 }}>No data yet</div>}
+        <div style={{ display:"flex", alignItems:"flex-end", gap:12, height:160, paddingBottom:24, position:"relative" }}>
+          {months.map(([month, count]) => {
+            const [y,m] = month.split("-");
+            const label = `${MONTHS[+m-1].slice(0,3)} ${y}`;
+            const heightPct = (count/maxMonth)*100;
+            return (
+              <div key={month} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:6 }}>
+                <div style={{ fontSize:12, color:C.white, fontFamily:F.display }}>{count}</div>
+                <div style={{
+                  width:"100%", background:C.red, borderRadius:"4px 4px 0 0",
+                  height:`${heightPct}%`, minHeight:4, transition:"height 0.5s ease",
+                }} />
+                <div style={{ fontSize:10, color:C.muted, textAlign:"center", whiteSpace:"nowrap" }}>{label}</div>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
@@ -963,6 +1119,7 @@ export default function App() {
   const tabDef = [
     { id:"calendar", label:"CALENDAR" },
     { id:"list",     label:"LIST VIEW" },
+    { id:"stats",    label:"STATS" },
     { id:"submit",   label:"SUBMIT GIG" },
     ...(isAdmin ? [{ id:"admin", label:`ADMIN (${allGigs.filter(g=>g.status==="pending").length})` }] : []),
   ];
@@ -1016,6 +1173,11 @@ export default function App() {
 
       {/* ── Main ── */}
       <div className="msm-main" style={{ width:"100%", padding:"32px 48px" }}>
+
+        {/* STATS */}
+        {tab==="stats" && (
+          <StatsPanel gigs={gigs} />
+        )}
 
         {/* ADMIN */}
         {tab==="admin" && isAdmin && (
