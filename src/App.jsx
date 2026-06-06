@@ -774,12 +774,13 @@ function GigModal({ gig, onClose }) {
 const GLOBAL_CSS = `
   @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow:wght@400;500;600&display=swap');
   * { box-sizing:border-box; margin:0; padding:0; }
+  html { font-size: 16px; }
   body { background:#0d0d0d; }
   input[type=date]::-webkit-calendar-picker-indicator,
   input[type=time]::-webkit-calendar-picker-indicator { filter:invert(0.5); cursor:pointer; }
-  ::-webkit-scrollbar { width:4px; }
+  ::-webkit-scrollbar { width:6px; }
   ::-webkit-scrollbar-track { background:#0d0d0d; }
-  ::-webkit-scrollbar-thumb { background:#2a2a2a; border-radius:2px; }
+  ::-webkit-scrollbar-thumb { background:#2a2a2a; border-radius:3px; }
   select option { background:#111; color:#fff; }
   input::placeholder, textarea::placeholder { color:#2a2a2a; }
 `;
@@ -837,33 +838,36 @@ export default function App() {
     ...(isAdmin ? [{ id:"admin", label:`ADMIN (${allGigs.filter(g=>g.status==="pending").length})` }] : []),
   ];
 
+  const navTabStyle = (id) => ({
+    padding:"18px 24px", border:"none", background:"none", cursor:"pointer",
+    fontFamily:F.display, fontSize:16, letterSpacing:2,
+    color: tab===id ? C.red : C.muted,
+    borderBottom: tab===id ? `3px solid ${C.red}` : "3px solid transparent",
+    transition:"all 0.2s",
+  });
+
   return (
     <div style={{ minHeight:"100vh", background:C.bg, color:C.white, fontFamily:F.body }}>
       <style>{GLOBAL_CSS}</style>
 
       {/* ── Header ── */}
-      <header style={{ background:"#0a0a0a", borderBottom:`1px solid ${C.border}`, padding:"0 28px", display:"flex", alignItems:"center", justifyContent:"space-between", height:62, position:"sticky", top:0, zIndex:100 }}>
+      <header style={{ background:"#0a0a0a", borderBottom:`1px solid ${C.border}`, padding:"0 28px", display:"flex", alignItems:"center", justifyContent:"space-between", height:80, position:"sticky", top:0, zIndex:100 }}>
         <div style={{ display:"flex", alignItems:"center", gap:14 }}>
-          <MSMLogo height={46} showWordmark={false} />
-          <div style={{ width:1, height:32, background:C.border }} />
-          <div>
-            <div style={{ fontFamily:F.display, fontSize:14, letterSpacing:3, color:C.white }}>MUSIC SCENE MAGAZINE</div>
-            <div style={{ fontSize:8, color:C.red, letterSpacing:3 }}>GIG CALENDAR</div>
-          </div>
+          <MSMLogo height={56} showWordmark={true} />
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:12 }}>
           <div style={{ textAlign:"right" }}>
-            <div style={{ fontSize:11, color:C.white }}>{auth.profile?.band_name}</div>
-            <div style={{ fontSize:9, color: isAdmin ? C.red : C.muted, letterSpacing:1 }}>{isAdmin?"ADMINISTRATOR":"BAND ACCOUNT"}</div>
+            <div style={{ fontSize:15, color:C.white }}>{auth.profile?.band_name}</div>
+            <div style={{ fontSize:11, color: isAdmin ? C.red : C.muted, letterSpacing:1 }}>{isAdmin?"ADMINISTRATOR":"BAND ACCOUNT"}</div>
           </div>
-          <Btn variant="ghost" onClick={handleSignOut} style={{ fontSize:11, padding:"7px 14px" }}>SIGN OUT</Btn>
+          <Btn variant="ghost" onClick={handleSignOut} style={{ fontSize:13, padding:"9px 18px" }}>SIGN OUT</Btn>
         </div>
       </header>
 
       {/* ── Hero tagline ── */}
       <div style={{ background:"linear-gradient(90deg,#1a0000,#0d0d0d 40%,#0d0d0d 60%,#0a0018)", borderBottom:`1px solid rgba(232,32,58,0.2)`, padding:"10px 28px", display:"flex", alignItems:"center", gap:10 }}>
         {["REAL MUSIC.","REAL PEOPLE.","REAL SCENES."].map((s,i)=>(
-          <span key={i} style={{ fontSize:9, color:C.red, letterSpacing:3, fontFamily:F.display }}>{s}{i<2&&<span style={{ color:"rgba(255,255,255,0.1)", margin:"0 8px" }}>|</span>}</span>
+          <span key={i} style={{ fontSize:13, color:C.red, letterSpacing:3, fontFamily:F.display }}>{s}{i<2&&<span style={{ color:"rgba(255,255,255,0.1)", margin:"0 8px" }}>|</span>}</span>
         ))}
         <div style={{ marginLeft:"auto", fontSize:10, color:C.dim, letterSpacing:1 }}>{gigs.length} GIGS LIVE</div>
       </div>
@@ -871,13 +875,7 @@ export default function App() {
       {/* ── Nav tabs ── */}
       <div style={{ background:"#0a0a0a", borderBottom:`1px solid ${C.border}`, padding:"0 28px", display:"flex", gap:4 }}>
         {tabDef.map(({ id, label }) => (
-          <button key={id} onClick={()=>setTab(id)} style={{
-            padding:"14px 18px", border:"none", background:"none", cursor:"pointer",
-            fontFamily:F.display, fontSize:13, letterSpacing:2,
-            color: tab===id ? C.red : C.muted,
-            borderBottom: tab===id ? `2px solid ${C.red}` : "2px solid transparent",
-            transition:"all 0.2s",
-          }}>{label}</button>
+          <button key={id} onClick={()=>setTab(id)} style={navTabStyle(id)}>{label}</button>
         ))}
       </div>
 
