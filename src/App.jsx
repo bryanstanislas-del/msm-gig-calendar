@@ -526,6 +526,14 @@ function SubmitGigForm({ user, profile, token, onSubmitted }) {
     setStatus("loading");
     try {
       await DB.submitGig(form, user.id, token);
+      // Send email notification
+      try {
+        await fetch("/api/notify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(form),
+        });
+      } catch(emailErr) { console.warn("Email notification failed:", emailErr); }
       setStatus("success");
       setMsg("Gig submitted! It will appear on the calendar once approved by our team.");
       setForm(empty);
