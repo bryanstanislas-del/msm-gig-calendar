@@ -729,17 +729,37 @@ function CalendarView({ gigs, onGigClick }) {
           const isToday = ds===todayStr;
           return (
             <div key={ds} style={{
-              minHeight:110, background: isToday?"rgba(232,32,58,0.1)":"rgba(255,255,255,0.02)",
+              minHeight:90, background: isToday?"rgba(232,32,58,0.1)":"rgba(255,255,255,0.02)",
               border: isToday?`1px solid ${C.red}`:`1px solid ${C.border}`,
               borderRadius:4, padding:"9px 8px 6px",
             }}>
               <div style={{ fontSize:13, color:isToday?C.red:C.dim, fontFamily:F.display, letterSpacing:1, marginBottom:3 }}>{day}</div>
-              <div style={{ display:"flex", flexWrap:"wrap", gap:1 }}>
+              <div style={{ display:"flex", flexDirection:"column", gap:2 }}>
                 {dayGigs.map(g=>(
-                  <span key={g.id} onClick={()=>onGigClick(g)} title={`${g.band_name} @ ${g.venue}`}
-                    style={{ width:11, height:11, borderRadius:"50%", background:GENRE_COLORS[g.genre]||"#888",
-                      display:"inline-block", cursor:"pointer", margin:"1px", boxShadow:`0 0 5px ${GENRE_COLORS[g.genre]||"#888"}88` }}
-                  />
+                  <div key={g.id} onClick={()=>onGigClick(g)} title={`${g.band_name} @ ${g.venue}`}
+                    style={{
+                      display:"flex", alignItems:"center", gap:5,
+                      background:`${GENRE_COLORS[g.genre]||"#888"}22`,
+                      border:`1px solid ${GENRE_COLORS[g.genre]||"#888"}66`,
+                      borderLeft:`3px solid ${GENRE_COLORS[g.genre]||"#888"}`,
+                      borderRadius:3, padding:"2px 5px",
+                      cursor:"pointer", overflow:"hidden",
+                    }}
+                    onMouseEnter={e=>e.currentTarget.style.background=`${GENRE_COLORS[g.genre]||"#888"}44`}
+                    onMouseLeave={e=>e.currentTarget.style.background=`${GENRE_COLORS[g.genre]||"#888"}22`}
+                  >
+                    <span style={{
+                      width:7, height:7, borderRadius:"50%", flexShrink:0,
+                      background:GENRE_COLORS[g.genre]||"#888",
+                      boxShadow:`0 0 4px ${GENRE_COLORS[g.genre]||"#888"}99`,
+                      display:"inline-block",
+                    }} />
+                    <span style={{
+                      fontSize:11, color:"#fff", fontFamily:F.display,
+                      letterSpacing:0.5, whiteSpace:"nowrap",
+                      overflow:"hidden", textOverflow:"ellipsis",
+                    }}>{g.band_name}</span>
+                  </div>
                 ))}
               </div>
             </div>
