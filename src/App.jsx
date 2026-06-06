@@ -1094,7 +1094,12 @@ export default function App() {
   }, [auth]);
 
   const handleAuth = (result) => { setAuth(result); setTab("submit"); };
-  const handleSignOut = async () => { await DB.signOut(); setAuth(null); setTab("calendar"); };
+  const handleSignOut = async () => { 
+    try { await DB.signOut(); } catch(e) { console.warn("Sign out error", e); }
+    setAuth(null); 
+    setTab("calendar");
+    window.location.reload();
+  };
 
   // Apply filters to public gigs
   const filteredGigs = useMemo(() => gigs.filter(g => {
