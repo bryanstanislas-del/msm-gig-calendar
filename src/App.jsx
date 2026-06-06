@@ -298,9 +298,9 @@ const F = { display:"'Bebas Neue',sans-serif", body:"'Barlow',sans-serif" };
 
 const inputCss = {
   width:"100%", padding:"12px 14px",
-  background:"rgba(255,255,255,0.03)",
+  background:"rgba(255,255,255,0.06)",
   border:`1px solid ${C.border}`,
-  borderRadius:5, color:C.white, fontSize:15,
+  borderRadius:5, color:"#ffffff", fontSize:15,
   outline:"none", boxSizing:"border-box",
   fontFamily:F.body, transition:"border-color 0.2s",
 };
@@ -349,7 +349,7 @@ const Btn = ({ children, onClick, variant="primary", style={}, disabled=false })
 
 const Input = ({ label, value, onChange, type="text", required, error, placeholder }) => (
   <div>
-    {label && <label style={{ display:"block", fontSize:9, color:error?C.red:C.muted, letterSpacing:2, marginBottom:5 }}>
+    {label && <label style={{ display:"block", fontSize:11, color:error?"#e8203a":"#aaaaaa", letterSpacing:2, marginBottom:6, fontFamily:F.display }}>
       {label}{required && " *"}
     </label>}
     <input
@@ -363,7 +363,7 @@ const Input = ({ label, value, onChange, type="text", required, error, placehold
 
 const Select = ({ label, value, onChange, options }) => (
   <div>
-    {label && <label style={{ display:"block", fontSize:9, color:C.muted, letterSpacing:2, marginBottom:5 }}>{label}</label>}
+    {label && <label style={{ display:"block", fontSize:11, color:"#aaaaaa", letterSpacing:2, marginBottom:6, fontFamily:F.display }}>{label}</label>}
     <select value={value} onChange={onChange} style={{ ...inputCss, cursor:"pointer" }}>
       {options.map(o => <option key={o.value||o} value={o.value||o}>{o.label||o}</option>)}
     </select>
@@ -1047,7 +1047,7 @@ const GLOBAL_CSS = `
   ::-webkit-scrollbar-track { background:#0d0d0d; }
   ::-webkit-scrollbar-thumb { background:#2a2a2a; border-radius:3px; }
   select option { background:#111; color:#fff; }
-  input::placeholder, textarea::placeholder { color:#2a2a2a; }
+  input::placeholder, textarea::placeholder { color:#666666; font-size:14px; }
 
   /* ── Mobile ── */
   @media (max-width: 600px) {
