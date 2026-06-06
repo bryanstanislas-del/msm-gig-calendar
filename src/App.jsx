@@ -682,10 +682,10 @@ function CalendarView({ gigs, onGigClick }) {
       </div>
 
       {/* Legend */}
-      <div style={{ marginTop:20, display:"flex", flexWrap:"wrap", gap:"10px 20px" }}>
+      <div style={{ marginTop:20, display:"flex", flexWrap:"wrap", gap:"12px 24px" }}>
         {Object.entries(GENRE_COLORS).map(([g,c])=>(
-          <div key={g} style={{ display:"flex", alignItems:"center", gap:7, fontSize:13, color:C.muted }}>
-            <span style={{ width:10, height:10, borderRadius:"50%", background:c, display:"inline-block", boxShadow:`0 0 4px ${c}88` }} />
+          <div key={g} style={{ display:"flex", alignItems:"center", gap:8, fontSize:15, color:C.muted }}>
+            <span style={{ width:14, height:14, borderRadius:"50%", background:c, display:"inline-block", flexShrink:0, boxShadow:`0 0 6px ${c}99` }} />
             {g}
           </div>
         ))}
