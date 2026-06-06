@@ -511,7 +511,7 @@ function AuthPanel({ onAuth, onBack }) {
 //  SUBMIT GIG FORM
 // ════════════════════════════════════════════════════════════════════
 function SubmitGigForm({ user, profile, token, onSubmitted }) {
-  const empty = { band_name: profile?.band_name||"", venue:"", city:"", date:"", time:"20:00", genre:"Indie Rock", tickets:"", notes:"", is_recurring:false, recurrence:"none", spotify: profile?.spotify||"" };
+  const empty = { band_name: profile?.band_name||"", venue:"", city:"", date:"", end_date:"", time:"20:00", genre:"Indie Rock", tickets:"", notes:"", is_recurring:false, recurrence:"none", spotify: profile?.spotify||"" };
   const [form, setForm]     = useState(empty);
   const [errors, setErrors] = useState({});
   const [status, setStatus] = useState("idle"); // idle | loading | success | error
@@ -555,7 +555,8 @@ function SubmitGigForm({ user, profile, token, onSubmitted }) {
         </div>
         <Input label="VENUE" value={form.venue} onChange={set("venue")} required error={errors.venue} />
         <Input label="CITY" value={form.city} onChange={set("city")} required error={errors.city} />
-        <Input label="DATE" type="date" value={form.date} onChange={set("date")} required error={errors.date} />
+        <Input label="START DATE" type="date" value={form.date} onChange={set("date")} required error={errors.date} />
+        <Input label="END DATE (OPTIONAL — FOR MULTI-DAY EVENTS)" type="date" value={form.end_date} onChange={set("end_date")} />
         <Input label="DOORS / START TIME" type="time" value={form.time} onChange={set("time")} />
         <div style={{ gridColumn:"1/-1" }}>
           <Select label="GENRE" value={form.genre} onChange={set("genre")} options={GENRES} />
@@ -751,7 +752,18 @@ function CalendarView({ gigs, onGigClick }) {
 
   const gigMap = useMemo(() => {
     const map = {};
-    gigs.forEach(g => { if (!map[g.date]) map[g.date]=[]; map[g.date].push(g); });
+    gigs.forEach(g => {
+      // Generate all dates between start and end
+      const start = new Date(g.date);
+      const end   = g.end_date ? new Date(g.end_date) : start;
+      const cur   = new Date(start);
+      while (cur <= end) {
+        const ds = cur.toISOString().slice(0,10);
+        if (!map[ds]) map[ds] = [];
+        map[ds].push(g);
+        cur.setDate(cur.getDate() + 1);
+      }
+    });
     return map;
   }, [gigs]);
 
@@ -860,7 +872,9 @@ function ListView({ gigs, onGigClick }) {
             </div>
             <Badge label={g.genre} color={color} />
             <div style={{ textAlign:"right", minWidth:90 }}>
-              <div style={{ fontSize:12, color:C.red, fontFamily:F.display, letterSpacing:1 }}>{fmtDate(g.date)}</div>
+              <div style={{ fontSize:12, color:C.red, fontFamily:F.display, letterSpacing:1 }}>
+                {fmtDate(g.date)}{g.end_date ? ` — ${fmtDate(g.end_date)}` : ""}
+              </div>
               <div style={{ fontSize:11, color:C.dim }}>{g.time}</div>
             </div>
           </div>
@@ -890,12 +904,20 @@ function GigModal({ gig, onClose }) {
         <div style={{ fontFamily:F.display, fontSize:30, letterSpacing:2, color:C.white, marginTop:10, lineHeight:1 }}>{gig.band_name}</div>
         <div style={{ fontSize:13, color:C.muted, margin:"6px 0 20px" }}>{gig.venue} · {gig.city}</div>
         <div style={{ display:"flex", gap:24, marginBottom:20 }}>
-          {[["DATE",fmtDate(gig.date)],["DOORS",gig.time]].map(([l,v])=>(
-            <div key={l}>
-              <div style={{ fontSize:9, color:C.dim, letterSpacing:2, marginBottom:3 }}>{l}</div>
-              <div style={{ fontFamily:F.display, fontSize:18, letterSpacing:1, color:C.red }}>{v}</div>
+          <div>
+            <div style={{ fontSize:9, color:C.dim, letterSpacing:2, marginBottom:3 }}>{gig.end_date ? "FROM" : "DATE"}</div>
+            <div style={{ fontFamily:F.display, fontSize:18, letterSpacing:1, color:C.red }}>{fmtDate(gig.date)}</div>
+          </div>
+          {gig.end_date && (
+            <div>
+              <div style={{ fontSize:9, color:C.dim, letterSpacing:2, marginBottom:3 }}>TO</div>
+              <div style={{ fontFamily:F.display, fontSize:18, letterSpacing:1, color:C.red }}>{fmtDate(gig.end_date)}</div>
             </div>
-          ))}
+          )}
+          <div>
+            <div style={{ fontSize:9, color:C.dim, letterSpacing:2, marginBottom:3 }}>DOORS</div>
+            <div style={{ fontFamily:F.display, fontSize:18, letterSpacing:1, color:C.red }}>{gig.time}</div>
+          </div>
         </div>
         {gig.notes && <div style={{ color:C.muted, fontSize:12, marginBottom:20, fontStyle:"italic", paddingLeft:12, borderLeft:`2px solid ${C.border}` }}>{gig.notes}</div>}
         <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
