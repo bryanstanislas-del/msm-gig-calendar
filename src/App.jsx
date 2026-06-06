@@ -1098,7 +1098,6 @@ export default function App() {
     try { await DB.signOut(); } catch(e) { console.warn("Sign out error", e); }
     setAuth(null); 
     setTab("calendar");
-    window.location.reload();
   };
 
   // Apply filters to public gigs
