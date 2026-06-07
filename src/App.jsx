@@ -191,6 +191,8 @@ const DB = {
       headers: { "Authorization": `Bearer ${token}` }
     });
   },
+
+  async getApprovedGigs() {
     if (USE_MOCK) return MOCK_GIGS.filter(g => g.status === "approved");
     return sbFetch("/rest/v1/gigs?status=eq.approved&order=date.asc");
   },
