@@ -162,7 +162,10 @@ const DB = {
       body: JSON.stringify({ email, password })
     });
     if (authData.error) throw new Error(authData.error_description || authData.error);
-    const { access_token, user } = authData;
+    const access_token = authData.access_token || authData.session?.access_token;
+    const user = authData.user || authData.data?.user;
+    if (!access_token) throw new Error("Login failed — no session token returned");
+    if (!user) throw new Error("Login failed — no user returned");
     // Fetch profile using the user's token so RLS allows it
     let profile = { role:"band", band_name:"" };
     try {
@@ -203,10 +206,11 @@ const DB = {
       MOCK_GIGS.push(newGig);
       return newGig;
     }
+    const authToken = token || SUPABASE_ANON_KEY;
     const [created] = await sbFetch("/rest/v1/gigs", {
       method:"POST",
       body: JSON.stringify({ ...gig, submitted_by: userId, status:"pending" }),
-      headers:{ "Authorization":`Bearer ${token}` },
+      headers:{ "Authorization":`Bearer ${authToken}` },
     });
     return created;
   },
