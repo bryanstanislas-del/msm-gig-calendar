@@ -102,25 +102,12 @@ const MOCK_USERS = {
   "band@example.com": { id:"band1",  email:"band@example.com", password:"band123",   role:"band",  band_name:"The Velvet Wolves" },
 };
 
-// ── Supabase client (lazy-loaded only when not mocked) ─────────────
-async function sbFetch(path, opts = {}) {
-  const res = await fetch(`${SUPABASE_URL}${path}`, {
-    ...opts,
-    headers: {
-      "apikey": SUPABASE_ANON_KEY,
-      "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
-      "Content-Type": "application/json",
-      "Prefer": "return=representation",
-      ...(opts.headers || {}),
-    },
-  });
-  if (!res.ok) { const e = await res.json(); throw new Error(e.message || res.statusText); }
-  return res.json();
-}
+// ── Official Supabase client ────────────────────────────────────────
+import { createClient } from '@supabase/supabase-js';
+const supabase = USE_MOCK ? null : createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // ── DB abstraction (mock or real) ──────────────────────────────────
 const DB = {
-  // Auth
   async signUp(email, password, profile) {
     if (USE_MOCK) {
       const id = `user_${Date.now()}`;
@@ -129,22 +116,15 @@ const DB = {
       MOCK_PROFILE = { id, role:"band", ...profile };
       return { user: MOCK_USER, profile: MOCK_PROFILE };
     }
-    const data = await sbFetch("/auth/v1/signup", {
-      method:"POST",
-      body: JSON.stringify({
-        email, password,
-        data: { band_name: profile.band_name }
-      })
+    const { data, error } = await supabase.auth.signUp({
+      email, password,
+      options: { data: { band_name: profile.band_name } }
     });
-    const user = data.user || data;
-    if (!user || !user.id) throw new Error("Account created! Please sign in.");
-    // Update profile with all fields
+    if (error) throw new Error(error.message);
+    const user = data.user;
+    if (!user) throw new Error("Account created! Please sign in.");
     try {
-      await sbFetch(`/rest/v1/profiles?id=eq.${user.id}`, {
-        method:"PATCH",
-        body: JSON.stringify(profile),
-        headers:{ "Authorization": `Bearer ${data.access_token||SUPABASE_ANON_KEY}` }
-      });
+      await supabase.from("profiles").upsert({ id: user.id, ...profile });
     } catch(e) { console.warn("Profile update failed", e); }
     return { user, profile: { role:"band", ...profile } };
   },
@@ -157,85 +137,71 @@ const DB = {
       MOCK_PROFILE = { id: u.id, role: u.role, band_name: u.band_name };
       return { user: MOCK_USER, profile: MOCK_PROFILE };
     }
-    const authData = await sbFetch("/auth/v1/token?grant_type=password", {
-      method:"POST",
-      body: JSON.stringify({ email, password })
-    });
-    if (authData.error) throw new Error(authData.error_description || authData.error);
-    const access_token = authData.access_token || authData.session?.access_token;
-    const user = authData.user || authData.data?.user;
-    if (!access_token) throw new Error("Login failed — no session token returned");
-    if (!user) throw new Error("Login failed — no user returned");
-    // Fetch profile using the user's token so RLS allows it
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) throw new Error(error.message);
+    const user = data.user;
     let profile = { role:"band", band_name:"" };
     try {
-      const profiles = await sbFetch(`/rest/v1/profiles?id=eq.${user.id}&select=*`, {
-        headers: { "Authorization": `Bearer ${access_token}` }
-      });
+      const { data: profiles } = await supabase.from("profiles").select("*").eq("id", user.id);
       if (profiles && profiles.length > 0) profile = profiles[0];
     } catch(e) { console.warn("Profile fetch failed", e); }
-    return { user, profile, token: access_token };
+    return { user, profile, token: data.session?.access_token };
   },
 
   async signOut() {
     if (USE_MOCK) { MOCK_USER = null; MOCK_PROFILE = null; return; }
-    await sbFetch("/auth/v1/logout", { method:"POST" });
+    await supabase.auth.signOut();
   },
 
-  // Gigs
-  async getBands(token) {
+  async getBands() {
     if (USE_MOCK) return [
       { id:"band1", band_name:"The Velvet Wolves", city:"London", genre:"Indie Rock", website:"https://example.com", instagram:"@velvetwolves", facebook:"", twitter:"", spotify:"", phone:"07700900123", bio:"Indie rock four-piece from London.", photo_url:"", role:"band" },
     ];
-    return sbFetch("/rest/v1/profiles?role=eq.band&order=band_name.asc&select=*", {
-      headers: { "Authorization": `Bearer ${token}` }
-    });
+    const { data, error } = await supabase.from("profiles").select("*").eq("role","band").order("band_name");
+    if (error) throw new Error(error.message);
+    return data;
   },
 
   async getApprovedGigs() {
     if (USE_MOCK) return MOCK_GIGS.filter(g => g.status === "approved");
-    return sbFetch("/rest/v1/gigs?status=eq.approved&order=date.asc");
+    const { data, error } = await supabase.from("gigs").select("*").eq("status","approved").order("date");
+    if (error) throw new Error(error.message);
+    return data;
   },
 
-  async getAllGigs(token) {
+  async getAllGigs() {
     if (USE_MOCK) return [...MOCK_GIGS];
-    return sbFetch("/rest/v1/gigs?order=created_at.desc", { headers:{ "Authorization":`Bearer ${token}` } });
+    const { data, error } = await supabase.from("gigs").select("*").order("created_at", { ascending: false });
+    if (error) throw new Error(error.message);
+    return data;
   },
 
-  async submitGig(gig, userId, token) {
+  async submitGig(gig, userId) {
     if (USE_MOCK) {
       const newGig = { ...gig, id: String(mockIdCounter++), status:"pending", submitted_by: userId };
       MOCK_GIGS.push(newGig);
       return newGig;
     }
-    console.log("submitGig token:", token ? "present" : "MISSING", "userId:", userId);
-    const authToken = token || SUPABASE_ANON_KEY;
-    console.log("Using token type:", token ? "user token" : "ANON KEY FALLBACK");
-    const [created] = await sbFetch("/rest/v1/gigs", {
-      method:"POST",
-      body: JSON.stringify({ ...gig, submitted_by: userId, status:"pending" }),
-      headers:{ "Authorization":`Bearer ${authToken}` },
-    });
-    return created;
+    const { data, error } = await supabase.from("gigs").insert({ ...gig, submitted_by: userId, status:"pending" }).select();
+    if (error) throw new Error(error.message);
+    return data[0];
   },
 
-  async updateGigStatus(gigId, status, token) {
+  async updateGigStatus(gigId, status) {
     if (USE_MOCK) {
       const g = MOCK_GIGS.find(x => x.id === gigId);
       if (g) g.status = status;
       return g;
     }
-    const [updated] = await sbFetch(`/rest/v1/gigs?id=eq.${gigId}`, {
-      method:"PATCH",
-      body: JSON.stringify({ status }),
-      headers:{ "Authorization":`Bearer ${token}` },
-    });
-    return updated;
+    const { data, error } = await supabase.from("gigs").update({ status }).eq("id", gigId).select();
+    if (error) throw new Error(error.message);
+    return data[0];
   },
 
-  async deleteGig(gigId, token) {
+  async deleteGig(gigId) {
     if (USE_MOCK) { MOCK_GIGS = MOCK_GIGS.filter(g => g.id !== gigId); return; }
-    await sbFetch(`/rest/v1/gigs?id=eq.${gigId}`, { method:"DELETE", headers:{ "Authorization":`Bearer ${token}` } });
+    const { error } = await supabase.from("gigs").delete().eq("id", gigId);
+    if (error) throw new Error(error.message);
   },
 };
 
@@ -546,7 +512,7 @@ function AuthPanel({ onAuth, onBack }) {
 // ════════════════════════════════════════════════════════════════════
 //  SUBMIT GIG FORM
 // ════════════════════════════════════════════════════════════════════
-function SubmitGigForm({ user, profile, token, onSubmitted }) {
+function SubmitGigForm({ user, profile, onSubmitted }) {
   const empty = { band_name: profile?.band_name||"", venue:"", city:"", date:"", end_date:"", time:"20:00", genre:"Indie Rock", tickets:"", notes:"", is_recurring:false, recurrence:"none", spotify: profile?.spotify||"" };
   const [form, setForm]     = useState(empty);
   const [errors, setErrors] = useState({});
@@ -564,7 +530,7 @@ function SubmitGigForm({ user, profile, token, onSubmitted }) {
     if (Object.keys(e).length) { setErrors(e); return; }
     setStatus("loading");
     try {
-      await DB.submitGig(form, user.id, token);
+      await DB.submitGig(form, user.id);
       // Send email notification
       try {
         await fetch("/api/notify", {
@@ -662,7 +628,7 @@ function SubmitGigForm({ user, profile, token, onSubmitted }) {
 // ════════════════════════════════════════════════════════════════════
 //  ADMIN PANEL
 // ════════════════════════════════════════════════════════════════════
-function AdminPanel({ token, allGigs, onRefresh }) {
+function AdminPanel({ allGigs, onRefresh }) {
   const [filter, setFilter] = useState("pending");
   const [loading, setLoading] = useState({});
 
@@ -670,7 +636,7 @@ function AdminPanel({ token, allGigs, onRefresh }) {
 
   const action = async (gigId, status) => {
     setLoading(l=>({...l,[gigId]:true}));
-    await DB.updateGigStatus(gigId, status, token);
+    await DB.updateGigStatus(gigId, status);
     await onRefresh();
     setLoading(l=>({...l,[gigId]:false}));
   };
@@ -678,7 +644,7 @@ function AdminPanel({ token, allGigs, onRefresh }) {
   const remove = async (gigId) => {
     if (!confirm("Delete this gig permanently?")) return;
     setLoading(l=>({...l,[gigId]:true}));
-    await DB.deleteGig(gigId, token);
+    await DB.deleteGig(gigId);
     await onRefresh();
   };
 
@@ -1261,16 +1227,16 @@ export default function App() {
   // Load all gigs when admin logs in
   useEffect(() => {
     if (isAdmin && auth?.token) {
-      DB.getAllGigs(auth.token).then(setAllGigs);
-      DB.getBands(auth.token).then(setBands);
+      DB.getAllGigs().then(setAllGigs);
+      DB.getBands().then(setBands);
     } else if (isAdmin) {
-      DB.getAllGigs(null).then(setAllGigs);
-      DB.getBands(null).then(setBands);
+      DB.getAllGigs().then(setAllGigs);
+      DB.getBands().then(setBands);
     }
   }, [isAdmin, auth]);
 
   const refreshAdmin = useCallback(async () => {
-    const fresh = await DB.getAllGigs(auth?.token);
+    const fresh = await DB.getAllGigs();
     setAllGigs(fresh);
     const approved = fresh.filter(g=>g.status==="approved");
     setGigs(approved);
@@ -1377,13 +1343,13 @@ export default function App() {
 
         {/* ADMIN */}
         {tab==="admin" && isAdmin && (
-          <AdminPanel token={auth?.token} allGigs={allGigs} onRefresh={refreshAdmin} />
+          <AdminPanel allGigs={allGigs} onRefresh={refreshAdmin} />
         )}
 
         {/* SUBMIT */}
         {tab==="submit" && auth && (
           <div style={{ maxWidth:700 }}>
-            <SubmitGigForm user={auth.user} profile={auth.profile} token={auth?.token} onSubmitted={()=>{}} />
+            <SubmitGigForm user={auth.user} profile={auth.profile} onSubmitted={()=>{}} />
           </div>
         )}
 
