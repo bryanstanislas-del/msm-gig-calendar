@@ -208,7 +208,9 @@ const DB = {
       MOCK_GIGS.push(newGig);
       return newGig;
     }
+    console.log("submitGig token:", token ? "present" : "MISSING", "userId:", userId);
     const authToken = token || SUPABASE_ANON_KEY;
+    console.log("Using token type:", token ? "user token" : "ANON KEY FALLBACK");
     const [created] = await sbFetch("/rest/v1/gigs", {
       method:"POST",
       body: JSON.stringify({ ...gig, submitted_by: userId, status:"pending" }),
