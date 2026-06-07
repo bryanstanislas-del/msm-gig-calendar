@@ -169,10 +169,8 @@ const DB = {
       const profiles = await sbFetch(`/rest/v1/profiles?id=eq.${user.id}&select=*`, {
         headers: { "Authorization": `Bearer ${access_token}` }
       });
-      console.log("PROFILE FETCH:", JSON.stringify(profiles));
       if (profiles && profiles.length > 0) profile = profiles[0];
     } catch(e) { console.warn("Profile fetch failed", e); }
-    console.log("FINAL PROFILE ROLE:", profile.role);
     return { user, profile, token: access_token };
   },
 
