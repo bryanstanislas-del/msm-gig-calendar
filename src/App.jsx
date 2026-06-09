@@ -190,11 +190,13 @@ const DB = {
     return data;
   },
 
-  async getBands() {
+  async getBands(includeDisabled = false) {
     if (USE_MOCK) return [
       { id:"band1", band_name:"The Velvet Wolves", city:"London", genre:"Indie Rock", website:"https://example.com", instagram:"@velvetwolves", facebook:"", twitter:"", spotify:"", phone:"07700900123", bio:"Indie rock four-piece from London.", photo_url:"", role:"band" },
     ];
-    const { data, error } = await supabase.from("profiles").select("*").eq("role","band").order("band_name");
+    let query = supabase.from("profiles").select("*").eq("role","band").order("band_name");
+    if (!includeDisabled) query = query.or("disabled.is.null,disabled.eq.false");
+    const { data, error } = await query;
     if (error) throw new Error(error.message);
     return data;
   },
@@ -1183,30 +1185,169 @@ function StatsPanel({ gigs }) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  BAND DIRECTORY
+//  ADMIN BANDS
 // ════════════════════════════════════════════════════════════════════
-function BandDirectory({ bands }) {
-  const [search, setSearch] = useState("");
-  const [selected, setSelected] = useState(null);
+function AdminBands({ bands, onRefresh }) {
+  const [view,       setView]       = useState("list"); // list | create | edit
+  const [search,     setSearch]     = useState("");
+  const [selected,   setSelected]   = useState(null);
+  const [creating,   setCreating]   = useState(false);
+  const [msg,        setMsg]        = useState({ text:"", type:"" });
+
+  // ── Create band form state ──
+  const emptyCreate = { band_name:"", email:"", password:"" };
+  const [createForm, setCreateForm] = useState(emptyCreate);
+  const setC = k => e => setCreateForm(f=>({...f,[k]:e.target.value}));
+
+  // ── Edit form state ──
+  const [editForm, setEditForm] = useState({});
+  const setE = k => e => setEditForm(f=>({...f,[k]:e.target.value}));
+
+  const showMsg = (text, type="success") => {
+    setMsg({ text, type });
+    setTimeout(() => setMsg({ text:"", type:"" }), 4000);
+  };
 
   const filtered = bands.filter(b => {
     if (!search.trim()) return true;
     const q = search.toLowerCase();
     return (b.band_name||"").toLowerCase().includes(q) ||
            (b.city||"").toLowerCase().includes(q) ||
-           (b.genre||"").toLowerCase().includes(q);
+           (b.primary_genre||b.genre||"").toLowerCase().includes(q);
   });
 
-  return (
+  // ── Create band ──
+  const handleCreate = async () => {
+    if (!createForm.band_name || !createForm.email || !createForm.password) {
+      showMsg("Band name, email and password are required", "error"); return;
+    }
+    setCreating(true);
+    try {
+      // Create auth user via Supabase Admin API using service role
+      // We use signUp here — band will use this to log in
+      const { data, error } = await supabase.auth.signUp({
+        email:    createForm.email,
+        password: createForm.password,
+        options:  { data: { band_name: createForm.band_name } }
+      });
+      if (error) throw new Error(error.message);
+      const user = data.user;
+      if (!user) throw new Error("User creation failed");
+
+      // Generate slug
+      const { data: slugData } = await supabase.rpc("generate_band_slug", {
+        band_name: createForm.band_name
+      });
+
+      // Upsert profile
+      const { error: profileError } = await supabase.from("profiles").upsert({
+        id:            user.id,
+        band_name:     createForm.band_name,
+        role:          "band",
+        band_slug:     slugData,
+        band_status:   "active",
+        admin_created: true,
+        disabled:      false,
+      });
+      if (profileError) throw new Error(profileError.message);
+
+      showMsg(`✓ Band account created! Slug: ${slugData}`);
+      setCreateForm(emptyCreate);
+      setView("list");
+      if (onRefresh) onRefresh();
+    } catch(e) {
+      showMsg(e.message, "error");
+    }
+    setCreating(false);
+  };
+
+  // ── Open edit ──
+  const openEdit = (band) => {
+    setSelected(band);
+    setEditForm({
+      band_name:           band.band_name           || "",
+      city:                band.city                || "",
+      primary_genre:       band.primary_genre       || "",
+      secondary_genre:     band.secondary_genre     || "",
+      bio:                 band.bio                 || "",
+      website:             band.website             || "",
+      spotify:             band.spotify             || "",
+      instagram:           band.instagram           || "",
+      facebook:            band.facebook            || "",
+      tiktok_url:          band.tiktok_url          || "",
+      twitter:             band.twitter             || "",
+      youtube_channel_url: band.youtube_channel_url || "",
+      booking_email:       band.booking_email       || "",
+      phone:               band.phone               || "",
+      band_status:         band.band_status         || "active",
+      disabled:            band.disabled            || false,
+    });
+    setView("edit");
+  };
+
+  // ── Save edit ──
+  const handleSave = async () => {
+    try {
+      const { error } = await supabase.from("profiles")
+        .update(editForm)
+        .eq("id", selected.id);
+      if (error) throw new Error(error.message);
+      showMsg("✓ Profile updated successfully");
+      setView("list");
+      if (onRefresh) onRefresh();
+    } catch(e) {
+      showMsg(e.message, "error");
+    }
+  };
+
+  // ── Toggle disabled ──
+  const toggleDisabled = async (band) => {
+    const newVal = !band.disabled;
+    try {
+      const { error } = await supabase.from("profiles")
+        .update({ disabled: newVal })
+        .eq("id", band.id);
+      if (error) throw new Error(error.message);
+      showMsg(`✓ Band ${newVal ? "disabled" : "re-enabled"}`);
+      if (onRefresh) onRefresh();
+    } catch(e) {
+      showMsg(e.message, "error");
+    }
+  };
+
+  // ── Reset password ──
+  const resetPassword = async (band) => {
+    const newPass = prompt(`Set new password for ${band.band_name}:`);
+    if (!newPass || newPass.length < 6) { alert("Password must be at least 6 characters"); return; }
+    try {
+      // Use Supabase admin to update password
+      const { error } = await supabase.auth.admin?.updateUserById?.(band.id, { password: newPass });
+      if (error) throw new Error(error.message);
+      showMsg(`✓ Password updated for ${band.band_name}`);
+    } catch(e) {
+      // If admin API not available, show SQL instruction
+      showMsg(`Run in Supabase SQL: UPDATE auth.users SET encrypted_password = crypt('${newPass}', gen_salt('bf')) WHERE id = '${band.id}';`, "error");
+    }
+  };
+
+  // ══ LIST VIEW ══
+  if (view === "list") return (
     <div>
-      <SectionLabel>REGISTERED BANDS</SectionLabel>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:20, flexWrap:"wrap", gap:12 }}>
+        <SectionLabel>BAND MANAGEMENT</SectionLabel>
+        <Btn onClick={()=>setView("create")} style={{ padding:"10px 20px" }}>+ CREATE BAND</Btn>
+      </div>
+
+      {msg.text && (
+        <div style={{ marginBottom:16, padding:12, background: msg.type==="error" ? "rgba(232,32,58,0.1)" : "rgba(67,170,139,0.1)", border:`1px solid ${msg.type==="error"?C.red:C.green}`, borderRadius:6, fontSize:13, color: msg.type==="error" ? C.red : C.green }}>
+          {msg.text}
+        </div>
+      )}
 
       {/* Search */}
       <div style={{ position:"relative", marginBottom:20 }}>
         <span style={{ position:"absolute", left:14, top:"50%", transform:"translateY(-50%)", fontSize:16, color:C.muted }}>🔍</span>
-        <input
-          type="text" placeholder="Search bands, city or genre..."
-          value={search} onChange={e=>setSearch(e.target.value)}
+        <input type="text" placeholder="Search bands..." value={search} onChange={e=>setSearch(e.target.value)}
           style={{ ...inputCss, paddingLeft:42 }}
           onFocus={e=>e.target.style.borderColor=C.red}
           onBlur={e=>e.target.style.borderColor=C.border}
@@ -1216,80 +1357,179 @@ function BandDirectory({ bands }) {
       <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
         {filtered.length === 0 && <div style={{ color:C.dim, fontSize:13 }}>No bands found.</div>}
         {filtered.map(b => {
-          const color = GENRE_COLORS[b.genre] || "#888";
+          const color     = GENRE_COLORS[b.primary_genre||b.genre] || "#888";
+          const { score } = getProfileCompleteness(b);
+          const scoreCol  = score===100 ? C.green : score>=60 ? C.amber : C.red;
           return (
-            <div key={b.id} onClick={()=>setSelected(selected?.id===b.id ? null : b)}
-              style={{
-                background: selected?.id===b.id ? "rgba(232,32,58,0.08)" : C.surfaceHigh,
-                border:`1px solid ${selected?.id===b.id ? C.red : C.border}`,
-                borderLeft:`3px solid ${color}`,
-                borderRadius:8, padding:"14px 18px", cursor:"pointer",
-              }}
-            >
-              {/* Header row */}
+            <div key={b.id} style={{
+              background: b.disabled ? "rgba(255,255,255,0.01)" : C.surfaceHigh,
+              border:`1px solid ${b.disabled ? C.dim : C.border}`,
+              borderLeft:`3px solid ${b.disabled ? C.dim : color}`,
+              borderRadius:8, padding:"14px 18px",
+              opacity: b.disabled ? 0.6 : 1,
+            }}>
               <div style={{ display:"flex", alignItems:"center", gap:14, flexWrap:"wrap" }}>
-                {b.photo_url && (
-                  <img src={b.photo_url} alt={b.band_name}
-                    style={{ width:48, height:48, borderRadius:"50%", objectFit:"cover", flexShrink:0, border:`2px solid ${color}` }}
-                  />
-                )}
-                <div style={{ flex:1 }}>
-                  <div style={{ fontFamily:F.display, fontSize:18, letterSpacing:1.5, color:C.white }}>{b.band_name}</div>
-                  <div style={{ fontSize:12, color:C.muted, marginTop:2 }}>
-                    {[b.city, b.genre].filter(Boolean).join(" · ")}
+                {/* Photo */}
+                {b.photo_url
+                  ? <img src={b.photo_url} style={{ width:44, height:44, borderRadius:"50%", objectFit:"cover", border:`2px solid ${color}`, flexShrink:0 }} />
+                  : <div style={{ width:44, height:44, borderRadius:"50%", background:`${color}22`, border:`2px solid ${color}44`, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, fontSize:20 }}>🎸</div>
+                }
+                {/* Info */}
+                <div style={{ flex:1, minWidth:160 }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                    <span style={{ fontFamily:F.display, fontSize:16, letterSpacing:1.5, color: b.disabled ? C.muted : C.white }}>{b.band_name}</span>
+                    {b.admin_created && <Badge label="ADMIN CREATED" color={C.amber} />}
+                    {b.disabled      && <Badge label="DISABLED"      color={C.dim}   />}
+                    {b.band_status !== "active" && b.band_status && <Badge label={b.band_status.toUpperCase()} color={C.muted} />}
                   </div>
-                  {/* Completeness indicator */}
-                  {(() => {
-                    const { score } = getProfileCompleteness(b);
-                    const color = score===100 ? C.green : score>=60 ? C.amber : C.red;
-                    return (
-                      <div style={{ display:"flex", alignItems:"center", gap:6, marginTop:5 }}>
-                        <div style={{ flex:1, maxWidth:80, background:"rgba(255,255,255,0.08)", borderRadius:3, height:4 }}>
-                          <div style={{ width:`${score}%`, height:"100%", background:color, borderRadius:3 }} />
-                        </div>
-                        <span style={{ fontSize:10, color, fontFamily:F.display }}>{score}%</span>
-                        {score < 60 && <span style={{ fontSize:10, color:C.amber }}>⚠️ Incomplete</span>}
-                      </div>
-                    );
-                  })()}
+                  <div style={{ fontSize:12, color:C.muted, marginTop:2 }}>
+                    {[b.city, b.primary_genre||b.genre].filter(Boolean).join(" · ")}
+                    {b.band_slug && <span style={{ color:C.dim, marginLeft:8 }}>/{b.band_slug}</span>}
+                  </div>
+                  {/* Completeness bar */}
+                  <div style={{ display:"flex", alignItems:"center", gap:6, marginTop:5 }}>
+                    <div style={{ width:60, background:"rgba(255,255,255,0.08)", borderRadius:3, height:3 }}>
+                      <div style={{ width:`${score}%`, height:"100%", background:scoreCol, borderRadius:3 }} />
+                    </div>
+                    <span style={{ fontSize:10, color:scoreCol }}>{score}%</span>
+                    {score < 60 && <span style={{ fontSize:10, color:C.amber }}>⚠ Incomplete</span>}
+                  </div>
                 </div>
-                <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-                  {b.spotify   && <a href={b.spotify}   target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()} style={{ fontSize:11, color:"#1DB954", textDecoration:"none" }}>SPOTIFY</a>}
-                  {b.website   && <a href={b.website}   target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()} style={{ fontSize:11, color:C.red,    textDecoration:"none" }}>WEBSITE</a>}
-                  {b.instagram && <a href={`https://instagram.com/${b.instagram.replace("@","")}`} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()} style={{ fontSize:11, color:"#e1306c", textDecoration:"none" }}>INSTAGRAM</a>}
+                {/* Actions */}
+                <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                  <Btn variant="ghost" onClick={()=>openEdit(b)} style={{ fontSize:11, padding:"6px 12px" }}>✏️ EDIT</Btn>
+                  {b.band_slug && (
+                    <a href={`/artist/${b.band_slug}`} target="_blank" rel="noreferrer"
+                      style={{ ...btnCss("ghost"), fontSize:11, padding:"6px 12px", textDecoration:"none", display:"inline-block" }}
+                    >👁 VIEW</a>
+                  )}
+                  <Btn
+                    variant={b.disabled ? "success" : "ghost"}
+                    onClick={()=>toggleDisabled(b)}
+                    style={{ fontSize:11, padding:"6px 12px" }}
+                  >{b.disabled ? "ENABLE" : "DISABLE"}</Btn>
+                  <Btn variant="ghost" onClick={()=>resetPassword(b)} style={{ fontSize:11, padding:"6px 12px" }}>🔑 PASSWORD</Btn>
                 </div>
               </div>
-
-              {/* Expanded details */}
-              {selected?.id === b.id && (
-                <div style={{ marginTop:16, paddingTop:16, borderTop:`1px solid ${C.border}`, display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
-                  {[
-                    ["CONTACT",  b.phone],
-                    ["CITY",     b.city],
-                    ["GENRE",    b.genre],
-                    ["FACEBOOK", b.facebook],
-                    ["TWITTER",  b.twitter],
-                    ["WEBSITE",  b.website],
-                  ].filter(([,v])=>v).map(([label, val])=>(
-                    <div key={label}>
-                      <div style={{ fontSize:9, color:C.dim, letterSpacing:2, marginBottom:3 }}>{label}</div>
-                      <div style={{ fontSize:13, color:C.white }}>{val}</div>
-                    </div>
-                  ))}
-                  {b.bio && (
-                    <div style={{ gridColumn:"1/-1" }}>
-                      <div style={{ fontSize:9, color:C.dim, letterSpacing:2, marginBottom:3 }}>BIO</div>
-                      <div style={{ fontSize:13, color:C.white, lineHeight:1.6 }}>{b.bio}</div>
-                    </div>
-                  )}
-                </div>
-              )}
             </div>
           );
         })}
       </div>
     </div>
   );
+
+  // ══ CREATE VIEW ══
+  if (view === "create") return (
+    <div style={{ maxWidth:560 }}>
+      <div style={{ display:"flex", alignItems:"center", gap:16, marginBottom:24 }}>
+        <span onClick={()=>setView("list")} style={{ color:C.muted, cursor:"pointer", fontSize:13 }}>← Back</span>
+        <SectionLabel>CREATE BAND ACCOUNT</SectionLabel>
+      </div>
+
+      {msg.text && (
+        <div style={{ marginBottom:16, padding:12, background: msg.type==="error" ? "rgba(232,32,58,0.1)" : "rgba(67,170,139,0.1)", border:`1px solid ${msg.type==="error"?C.red:C.green}`, borderRadius:6, fontSize:13, color: msg.type==="error" ? C.red : C.green }}>
+          {msg.text}
+        </div>
+      )}
+
+      <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderTop:`3px solid ${C.red}`, borderRadius:8, padding:26 }}>
+        <div style={{ fontSize:12, color:C.muted, marginBottom:20, lineHeight:1.7 }}>
+          Creates a Supabase auth account and band profile. The band can log in immediately using these credentials and update their own profile.
+        </div>
+        <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+          <Input label="BAND / ARTIST NAME" value={createForm.band_name} onChange={setC("band_name")} required />
+          <Input label="EMAIL ADDRESS" type="email" value={createForm.email} onChange={setC("email")} required />
+          <Input label="TEMPORARY PASSWORD" type="text" value={createForm.password} onChange={setC("password")} required />
+          <div style={{ fontSize:11, color:C.dim }}>
+            💡 Use a simple temporary password. Advise the band to change it after first login.
+          </div>
+        </div>
+        <Btn onClick={handleCreate} disabled={creating} style={{ width:"100%", marginTop:20, padding:"13px" }}>
+          {creating ? "CREATING..." : "CREATE BAND ACCOUNT →"}
+        </Btn>
+      </div>
+    </div>
+  );
+
+  // ══ EDIT VIEW ══
+  if (view === "edit" && selected) return (
+    <div style={{ maxWidth:700 }}>
+      <div style={{ display:"flex", alignItems:"center", gap:16, marginBottom:24, flexWrap:"wrap" }}>
+        <span onClick={()=>setView("list")} style={{ color:C.muted, cursor:"pointer", fontSize:13 }}>← Back to bands</span>
+        <div style={{ fontFamily:F.display, fontSize:20, color:C.white, letterSpacing:2 }}>EDITING: {selected.band_name}</div>
+        {selected.band_slug && (
+          <a href={`/artist/${selected.band_slug}`} target="_blank" rel="noreferrer"
+            style={{ fontSize:11, color:C.red, textDecoration:"none" }}
+          >↗ View public page</a>
+        )}
+      </div>
+
+      {msg.text && (
+        <div style={{ marginBottom:16, padding:12, background: msg.type==="error" ? "rgba(232,32,58,0.1)" : "rgba(67,170,139,0.1)", border:`1px solid ${msg.type==="error"?C.red:C.green}`, borderRadius:6, fontSize:13, color: msg.type==="error" ? C.red : C.green }}>
+          {msg.text}
+        </div>
+      )}
+
+      <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderTop:`3px solid ${C.red}`, borderRadius:8, padding:26 }}>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
+
+          <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2 }}>BAND INFORMATION</div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <Input label="BAND / ARTIST NAME" value={editForm.band_name} onChange={setE("band_name")} required />
+          </div>
+          <Input label="BASE CITY" value={editForm.city} onChange={setE("city")} />
+          <Select label="BAND STATUS" value={editForm.band_status} onChange={setE("band_status")}
+            options={[
+              {value:"active",    label:"Active"},
+              {value:"inactive",  label:"Inactive"},
+              {value:"on-hiatus", label:"On Hiatus"},
+              {value:"disbanded", label:"Disbanded"},
+            ]}
+          />
+          <Select label="PRIMARY GENRE"            value={editForm.primary_genre}   onChange={setE("primary_genre")}   options={["", ...GENRES]} />
+          <Select label="SECONDARY GENRE"          value={editForm.secondary_genre} onChange={setE("secondary_genre")} options={["", ...GENRES]} />
+          <div style={{ gridColumn:"1/-1" }}>
+            <label style={{ display:"block", fontSize:13, color:C.white, letterSpacing:2, marginBottom:6, fontFamily:F.display }}>BIO</label>
+            <textarea value={editForm.bio} onChange={setE("bio")} rows={4}
+              style={{ ...inputCss, resize:"vertical" }}
+              placeholder="Band biography..."
+            />
+          </div>
+
+          <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8 }}>SOCIAL & MUSIC</div>
+          <Input label="WEBSITE"   type="url" value={editForm.website}   onChange={setE("website")}   placeholder="https://..." />
+          <Input label="SPOTIFY"   type="url" value={editForm.spotify}   onChange={setE("spotify")}   placeholder="https://open.spotify.com/artist/..." />
+          <Input label="INSTAGRAM" type="url" value={editForm.instagram} onChange={setE("instagram")} placeholder="https://instagram.com/..." />
+          <Input label="FACEBOOK"  type="url" value={editForm.facebook}  onChange={setE("facebook")}  placeholder="https://facebook.com/..." />
+          <Input label="TIKTOK"    type="url" value={editForm.tiktok_url} onChange={setE("tiktok_url")} placeholder="https://tiktok.com/@..." />
+          <Input label="YOUTUBE"   type="url" value={editForm.youtube_channel_url} onChange={setE("youtube_channel_url")} placeholder="https://youtube.com/@..." />
+
+          <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8 }}>CONTACT</div>
+          <Input label="BOOKING EMAIL" type="email" value={editForm.booking_email} onChange={setE("booking_email")} />
+          <Input label="PHONE"         type="tel"   value={editForm.phone}         onChange={setE("phone")} />
+
+          <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8 }}>VISIBILITY</div>
+          <div style={{ gridColumn:"1/-1", display:"flex", alignItems:"center", justifyContent:"space-between", padding:"14px 16px", background:"rgba(255,255,255,0.03)", border:`1px solid ${C.border}`, borderRadius:6 }}>
+            <div>
+              <div style={{ fontSize:13, color:C.white, fontFamily:F.display, letterSpacing:1 }}>DISABLE PROFILE</div>
+              <div style={{ fontSize:11, color:C.dim, marginTop:2 }}>Hides from public calendar and artist directory. Data is preserved.</div>
+            </div>
+            <div onClick={()=>setEditForm(f=>({...f, disabled:!f.disabled}))}
+              style={{ width:48, height:26, borderRadius:13, cursor:"pointer", transition:"background 0.2s",
+                background: editForm.disabled ? C.red : "rgba(255,255,255,0.1)", position:"relative", flexShrink:0 }}
+            >
+              <div style={{ width:20, height:20, borderRadius:"50%", background:"#fff", position:"absolute", top:3,
+                left: editForm.disabled ? 25 : 3, transition:"left 0.2s" }} />
+            </div>
+          </div>
+        </div>
+
+        <Btn onClick={handleSave} style={{ width:"100%", marginTop:24, padding:"13px" }}>SAVE CHANGES</Btn>
+      </div>
+    </div>
+  );
+
+  return null;
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -2295,20 +2535,19 @@ function MainApp() {
 
   // Load all gigs when admin logs in
   useEffect(() => {
-    if (isAdmin && auth?.token) {
+    if (isAdmin) {
       DB.getAllGigs().then(setAllGigs);
-      DB.getBands().then(setBands);
-    } else if (isAdmin) {
-      DB.getAllGigs().then(setAllGigs);
-      DB.getBands().then(setBands);
+      DB.getBands(true).then(setBands); // include disabled for admin
     }
   }, [isAdmin, auth]);
 
   const refreshAdmin = useCallback(async () => {
     const fresh = await DB.getAllGigs();
     setAllGigs(fresh);
-    const approved = fresh.filter(g=>g.status==="approved");
-    setGigs(approved);
+    const approvedFresh = fresh.filter(g=>g.status==="approved");
+    setGigs(approvedFresh);
+    const freshBands = await DB.getBands(true);
+    setBands(freshBands);
   }, [auth]);
 
   const handleAuth = (result) => { setAuth(result); setTab("submit"); };
@@ -2414,7 +2653,7 @@ function MainApp() {
 
         {/* BANDS */}
         {tab==="bands" && isAdmin && (
-          <BandDirectory bands={bands} />
+          <AdminBands bands={bands} onRefresh={refreshAdmin} />
         )}
 
         {/* ADMIN */}
