@@ -45,6 +45,7 @@
 // ════════════════════════════════════════════════════════════════════
 
 import { useState, useMemo, useEffect, useCallback } from "react";
+import { BrowserRouter, Routes, Route, useParams, useNavigate, Link } from "react-router-dom";
 
 // ── Supabase config ────────────────────────────────────────────────
 const SUPABASE_URL = "https://fmlaaiolqwknowhtdeue.supabase.co";
@@ -124,7 +125,9 @@ const DB = {
     const user = data.user;
     if (!user) throw new Error("Account created! Please sign in.");
     try {
-      await supabase.from("profiles").upsert({ id: user.id, ...profile });
+      // Generate slug from band name
+      const { data: slugData } = await supabase.rpc("generate_band_slug", { band_name: profile.band_name });
+      await supabase.from("profiles").upsert({ id: user.id, ...profile, band_slug: slugData, band_status: "active" });
     } catch(e) { console.warn("Profile update failed", e); }
     return { user, profile: { role:"band", ...profile } };
   },
@@ -151,6 +154,41 @@ const DB = {
   async signOut() {
     if (USE_MOCK) { MOCK_USER = null; MOCK_PROFILE = null; return; }
     await supabase.auth.signOut();
+  },
+
+  async getBandBySlug(slug) {
+    if (USE_MOCK) return null;
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("band_slug", slug)
+      .single();
+    if (error) return null;
+    return data;
+  },
+
+  async updateProfile(userId, updates) {
+    if (USE_MOCK) return updates;
+    const { data, error } = await supabase
+      .from("profiles")
+      .update(updates)
+      .eq("id", userId)
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    return data;
+  },
+
+  async getGigsByBand(bandName) {
+    if (USE_MOCK) return MOCK_GIGS.filter(g => g.band_name === bandName && g.status === "approved");
+    const { data, error } = await supabase
+      .from("gigs")
+      .select("*")
+      .eq("band_name", bandName)
+      .eq("status", "approved")
+      .order("date", { ascending: true });
+    if (error) return [];
+    return data;
   },
 
   async getBands() {
@@ -238,6 +276,18 @@ function MSMLogo({ height = 80, showWordmark = true }) {
         }}
       />
     </div>
+  );
+}
+
+// ── Band name link ─────────────────────────────────────────────────
+// Wraps a band name with a link to their profile if slug available
+function BandLink({ name, slug, style={} }) {
+  if (!slug) return <span style={style}>{name}</span>;
+  return (
+    <Link to={`/artist/${slug}`} style={{ ...style, textDecoration:"none", color:"inherit" }}
+      onMouseEnter={e=>e.currentTarget.style.color=C.red}
+      onMouseLeave={e=>e.currentTarget.style.color=style.color||"inherit"}
+    >{name}</Link>
   );
 }
 
@@ -1248,17 +1298,29 @@ function BandDirectory({ bands }) {
 // ════════════════════════════════════════════════════════════════════
 function EditProfile({ user, profile, onSaved }) {
   const [form, setForm] = useState({
-    band_name:  profile?.band_name  || "",
-    city:       profile?.city       || "",
-    genre:      profile?.genre      || "Indie Rock",
-    bio:        profile?.bio        || "",
-    website:    profile?.website    || "",
-    spotify:    profile?.spotify    || "",
-    instagram:  profile?.instagram  || "",
-    facebook:   profile?.facebook   || "",
-    twitter:    profile?.twitter    || "",
-    phone:      profile?.phone      || "",
-    photo_url:  profile?.photo_url  || "",
+    band_name:           profile?.band_name           || "",
+    city:                profile?.city                || "",
+    genre:               profile?.genre               || "Indie Rock",
+    primary_genre:       profile?.primary_genre       || "",
+    secondary_genre:     profile?.secondary_genre     || "",
+    formation_year:      profile?.formation_year      || "",
+    bio:                 profile?.bio                 || "",
+    photo_url:           profile?.photo_url           || "",
+    website:             profile?.website             || "",
+    spotify:             profile?.spotify             || "",
+    instagram:           profile?.instagram           || "",
+    facebook:            profile?.facebook            || "",
+    twitter:             profile?.twitter             || "",
+    tiktok_url:          profile?.tiktok_url          || "",
+    youtube_channel_url: profile?.youtube_channel_url || "",
+    youtube_featured_url:profile?.youtube_featured_url|| "",
+    apple_music_url:     profile?.apple_music_url     || "",
+    bandcamp_url:        profile?.bandcamp_url        || "",
+    soundcloud_url:      profile?.soundcloud_url      || "",
+    booking_email:       profile?.booking_email       || "",
+    management_contact:  profile?.management_contact  || "",
+    press_contact:       profile?.press_contact       || "",
+    phone:               profile?.phone               || "",
   });
   const [status, setStatus] = useState("idle");
   const [msg,    setMsg]    = useState("");
@@ -1270,8 +1332,7 @@ function EditProfile({ user, profile, onSaved }) {
   const save = async () => {
     setStatus("loading");
     try {
-      const { error } = await supabase.from("profiles").update(form).eq("id", user.id);
-      if (error) throw new Error(error.message);
+      await DB.updateProfile(user.id, form);
       setStatus("success");
       setMsg("Profile updated successfully!");
       onSaved({ ...profile, ...form });
@@ -1281,6 +1342,10 @@ function EditProfile({ user, profile, onSaved }) {
       setMsg(e.message);
     }
   };
+
+  const profileUrl = profile?.band_slug
+    ? `https://musicscenemagazine.co.uk/artist/${profile.band_slug}`
+    : null;
 
   return (
     <div style={{ maxWidth:700 }}>
@@ -1309,36 +1374,42 @@ function EditProfile({ user, profile, onSaved }) {
         )}
       </div>
 
+      {/* Profile URL */}
+      {profileUrl && (
+        <div style={{ marginBottom:20, padding:14, background:"rgba(232,32,58,0.06)", border:`1px solid ${C.red}`, borderRadius:8 }}>
+          <div style={{ fontSize:10, color:C.muted, letterSpacing:2, marginBottom:6, fontFamily:F.display }}>YOUR PUBLIC PROFILE URL</div>
+          <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+            <code style={{ fontSize:13, color:C.red, flex:1 }}>{profileUrl}</code>
+            <Btn variant="ghost" style={{ fontSize:11, padding:"6px 12px" }} onClick={()=>navigator.clipboard.writeText(profileUrl)}>COPY</Btn>
+            <a href={`/artist/${profile.band_slug}`} target="_blank" rel="noreferrer"
+              style={{ fontSize:11, fontFamily:F.display, letterSpacing:2, background:C.red, color:"#fff", textDecoration:"none", borderRadius:4, padding:"6px 12px" }}
+            >VIEW →</a>
+          </div>
+        </div>
+      )}
+
       <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderTop:`3px solid ${C.red}`, borderRadius:8, padding:26 }}>
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
+
+          {/* BAND INFO */}
+          <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2 }}>BAND INFORMATION</div>
           <div style={{ gridColumn:"1/-1" }}>
             <Input label="BAND / ARTIST NAME" value={form.band_name} onChange={set("band_name")} required />
           </div>
           <Input label="BASE CITY" value={form.city} onChange={set("city")} />
-          <Input label="CONTACT NUMBER" type="tel" value={form.phone} onChange={set("phone")} />
-          <div style={{ gridColumn:"1/-1" }}>
-            <Select label="MAIN GENRE" value={form.genre} onChange={set("genre")} options={GENRES} />
-          </div>
-          <div style={{ gridColumn:"1/-1" }}>
-            <Input label="WEBSITE URL" type="url" value={form.website} onChange={set("website")} placeholder="https://" />
-          </div>
+          <Input label="FORMATION YEAR" value={form.formation_year} onChange={set("formation_year")} placeholder="e.g. 2018" />
+          <Select label="PRIMARY GENRE" value={form.primary_genre} onChange={set("primary_genre")} options={["", ...GENRES]} />
+          <Select label="SECONDARY GENRE (OPTIONAL)" value={form.secondary_genre} onChange={set("secondary_genre")} options={["", ...GENRES]} />
           <div style={{ gridColumn:"1/-1" }}>
             <label style={{ display:"block", fontSize:13, color:C.white, letterSpacing:2, marginBottom:6, fontFamily:F.display }}>BIO</label>
-            <textarea value={form.bio} onChange={set("bio")} rows={4}
-              placeholder="Tell us about your band..."
+            <textarea value={form.bio} onChange={set("bio")} rows={5}
+              placeholder="Tell fans about your band — history, sound, influences..."
               style={{ ...inputCss, resize:"vertical" }}
             />
           </div>
 
-          <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:4 }}>SOCIAL MEDIA</div>
-          <Input label="INSTAGRAM" value={form.instagram} onChange={set("instagram")} placeholder="@handle" />
-          <Input label="FACEBOOK"  value={form.facebook}  onChange={set("facebook")}  placeholder="@handle" />
-          <Input label="X / TWITTER" value={form.twitter} onChange={set("twitter")}   placeholder="@handle" />
-          <div style={{ gridColumn:"1/-1" }}>
-            <Input label="SPOTIFY ARTIST URL" type="url" value={form.spotify} onChange={set("spotify")} placeholder="https://open.spotify.com/artist/..." />
-          </div>
-
-          <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:4 }}>PROFILE PHOTO</div>
+          {/* PROFILE PHOTO */}
+          <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8 }}>PROFILE PHOTO</div>
           <div style={{ gridColumn:"1/-1" }}>
             <Input label="PHOTO URL (link to an image)" type="url" value={form.photo_url} onChange={set("photo_url")} placeholder="https://..." />
             {form.photo_url && (
@@ -1347,14 +1418,295 @@ function EditProfile({ user, profile, onSaved }) {
               />
             )}
           </div>
+
+          {/* SOCIAL MEDIA */}
+          <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8 }}>SOCIAL MEDIA</div>
+          <Input label="INSTAGRAM URL" type="url" value={form.instagram} onChange={set("instagram")} placeholder="https://instagram.com/..." />
+          <Input label="FACEBOOK URL"  type="url" value={form.facebook}  onChange={set("facebook")}  placeholder="https://facebook.com/..." />
+          <Input label="TIKTOK URL"    type="url" value={form.tiktok_url} onChange={set("tiktok_url")} placeholder="https://tiktok.com/@..." />
+          <Input label="X / TWITTER URL" type="url" value={form.twitter} onChange={set("twitter")} placeholder="https://x.com/..." />
+          <div style={{ gridColumn:"1/-1" }}>
+            <Input label="YOUTUBE CHANNEL URL" type="url" value={form.youtube_channel_url} onChange={set("youtube_channel_url")} placeholder="https://youtube.com/@..." />
+          </div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <Input label="FEATURED VIDEO URL (optional — a specific video to highlight)" type="url" value={form.youtube_featured_url} onChange={set("youtube_featured_url")} placeholder="https://youtube.com/watch?v=..." />
+          </div>
+
+          {/* MUSIC PLATFORMS */}
+          <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8 }}>MUSIC PLATFORMS</div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <Input label="SPOTIFY ARTIST URL" type="url" value={form.spotify} onChange={set("spotify")} placeholder="https://open.spotify.com/artist/..." />
+          </div>
+          <Input label="APPLE MUSIC URL"  type="url" value={form.apple_music_url}  onChange={set("apple_music_url")}  placeholder="https://music.apple.com/..." />
+          <Input label="BANDCAMP URL"      type="url" value={form.bandcamp_url}     onChange={set("bandcamp_url")}     placeholder="https://yourband.bandcamp.com" />
+          <div style={{ gridColumn:"1/-1" }}>
+            <Input label="SOUNDCLOUD URL"  type="url" value={form.soundcloud_url}   onChange={set("soundcloud_url")}   placeholder="https://soundcloud.com/..." />
+          </div>
+
+          {/* WEBSITE & CONTACT */}
+          <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8 }}>WEBSITE & CONTACT</div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <Input label="OFFICIAL WEBSITE" type="url" value={form.website} onChange={set("website")} placeholder="https://..." />
+          </div>
+          <Input label="BOOKING EMAIL"       type="email" value={form.booking_email}       onChange={set("booking_email")}       placeholder="booking@..." />
+          <Input label="CONTACT NUMBER"      type="tel"   value={form.phone}               onChange={set("phone")}               placeholder="+44..." />
+          <Input label="MANAGEMENT CONTACT"  value={form.management_contact} onChange={set("management_contact")} placeholder="Name / email / phone" />
+          <Input label="PRESS CONTACT"       value={form.press_contact}      onChange={set("press_contact")}      placeholder="Name / email / phone" />
+
         </div>
 
-        <Btn onClick={save} disabled={status==="loading"} style={{ width:"100%", marginTop:20, padding:"13px" }}>
+        <Btn onClick={save} disabled={status==="loading"} style={{ width:"100%", marginTop:24, padding:"14px" }}>
           {status==="loading" ? "SAVING..." : "SAVE PROFILE"}
         </Btn>
 
         {status==="success" && <div style={{ marginTop:12, color:C.green, fontSize:13 }}>✓ {msg}</div>}
         {status==="error"   && <div style={{ marginTop:12, color:C.red,   fontSize:13 }}>{msg}</div>}
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  PUBLIC BAND PROFILE PAGE
+// ════════════════════════════════════════════════════════════════════
+function BandProfilePage() {
+  const { slug } = useParams();
+  const navigate = useNavigate();
+  const [band, setBand]   = useState(null);
+  const [gigs, setGigs]   = useState([]);
+  const [loading, setLoading] = useState(true);
+  const today = new Date().toISOString().slice(0,10);
+
+  useEffect(() => {
+    async function load() {
+      setLoading(true);
+      const b = await DB.getBandBySlug(slug);
+      if (!b) { setLoading(false); return; }
+      setBand(b);
+      const g = await DB.getGigsByBand(b.band_name);
+      setGigs(g);
+      setLoading(false);
+    }
+    load();
+  }, [slug]);
+
+  if (loading) return (
+    <div style={{ minHeight:"100vh", background:C.bg, display:"flex", alignItems:"center", justifyContent:"center" }}>
+      <style>{GLOBAL_CSS}</style>
+      <div style={{ color:C.muted, fontSize:16, fontFamily:F.display, letterSpacing:2 }}>LOADING...</div>
+    </div>
+  );
+
+  if (!band) return (
+    <div style={{ minHeight:"100vh", background:C.bg, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:20 }}>
+      <style>{GLOBAL_CSS}</style>
+      <div style={{ color:C.white, fontFamily:F.display, fontSize:32, letterSpacing:2 }}>BAND NOT FOUND</div>
+      <span onClick={()=>navigate("/")} style={{ color:C.red, cursor:"pointer", fontSize:14 }}>← Back to Calendar</span>
+    </div>
+  );
+
+  const upcomingGigs = gigs.filter(g => g.date >= today);
+  const pastGigs     = gigs.filter(g => g.date <  today).reverse();
+  const color        = GENRE_COLORS[band.primary_genre || band.genre] || C.red;
+
+  const socialLinks = [
+    { url: band.instagram,        icon: "📷", label: "Instagram" },
+    { url: band.facebook,         icon: "👍", label: "Facebook"  },
+    { url: band.tiktok_url,       icon: "🎵", label: "TikTok"    },
+    { url: band.youtube_channel_url, icon: "▶️", label: "YouTube" },
+    { url: band.twitter,          icon: "🐦", label: "X/Twitter" },
+  ].filter(s => s.url);
+
+  const musicLinks = [
+    { url: band.spotify,          label: "SPOTIFY",     bg:"#1DB954", color:"#fff" },
+    { url: band.apple_music_url,  label: "APPLE MUSIC", bg:"#fc3c44", color:"#fff" },
+    { url: band.bandcamp_url,     label: "BANDCAMP",    bg:"#1da0c3", color:"#fff" },
+    { url: band.soundcloud_url,   label: "SOUNDCLOUD",  bg:"#ff5500", color:"#fff" },
+  ].filter(m => m.url);
+
+  return (
+    <div style={{ minHeight:"100vh", background:C.bg, color:C.white, fontFamily:F.body }}>
+      <style>{GLOBAL_CSS}</style>
+
+      {/* Header */}
+      <header style={{ background:"#0a0a0a", borderBottom:`1px solid ${C.border}`, padding:"0 28px", display:"flex", alignItems:"center", justifyContent:"space-between", height:70 }}>
+        <span onClick={()=>navigate("/")} style={{ cursor:"pointer", display:"flex", alignItems:"center", gap:12 }}>
+          <MSMLogo height={50} showWordmark={true} />
+        </span>
+        <span onClick={()=>navigate("/")} style={{ fontSize:12, color:C.muted, cursor:"pointer", letterSpacing:1 }}>
+          ← BACK TO CALENDAR
+        </span>
+      </header>
+
+      {/* Hero */}
+      <div style={{
+        background:`linear-gradient(180deg, ${color}22 0%, #0d0d0d 100%)`,
+        borderBottom:`1px solid ${color}44`,
+        padding:"48px 32px 40px",
+      }}>
+        <div style={{ maxWidth:900, margin:"0 auto", display:"flex", gap:32, alignItems:"flex-start", flexWrap:"wrap" }}>
+          {/* Photo */}
+          {band.photo_url ? (
+            <img src={band.photo_url} alt={band.band_name}
+              style={{ width:140, height:140, borderRadius:8, objectFit:"cover", border:`3px solid ${color}`, flexShrink:0 }}
+            />
+          ) : (
+            <div style={{ width:140, height:140, borderRadius:8, background:`${color}22`, border:`3px solid ${color}44`, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+              <span style={{ fontSize:48 }}>🎸</span>
+            </div>
+          )}
+
+          {/* Info */}
+          <div style={{ flex:1, minWidth:200 }}>
+            {/* Status badge */}
+            {band.band_status !== "active" && (
+              <div style={{ display:"inline-block", fontSize:10, color:C.amber, border:`1px solid ${C.amber}`, borderRadius:3, padding:"2px 8px", letterSpacing:2, marginBottom:8, fontFamily:F.display }}>
+                {band.band_status.toUpperCase().replace("-"," ")}
+              </div>
+            )}
+            <div style={{ fontFamily:F.display, fontSize:42, letterSpacing:2, color:C.white, lineHeight:1, marginBottom:8 }}>
+              {band.band_name}
+            </div>
+            <div style={{ display:"flex", gap:12, flexWrap:"wrap", marginBottom:16, alignItems:"center" }}>
+              {band.primary_genre && <Badge label={band.primary_genre} color={color} />}
+              {band.secondary_genre && <Badge label={band.secondary_genre} color={C.muted} />}
+              {band.city && <span style={{ fontSize:13, color:C.muted }}>📍 {band.city}</span>}
+              {band.formation_year && <span style={{ fontSize:13, color:C.dim }}>Est. {band.formation_year}</span>}
+            </div>
+
+            {/* Social icons */}
+            {socialLinks.length > 0 && (
+              <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom:16 }}>
+                {socialLinks.map(s => (
+                  <a key={s.label} href={s.url} target="_blank" rel="noreferrer"
+                    style={{ fontSize:11, color:C.muted, textDecoration:"none", border:`1px solid ${C.border}`, borderRadius:5, padding:"5px 10px", display:"flex", alignItems:"center", gap:5 }}
+                    onMouseEnter={e=>e.currentTarget.style.borderColor=color}
+                    onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}
+                  >
+                    {s.icon} {s.label}
+                  </a>
+                ))}
+              </div>
+            )}
+
+            {/* Music + Website buttons */}
+            <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+              {musicLinks.map(m => (
+                <a key={m.label} href={m.url} target="_blank" rel="noreferrer"
+                  style={{ fontSize:12, fontFamily:F.display, letterSpacing:2, background:m.bg, color:m.color, textDecoration:"none", borderRadius:5, padding:"8px 16px" }}
+                >
+                  {m.label}
+                </a>
+              ))}
+              {band.website && (
+                <a href={band.website} target="_blank" rel="noreferrer"
+                  style={{ fontSize:12, fontFamily:F.display, letterSpacing:2, background:"rgba(255,255,255,0.08)", color:C.white, textDecoration:"none", borderRadius:5, padding:"8px 16px", border:`1px solid ${C.border}` }}
+                >
+                  WEBSITE
+                </a>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div style={{ maxWidth:900, margin:"0 auto", padding:"40px 32px" }}>
+
+        {/* Bio */}
+        {band.bio && (
+          <div style={{ marginBottom:48 }}>
+            <SectionLabel>ABOUT</SectionLabel>
+            <div style={{ fontSize:16, color:"#ccc", lineHeight:1.8, maxWidth:700 }}>{band.bio}</div>
+          </div>
+        )}
+
+        {/* Contact */}
+        {(band.booking_email || band.management_contact || band.press_contact) && (
+          <div style={{ marginBottom:48 }}>
+            <SectionLabel>CONTACT</SectionLabel>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(200px,1fr))", gap:16 }}>
+              {band.booking_email && (
+                <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, padding:16 }}>
+                  <div style={{ fontSize:10, color:C.dim, letterSpacing:2, marginBottom:4 }}>BOOKING</div>
+                  <a href={`mailto:${band.booking_email}`} style={{ color:C.red, textDecoration:"none", fontSize:14 }}>{band.booking_email}</a>
+                </div>
+              )}
+              {band.management_contact && (
+                <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, padding:16 }}>
+                  <div style={{ fontSize:10, color:C.dim, letterSpacing:2, marginBottom:4 }}>MANAGEMENT</div>
+                  <div style={{ color:C.white, fontSize:14 }}>{band.management_contact}</div>
+                </div>
+              )}
+              {band.press_contact && (
+                <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, padding:16 }}>
+                  <div style={{ fontSize:10, color:C.dim, letterSpacing:2, marginBottom:4 }}>PRESS</div>
+                  <div style={{ color:C.white, fontSize:14 }}>{band.press_contact}</div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Upcoming Gigs */}
+        <div style={{ marginBottom:48 }}>
+          <SectionLabel>UPCOMING GIGS</SectionLabel>
+          {upcomingGigs.length === 0 ? (
+            <div style={{ color:C.dim, fontSize:14 }}>No upcoming gigs listed.</div>
+          ) : (
+            <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+              {upcomingGigs.map(g => (
+                <div key={g.id} style={{
+                  display:"flex", alignItems:"center", gap:16, padding:"14px 18px",
+                  background:C.surface, border:`1px solid ${C.border}`,
+                  borderLeft:`3px solid ${color}`, borderRadius:8,
+                  flexWrap:"wrap",
+                }}>
+                  <div style={{ fontFamily:F.display, fontSize:16, color:C.red, letterSpacing:1, minWidth:120 }}>{fmtDate(g.date)}</div>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:15, color:C.white }}>{g.venue}</div>
+                    <div style={{ fontSize:12, color:C.muted }}>{g.city}</div>
+                  </div>
+                  <div style={{ display:"flex", gap:8 }}>
+                    {g.tickets && (
+                      <a href={g.tickets} target="_blank" rel="noreferrer"
+                        style={{ fontSize:11, fontFamily:F.display, letterSpacing:2, background:C.red, color:"#fff", textDecoration:"none", borderRadius:4, padding:"6px 12px" }}
+                      >TICKETS</a>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Past Gigs */}
+        {pastGigs.length > 0 && (
+          <div style={{ marginBottom:48 }}>
+            <SectionLabel>PAST GIGS</SectionLabel>
+            <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+              {pastGigs.slice(0,10).map(g => (
+                <div key={g.id} style={{
+                  display:"flex", alignItems:"center", gap:16, padding:"10px 18px",
+                  background:"rgba(255,255,255,0.02)", border:`1px solid ${C.border}`,
+                  borderRadius:6, opacity:0.7, flexWrap:"wrap",
+                }}>
+                  <div style={{ fontFamily:F.display, fontSize:14, color:C.dim, minWidth:120 }}>{fmtDate(g.date)}</div>
+                  <div style={{ flex:1 }}>
+                    <span style={{ fontSize:14, color:"#aaa" }}>{g.venue}</span>
+                    <span style={{ fontSize:12, color:C.dim, marginLeft:8 }}>{g.city}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Follow placeholder — reserved for future */}
+        <div style={{ padding:24, background:"rgba(255,255,255,0.02)", border:`1px dashed ${C.border}`, borderRadius:8, textAlign:"center" }}>
+          <div style={{ fontSize:13, color:C.dim, letterSpacing:1 }}>🔔 FOLLOW THIS BAND — Coming Soon</div>
+          <div style={{ fontSize:11, color:C.dim, marginTop:4 }}>Get notified when {band.band_name} adds new gigs</div>
+        </div>
       </div>
     </div>
   );
@@ -1407,6 +1759,17 @@ const GLOBAL_CSS = `
 //  ROOT APP
 // ════════════════════════════════════════════════════════════════════
 export default function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/artist/:slug" element={<BandProfilePage />} />
+        <Route path="/*" element={<MainApp />} />
+      </Routes>
+    </BrowserRouter>
+  );
+}
+
+function MainApp() {
   const [auth,    setAuth]    = useState(null); // { user, profile, token }
   const [gigs,    setGigs]    = useState([]);
   const [allGigs, setAllGigs] = useState([]);   // admin only
