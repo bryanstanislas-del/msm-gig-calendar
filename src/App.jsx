@@ -162,10 +162,9 @@ const DB = {
     const { data, error } = await supabase
       .from("profiles")
       .select("*")
-      .eq("band_slug", slug)
-      .single();
-    if (error) return null;
-    return data;
+      .eq("band_slug", slug);
+    if (error || !data || data.length === 0) return null;
+    return data[0];
   },
 
   async updateProfile(userId, updates) {
@@ -174,10 +173,9 @@ const DB = {
       .from("profiles")
       .update(updates)
       .eq("id", userId)
-      .select()
-      .single();
+      .select();
     if (error) throw new Error(error.message);
-    return data;
+    return data[0];
   },
 
   async getGigsByBand(bandName) {
