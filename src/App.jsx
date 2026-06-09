@@ -612,7 +612,10 @@ function SubmitGigForm({ user, profile, onSubmitted }) {
         )}
         {score < 60 && (
           <div style={{ marginTop:10, padding:"8px 12px", background:"rgba(244,162,97,0.1)", border:`1px solid ${C.amber}`, borderRadius:5, fontSize:12, color:C.amber }}>
-            ⚠️ Your profile is incomplete — fans won't be able to find you online. Please update your profile with social links before submitting.
+            ⚠️ Your profile is incomplete — fans won't be able to find you online.{" "}
+            <span style={{ color:C.white, textDecoration:"underline", cursor:"pointer" }} onClick={()=>{ const el = document.querySelector('[data-tab="profile"]'); if(el) el.click(); }}>
+              Update your profile →
+            </span>
           </div>
         )}
       </div>
@@ -1241,6 +1244,123 @@ function BandDirectory({ bands }) {
 }
 
 // ════════════════════════════════════════════════════════════════════
+//  EDIT PROFILE
+// ════════════════════════════════════════════════════════════════════
+function EditProfile({ user, profile, onSaved }) {
+  const [form, setForm] = useState({
+    band_name:  profile?.band_name  || "",
+    city:       profile?.city       || "",
+    genre:      profile?.genre      || "Indie Rock",
+    bio:        profile?.bio        || "",
+    website:    profile?.website    || "",
+    spotify:    profile?.spotify    || "",
+    instagram:  profile?.instagram  || "",
+    facebook:   profile?.facebook   || "",
+    twitter:    profile?.twitter    || "",
+    phone:      profile?.phone      || "",
+    photo_url:  profile?.photo_url  || "",
+  });
+  const [status, setStatus] = useState("idle");
+  const [msg,    setMsg]    = useState("");
+
+  const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }));
+
+  const { score, missing } = getProfileCompleteness(form);
+
+  const save = async () => {
+    setStatus("loading");
+    try {
+      const { error } = await supabase.from("profiles").update(form).eq("id", user.id);
+      if (error) throw new Error(error.message);
+      setStatus("success");
+      setMsg("Profile updated successfully!");
+      onSaved({ ...profile, ...form });
+      setTimeout(() => setStatus("idle"), 3000);
+    } catch(e) {
+      setStatus("error");
+      setMsg(e.message);
+    }
+  };
+
+  return (
+    <div style={{ maxWidth:700 }}>
+      <SectionLabel>MY PROFILE</SectionLabel>
+
+      {/* Completeness bar */}
+      <div style={{ marginBottom:24, padding:16, background:C.surfaceHigh, border:`1px solid ${C.border}`, borderRadius:8 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+          <div style={{ fontSize:13, color:C.white, fontFamily:F.display, letterSpacing:1 }}>PROFILE COMPLETENESS</div>
+          <div style={{ fontSize:16, fontFamily:F.display, color: score===100 ? C.green : score>=60 ? C.amber : C.red }}>{score}%</div>
+        </div>
+        <div style={{ background:"rgba(255,255,255,0.08)", borderRadius:4, height:10, overflow:"hidden" }}>
+          <div style={{
+            width:`${score}%`, height:"100%", borderRadius:4,
+            background: score===100 ? C.green : score>=60 ? C.amber : C.red,
+            transition:"width 0.3s ease",
+          }} />
+        </div>
+        {missing.length > 0 && (
+          <div style={{ marginTop:8, fontSize:12, color:C.muted }}>
+            Missing: <span style={{ color:C.amber }}>{missing.join(", ")}</span>
+          </div>
+        )}
+        {score === 100 && (
+          <div style={{ marginTop:8, fontSize:12, color:C.green }}>✓ Profile complete! Fans can find everything they need about you.</div>
+        )}
+      </div>
+
+      <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderTop:`3px solid ${C.red}`, borderRadius:8, padding:26 }}>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
+          <div style={{ gridColumn:"1/-1" }}>
+            <Input label="BAND / ARTIST NAME" value={form.band_name} onChange={set("band_name")} required />
+          </div>
+          <Input label="BASE CITY" value={form.city} onChange={set("city")} />
+          <Input label="CONTACT NUMBER" type="tel" value={form.phone} onChange={set("phone")} />
+          <div style={{ gridColumn:"1/-1" }}>
+            <Select label="MAIN GENRE" value={form.genre} onChange={set("genre")} options={GENRES} />
+          </div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <Input label="WEBSITE URL" type="url" value={form.website} onChange={set("website")} placeholder="https://" />
+          </div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <label style={{ display:"block", fontSize:13, color:C.white, letterSpacing:2, marginBottom:6, fontFamily:F.display }}>BIO</label>
+            <textarea value={form.bio} onChange={set("bio")} rows={4}
+              placeholder="Tell us about your band..."
+              style={{ ...inputCss, resize:"vertical" }}
+            />
+          </div>
+
+          <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:4 }}>SOCIAL MEDIA</div>
+          <Input label="INSTAGRAM" value={form.instagram} onChange={set("instagram")} placeholder="@handle" />
+          <Input label="FACEBOOK"  value={form.facebook}  onChange={set("facebook")}  placeholder="@handle" />
+          <Input label="X / TWITTER" value={form.twitter} onChange={set("twitter")}   placeholder="@handle" />
+          <div style={{ gridColumn:"1/-1" }}>
+            <Input label="SPOTIFY ARTIST URL" type="url" value={form.spotify} onChange={set("spotify")} placeholder="https://open.spotify.com/artist/..." />
+          </div>
+
+          <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:4 }}>PROFILE PHOTO</div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <Input label="PHOTO URL (link to an image)" type="url" value={form.photo_url} onChange={set("photo_url")} placeholder="https://..." />
+            {form.photo_url && (
+              <img src={form.photo_url} alt="Profile preview"
+                style={{ marginTop:10, width:80, height:80, borderRadius:"50%", objectFit:"cover", border:`2px solid ${C.red}` }}
+              />
+            )}
+          </div>
+        </div>
+
+        <Btn onClick={save} disabled={status==="loading"} style={{ width:"100%", marginTop:20, padding:"13px" }}>
+          {status==="loading" ? "SAVING..." : "SAVE PROFILE"}
+        </Btn>
+
+        {status==="success" && <div style={{ marginTop:12, color:C.green, fontSize:13 }}>✓ {msg}</div>}
+        {status==="error"   && <div style={{ marginTop:12, color:C.red,   fontSize:13 }}>{msg}</div>}
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════
 //  GLOBAL CSS
 // ════════════════════════════════════════════════════════════════════
 const GLOBAL_CSS = `
@@ -1355,6 +1475,7 @@ export default function App() {
     { id:"list",     label:"LIST VIEW" },
     { id:"stats",    label:"STATS" },
     { id:"submit",   label:"SUBMIT GIG" },
+    ...(auth ? [{ id:"profile", label:"MY PROFILE" }] : []),
     ...(isAdmin ? [
       { id:"admin", label:`ADMIN (${allGigs.filter(g=>g.status==="pending").length})` },
       { id:"bands", label:`BANDS (${bands.length})` },
@@ -1404,7 +1525,7 @@ export default function App() {
       {/* ── Nav tabs ── */}
       <div className="msm-nav" style={{ background:"#0a0a0a", borderBottom:`1px solid ${C.border}`, padding:"0 28px", display:"flex", gap:4 }}>
         {tabDef.map(({ id, label }) => (
-          <button key={id} onClick={()=>setTab(id)} style={navTabStyle(id)}>{label}</button>
+          <button key={id} data-tab={id} onClick={()=>setTab(id)} style={navTabStyle(id)}>{label}</button>
         ))}
       </div>
 
@@ -1424,6 +1545,13 @@ export default function App() {
         {/* ADMIN */}
         {tab==="admin" && isAdmin && (
           <AdminPanel allGigs={allGigs} onRefresh={refreshAdmin} />
+        )}
+
+        {/* MY PROFILE */}
+        {tab==="profile" && auth && (
+          <EditProfile user={auth.user} profile={auth.profile} onSaved={(updatedProfile)=>{
+            setAuth(a => ({ ...a, profile: updatedProfile }));
+          }} />
         )}
 
         {/* SUBMIT */}
