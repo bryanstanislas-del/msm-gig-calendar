@@ -2266,14 +2266,21 @@ function BulkImport({ bands, onImported }) {
     setImporting(true);
     let successCount = 0, errorCount = 0;
 
+    const userId = (await supabase.auth.getUser()).data.user?.id;
+    const errors_list = [];
+
     for (const row of toImport) {
       try {
         // Generate slug
-        const { data: slugData } = await supabase.rpc("generate_gig_slug", {
-          band: selectedBandObj?.band_name || "unknown",
-          venue: row.venue,
-          gig_date: row.date,
-        });
+        let slugData = null;
+        try {
+          const { data: sd } = await supabase.rpc("generate_gig_slug", {
+            band:     selectedBandObj?.band_name || "unknown",
+            venue:    row.venue,
+            gig_date: row.date,
+          });
+          slugData = sd;
+        } catch(slugErr) { console.warn("Slug generation failed:", slugErr); }
 
         const { error } = await supabase.from("gigs").insert({
           band_name:    selectedBandObj?.band_name || "",
@@ -2283,21 +2290,30 @@ function BulkImport({ bands, onImported }) {
           time:         row.time || "20:00",
           genre:        row.genre || "Other",
           status:       "approved",
-          submitted_by: (await supabase.auth.getUser()).data.user?.id,
+          submitted_by: userId,
           slug:         slugData || null,
           notes:        "",
           tickets:      "",
         });
 
-        if (error) errorCount++;
-        else successCount++;
+        if (error) {
+          console.error("Import error:", error.message, row);
+          errors_list.push(error.message);
+          errorCount++;
+        } else successCount++;
       } catch(e) {
+        console.error("Import exception:", e.message, row);
+        errors_list.push(e.message);
         errorCount++;
       }
     }
 
     setImporting(false);
-    setResult({ success: successCount, errors: errorCount });
+    setResult({
+      success: successCount,
+      errors:  errorCount,
+      firstError: errors_list[0] || null,
+    });
     if (successCount > 0) {
       if (onImported) onImported();
       setRows(null);
@@ -2474,6 +2490,7 @@ function BulkImport({ bands, onImported }) {
         <div style={{ marginTop:16, padding:16, background: result.errors===0 ? "rgba(67,170,139,0.1)" : "rgba(244,162,97,0.1)", border:`1px solid ${result.errors===0 ? C.green : C.amber}`, borderRadius:8 }}>
           {result.success > 0 && <div style={{ color:C.green, fontSize:14 }}>✓ {result.success} gig{result.success!==1?"s":""} imported successfully!</div>}
           {result.errors  > 0 && <div style={{ color:C.amber, fontSize:14, marginTop:4 }}>⚠ {result.errors} gig{result.errors!==1?"s":""} failed to import.</div>}
+          {result.firstError && <div style={{ color:C.red, fontSize:12, marginTop:8, fontFamily:"monospace" }}>{result.firstError}</div>}
         </div>
       )}
     </div>
