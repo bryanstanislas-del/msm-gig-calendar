@@ -1253,8 +1253,10 @@ function AdminBands({ bands, onRefresh }) {
 
       showMsg(`✓ Band account created! Slug: ${slugData}`);
       setCreateForm(emptyCreate);
-      setView("list");
-      if (onRefresh) onRefresh();
+      if (onRefresh) await onRefresh();
+      // Go straight to editing the new band profile
+      const { data: newBand } = await supabase.from("profiles").select("*").eq("id", user.id).single();
+      if (newBand) { openEdit(newBand); } else { setView("list"); }
     } catch(e) {
       showMsg(e.message, "error");
     }
@@ -1333,9 +1335,25 @@ function AdminBands({ bands, onRefresh }) {
   // ══ LIST VIEW ══
   if (view === "list") return (
     <div>
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:20, flexWrap:"wrap", gap:12 }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:16, flexWrap:"wrap", gap:12 }}>
         <SectionLabel>BAND MANAGEMENT</SectionLabel>
         <Btn onClick={()=>setView("create")} style={{ padding:"10px 20px" }}>+ CREATE BAND</Btn>
+      </div>
+
+      {/* Stats strip */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(120px,1fr))", gap:12, marginBottom:20 }}>
+        {[
+          { label:"TOTAL BANDS",  val: bands.length },
+          { label:"ACTIVE",       val: bands.filter(b=>!b.disabled).length },
+          { label:"DISABLED",     val: bands.filter(b=>b.disabled).length },
+          { label:"UNCLAIMED",    val: bands.filter(b=>b.admin_created && !b.claimed).length },
+          { label:"COMPLETE",     val: bands.filter(b=>getProfileCompleteness(b).score===100).length },
+        ].map(({ label, val }) => (
+          <div key={label} style={{ background:C.surfaceHigh, border:`1px solid ${C.border}`, borderRadius:6, padding:"10px 14px" }}>
+            <div style={{ fontSize:9, color:C.muted, letterSpacing:2, fontFamily:F.display }}>{label}</div>
+            <div style={{ fontSize:24, fontFamily:F.display, color:C.red, lineHeight:1.2 }}>{val}</div>
+          </div>
+        ))}
       </div>
 
       {msg.text && (
@@ -1378,9 +1396,10 @@ function AdminBands({ bands, onRefresh }) {
                 <div style={{ flex:1, minWidth:160 }}>
                   <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
                     <span style={{ fontFamily:F.display, fontSize:16, letterSpacing:1.5, color: b.disabled ? C.muted : C.white }}>{b.band_name}</span>
-                    {b.admin_created && <Badge label="ADMIN CREATED" color={C.amber} />}
-                    {b.disabled      && <Badge label="DISABLED"      color={C.dim}   />}
-                    {b.band_status !== "active" && b.band_status && <Badge label={b.band_status.toUpperCase()} color={C.muted} />}
+                    {b.admin_created && !b.claimed && <Badge label="UNCLAIMED" color={C.amber} />}
+                    {b.claimed      && <Badge label="CLAIMED"   color={C.green} />}
+                    {b.disabled     && <Badge label="DISABLED"  color={C.dim}   />}
+                    {b.band_status !== "active" && b.band_status && <Badge label={b.band_status.toUpperCase().replace("-"," ")} color={C.muted} />}
                   </div>
                   <div style={{ fontSize:12, color:C.muted, marginTop:2 }}>
                     {[b.city, b.primary_genre||b.genre].filter(Boolean).join(" · ")}
@@ -1401,14 +1420,17 @@ function AdminBands({ bands, onRefresh }) {
                   {b.band_slug && (
                     <a href={`/artist/${b.band_slug}`} target="_blank" rel="noreferrer"
                       style={{ ...btnCss("ghost"), fontSize:11, padding:"6px 12px", textDecoration:"none", display:"inline-block" }}
-                    >👁 VIEW</a>
+                    >👁 PROFILE</a>
                   )}
+                  <Btn variant="ghost" onClick={()=>{ setView("list"); window.scrollTo(0,0); }} style={{ fontSize:11, padding:"6px 12px" }}
+                    onClick={()=>{ /* switch to bulk import with this band pre-selected */ }}
+                  >🎸 GIGS</Btn>
                   <Btn
                     variant={b.disabled ? "success" : "ghost"}
                     onClick={()=>toggleDisabled(b)}
                     style={{ fontSize:11, padding:"6px 12px" }}
                   >{b.disabled ? "ENABLE" : "DISABLE"}</Btn>
-                  <Btn variant="ghost" onClick={()=>resetPassword(b)} style={{ fontSize:11, padding:"6px 12px" }}>🔑 PASSWORD</Btn>
+                  <Btn variant="ghost" onClick={()=>resetPassword(b)} style={{ fontSize:11, padding:"6px 12px" }}>🔑</Btn>
                 </div>
               </div>
             </div>
@@ -1649,7 +1671,7 @@ function EditProfile({ user, profile, onSaved }) {
   const save = async () => {
     setStatus("loading");
     try {
-      const updated = await DB.updateProfile(user.id, form);
+      const updated = await DB.updateProfile(user.id, { ...form, claimed: true });
       setStatus("success");
       setMsg("Profile updated successfully!");
       if (updated) {
