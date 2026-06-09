@@ -551,7 +551,7 @@ function AuthPanel({ onAuth, onBack }) {
 // ════════════════════════════════════════════════════════════════════
 //  SUBMIT GIG FORM
 // ════════════════════════════════════════════════════════════════════
-function SubmitGigForm({ user, profile, onSubmitted }) {
+function SubmitGigForm({ user, profile, onSubmitted, onEditProfile }) {
   const empty = { band_name: profile?.band_name||"", venue:"", city:"", date:"", end_date:"", time:"20:00", genre:"Indie Rock", tickets:"", notes:"", is_recurring:false, recurrence:"none", spotify: profile?.spotify||"" };
   const [form, setForm]     = useState(empty);
   const [errors, setErrors] = useState({});
@@ -613,7 +613,7 @@ function SubmitGigForm({ user, profile, onSubmitted }) {
         {score < 60 && (
           <div style={{ marginTop:10, padding:"8px 12px", background:"rgba(244,162,97,0.1)", border:`1px solid ${C.amber}`, borderRadius:5, fontSize:12, color:C.amber }}>
             ⚠️ Your profile is incomplete — fans won't be able to find you online.{" "}
-            <span style={{ color:C.white, textDecoration:"underline", cursor:"pointer" }} onClick={()=>{ const el = document.querySelector('[data-tab="profile"]'); if(el) el.click(); }}>
+            <span style={{ color:C.white, textDecoration:"underline", cursor:"pointer" }} onClick={onEditProfile}>
               Update your profile →
             </span>
           </div>
@@ -1523,7 +1523,7 @@ export default function App() {
       </div>
 
       {/* ── Nav tabs ── */}
-      <div className="msm-nav" style={{ background:"#0a0a0a", borderBottom:`1px solid ${C.border}`, padding:"0 28px", display:"flex", gap:4 }}>
+      <div className="msm-nav" style={{ background:"#0a0a0a", borderBottom:`1px solid ${C.border}`, padding:"0 28px", display:"flex", gap:4, overflowX:"auto", whiteSpace:"nowrap" }}>
         {tabDef.map(({ id, label }) => (
           <button key={id} data-tab={id} onClick={()=>setTab(id)} style={navTabStyle(id)}>{label}</button>
         ))}
@@ -1557,7 +1557,7 @@ export default function App() {
         {/* SUBMIT */}
         {tab==="submit" && auth && (
           <div style={{ maxWidth:700 }}>
-            <SubmitGigForm user={auth.user} profile={auth.profile} onSubmitted={()=>{}} />
+            <SubmitGigForm user={auth.user} profile={auth.profile} onSubmitted={()=>{}} onEditProfile={()=>setTab("profile")} />
           </div>
         )}
 
