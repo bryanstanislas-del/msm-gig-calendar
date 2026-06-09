@@ -1709,20 +1709,30 @@ function BandProfilePage() {
             <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(200px,1fr))", gap:16 }}>
               {band.booking_email && (
                 <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, padding:16 }}>
-                  <div style={{ fontSize:10, color:C.dim, letterSpacing:2, marginBottom:4 }}>BOOKING</div>
-                  <a href={`mailto:${band.booking_email}`} style={{ color:C.red, textDecoration:"none", fontSize:14 }}>{band.booking_email}</a>
+                  <div style={{ fontSize:10, color:C.dim, letterSpacing:2, marginBottom:8 }}>BOOKING</div>
+                  <a href={`mailto:${band.booking_email}`} style={{
+                    display:"inline-block", padding:"8px 16px",
+                    background:C.red, color:"#fff", textDecoration:"none",
+                    borderRadius:5, fontSize:12, fontFamily:F.display, letterSpacing:2,
+                  }}>CONTACT BAND</a>
                 </div>
               )}
               {band.management_contact && (
                 <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, padding:16 }}>
-                  <div style={{ fontSize:10, color:C.dim, letterSpacing:2, marginBottom:4 }}>MANAGEMENT</div>
-                  <div style={{ color:C.white, fontSize:14 }}>{band.management_contact}</div>
+                  <div style={{ fontSize:10, color:C.dim, letterSpacing:2, marginBottom:8 }}>MANAGEMENT</div>
+                  {band.management_contact.includes("@")
+                    ? <a href={`mailto:${band.management_contact}`} style={{ display:"inline-block", padding:"8px 16px", background:C.red, color:"#fff", textDecoration:"none", borderRadius:5, fontSize:12, fontFamily:F.display, letterSpacing:2 }}>CONTACT MANAGEMENT</a>
+                    : <div style={{ color:C.white, fontSize:14 }}>{band.management_contact}</div>
+                  }
                 </div>
               )}
               {band.press_contact && (
                 <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, padding:16 }}>
-                  <div style={{ fontSize:10, color:C.dim, letterSpacing:2, marginBottom:4 }}>PRESS</div>
-                  <div style={{ color:C.white, fontSize:14 }}>{band.press_contact}</div>
+                  <div style={{ fontSize:10, color:C.dim, letterSpacing:2, marginBottom:8 }}>PRESS</div>
+                  {band.press_contact.includes("@")
+                    ? <a href={`mailto:${band.press_contact}`} style={{ display:"inline-block", padding:"8px 16px", background:C.red, color:"#fff", textDecoration:"none", borderRadius:5, fontSize:12, fontFamily:F.display, letterSpacing:2 }}>PRESS ENQUIRIES</a>
+                    : <div style={{ color:C.white, fontSize:14 }}>{band.press_contact}</div>
+                  }
                 </div>
               )}
             </div>
