@@ -44,7 +44,8 @@
 //
 // ════════════════════════════════════════════════════════════════════
 
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import React from "react";
 import { BrowserRouter, Routes, Route, useParams, useNavigate, Link } from "react-router-dom";
 
 // ── Supabase config ────────────────────────────────────────────────
@@ -1294,6 +1295,84 @@ function BandDirectory({ bands }) {
 }
 
 // ════════════════════════════════════════════════════════════════════
+//  PHOTO UPLOAD
+// ════════════════════════════════════════════════════════════════════
+function PhotoUpload({ userId, currentUrl, onUploaded }) {
+  const [uploading, setUploading] = useState(false);
+  const [error, setError]         = useState("");
+  const inputRef = useRef();
+
+  const handleFile = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setError("");
+    setUploading(true);
+    try {
+      // Upload to Supabase Storage — store under userId/filename
+      const ext      = file.name.split(".").pop();
+      const filePath = `${userId}/profile.${ext}`;
+      const { error: uploadError } = await supabase.storage
+        .from("band-photos")
+        .upload(filePath, file, { upsert: true });
+      if (uploadError) throw new Error(uploadError.message);
+      // Get public URL
+      const { data } = supabase.storage
+        .from("band-photos")
+        .getPublicUrl(filePath);
+      onUploaded(data.publicUrl);
+    } catch(e) {
+      setError(e.message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div>
+      <label style={{ display:"block", fontSize:13, color:C.white, letterSpacing:2, marginBottom:10, fontFamily:F.display }}>
+        PROFILE PHOTO
+      </label>
+      <div style={{ display:"flex", alignItems:"center", gap:16, flexWrap:"wrap" }}>
+        {/* Preview */}
+        <div style={{
+          width:90, height:90, borderRadius:"50%", flexShrink:0,
+          background:"rgba(255,255,255,0.05)", border:`2px solid ${currentUrl ? C.red : C.border}`,
+          overflow:"hidden", display:"flex", alignItems:"center", justifyContent:"center",
+        }}>
+          {currentUrl
+            ? <img src={currentUrl} alt="Profile" style={{ width:"100%", height:"100%", objectFit:"cover" }} />
+            : <span style={{ fontSize:32 }}>🎸</span>
+          }
+        </div>
+
+        {/* Upload button */}
+        <div style={{ flex:1 }}>
+          <input
+            ref={inputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            onChange={handleFile}
+            style={{ display:"none" }}
+          />
+          <Btn
+            variant={currentUrl ? "ghost" : "primary"}
+            onClick={() => inputRef.current.click()}
+            disabled={uploading}
+            style={{ marginBottom:8 }}
+          >
+            {uploading ? "UPLOADING..." : currentUrl ? "CHANGE PHOTO" : "UPLOAD PHOTO"}
+          </Btn>
+          <div style={{ fontSize:11, color:C.dim }}>
+            JPG, PNG or WebP · Max 5MB
+          </div>
+          {error && <div style={{ fontSize:12, color:C.red, marginTop:6 }}>{error}</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════
 //  EDIT PROFILE
 // ════════════════════════════════════════════════════════════════════
 function EditProfile({ user, profile, onSaved }) {
@@ -1411,12 +1490,11 @@ function EditProfile({ user, profile, onSaved }) {
           {/* PROFILE PHOTO */}
           <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8 }}>PROFILE PHOTO</div>
           <div style={{ gridColumn:"1/-1" }}>
-            <Input label="PHOTO URL (link to an image)" type="url" value={form.photo_url} onChange={set("photo_url")} placeholder="https://..." />
-            {form.photo_url && (
-              <img src={form.photo_url} alt="Profile preview"
-                style={{ marginTop:10, width:80, height:80, borderRadius:"50%", objectFit:"cover", border:`2px solid ${C.red}` }}
-              />
-            )}
+            <PhotoUpload
+              userId={user.id}
+              currentUrl={form.photo_url}
+              onUploaded={(url) => setForm(f => ({ ...f, photo_url: url }))}
+            />
           </div>
 
           {/* SOCIAL MEDIA */}
