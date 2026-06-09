@@ -241,6 +241,25 @@ function MSMLogo({ height = 80, showWordmark = true }) {
   );
 }
 
+// ── Profile completeness ───────────────────────────────────────────
+function getProfileCompleteness(profile) {
+  const fields = [
+    { key:"band_name",  label:"Band Name",  weight:20 },
+    { key:"city",       label:"City",       weight:10 },
+    { key:"genre",      label:"Genre",      weight:10 },
+    { key:"bio",        label:"Bio",        weight:15 },
+    { key:"website",    label:"Website",    weight:10 },
+    { key:"spotify",    label:"Spotify",    weight:15 },
+    { key:"instagram",  label:"Instagram",  weight:10 },
+    { key:"facebook",   label:"Facebook",   weight:5  },
+    { key:"photo_url",  label:"Photo",      weight:5  },
+  ];
+  const completed  = fields.filter(f => profile?.[f.key]);
+  const score      = completed.reduce((acc, f) => acc + f.weight, 0);
+  const missing    = fields.filter(f => !profile?.[f.key]).map(f => f.label);
+  return { score, missing, completed: completed.length, total: fields.length };
+}
+
 // ── iCal export ────────────────────────────────────────────────────
 function exportICal(gigs) {
   const esc = s => (s||"").replace(/[\\;,]/g, c=>`\\${c}`).replace(/\n/g,"\\n");
@@ -405,6 +424,26 @@ function AuthPanel({ onAuth, onBack }) {
         if (regPass.length < 6)    { setErr("Password must be at least 6 characters"); setLoading(false); return; }
         if (regPass !== regPass2)  { setErr("Passwords don't match"); setLoading(false); return; }
         const result = await DB.signUp(regEmail, regPass, reg);
+        // Send registration notification to MSM
+        try {
+          await fetch("/api/notify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              type: "registration",
+              band_name: reg.band_name,
+              email: regEmail,
+              city: reg.city,
+              genre: reg.genre,
+              phone: reg.phone,
+              website: reg.website,
+              spotify: reg.spotify,
+              instagram: reg.instagram,
+              facebook: reg.facebook,
+              bio: reg.bio,
+            }),
+          });
+        } catch(e) { console.warn("Registration notification failed:", e); }
         onAuth(result);
       }
     } catch(e) { setErr(e.message); }
@@ -547,9 +586,36 @@ function SubmitGigForm({ user, profile, onSubmitted }) {
     } catch(err) { setStatus("error"); setMsg(err.message); }
   };
 
+  const { score, missing } = getProfileCompleteness(profile);
+
   return (
     <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderTop:`3px solid ${C.red}`, borderRadius:8, padding:26 }}>
       <SectionLabel>SUBMIT YOUR GIG</SectionLabel>
+
+      {/* Profile completeness bar */}
+      <div style={{ marginBottom:20, padding:14, background:"rgba(255,255,255,0.03)", border:`1px solid ${C.border}`, borderRadius:6 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+          <div style={{ fontSize:12, color:C.white, fontFamily:F.display, letterSpacing:1 }}>PROFILE COMPLETENESS</div>
+          <div style={{ fontSize:14, fontFamily:F.display, color: score===100 ? C.green : score>=60 ? C.amber : C.red }}>{score}%</div>
+        </div>
+        <div style={{ background:"rgba(255,255,255,0.08)", borderRadius:4, height:8, overflow:"hidden" }}>
+          <div style={{
+            width:`${score}%`, height:"100%", borderRadius:4,
+            background: score===100 ? C.green : score>=60 ? C.amber : C.red,
+            transition:"width 0.5s ease",
+          }} />
+        </div>
+        {missing.length > 0 && (
+          <div style={{ marginTop:8, fontSize:11, color:C.muted }}>
+            Missing: <span style={{ color:C.amber }}>{missing.join(", ")}</span>
+          </div>
+        )}
+        {score < 60 && (
+          <div style={{ marginTop:10, padding:"8px 12px", background:"rgba(244,162,97,0.1)", border:`1px solid ${C.amber}`, borderRadius:5, fontSize:12, color:C.amber }}>
+            ⚠️ Your profile is incomplete — fans won't be able to find you online. Please update your profile with social links before submitting.
+          </div>
+        )}
+      </div>
 
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
         <div style={{ gridColumn:"1/-1" }}>
@@ -1120,6 +1186,20 @@ function BandDirectory({ bands }) {
                   <div style={{ fontSize:12, color:C.muted, marginTop:2 }}>
                     {[b.city, b.genre].filter(Boolean).join(" · ")}
                   </div>
+                  {/* Completeness indicator */}
+                  {(() => {
+                    const { score } = getProfileCompleteness(b);
+                    const color = score===100 ? C.green : score>=60 ? C.amber : C.red;
+                    return (
+                      <div style={{ display:"flex", alignItems:"center", gap:6, marginTop:5 }}>
+                        <div style={{ flex:1, maxWidth:80, background:"rgba(255,255,255,0.08)", borderRadius:3, height:4 }}>
+                          <div style={{ width:`${score}%`, height:"100%", background:color, borderRadius:3 }} />
+                        </div>
+                        <span style={{ fontSize:10, color, fontFamily:F.display }}>{score}%</span>
+                        {score < 60 && <span style={{ fontSize:10, color:C.amber }}>⚠️ Incomplete</span>}
+                      </div>
+                    );
+                  })()}
                 </div>
                 <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
                   {b.spotify   && <a href={b.spotify}   target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()} style={{ fontSize:11, color:"#1DB954", textDecoration:"none" }}>SPOTIFY</a>}
