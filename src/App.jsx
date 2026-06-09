@@ -1409,10 +1409,15 @@ function EditProfile({ user, profile, onSaved }) {
   const save = async () => {
     setStatus("loading");
     try {
-      await DB.updateProfile(user.id, form);
+      const updated = await DB.updateProfile(user.id, form);
       setStatus("success");
       setMsg("Profile updated successfully!");
-      onSaved({ ...profile, ...form });
+      if (updated) {
+        setForm(f => ({ ...f, ...updated }));
+        onSaved({ ...profile, ...updated });
+      } else {
+        onSaved({ ...profile, ...form });
+      }
       setTimeout(() => setStatus("idle"), 3000);
     } catch(e) {
       setStatus("error");
