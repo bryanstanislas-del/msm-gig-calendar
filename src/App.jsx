@@ -1804,6 +1804,421 @@ function BandProfilePage() {
 }
 
 // ════════════════════════════════════════════════════════════════════
+//  BULK GIG IMPORT
+// ════════════════════════════════════════════════════════════════════
+
+// ── Date parser ──────────────────────────────────────────────────
+const MONTH_NAMES = {
+  jan:0, feb:1, mar:2, apr:3, may:4, jun:5,
+  jul:6, aug:7, sep:8, oct:9, nov:10, dec:11,
+  january:0, february:1, march:2, april:3, june:5,
+  july:6, august:7, september:8, october:9, november:10, december:11,
+};
+const DAY_NAMES = ["sunday","monday","tuesday","wednesday","thursday","friday","saturday"];
+
+function resolveYear(day, month, explicitYear) {
+  if (explicitYear) return explicitYear;
+  const now   = new Date();
+  const thisY = now.getFullYear();
+  const test  = new Date(thisY, month, day);
+  // If date is today or future → current year, else next year
+  test.setHours(0,0,0,0);
+  now.setHours(0,0,0,0);
+  return test >= now ? thisY : thisY + 1;
+}
+
+function parseDate(str, contextYear) {
+  str = str.trim().toLowerCase().replace(/[,]/g,"").replace(/(\d+)(st|nd|rd|th)/g,"$1");
+  
+  // Try DD/MM/YYYY or DD-MM-YYYY
+  let m = str.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  if (m) return { day:+m[1], month:+m[2]-1, year:+m[3] };
+
+  // Try YYYY-MM-DD
+  m = str.match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return { day:+m[3], month:+m[2]-1, year:+m[1] };
+
+  // Try "6 june 2026" or "june 6 2026"
+  m = str.match(/(\d{1,2})\s+([a-z]+)\s+(\d{4})/);
+  if (m && MONTH_NAMES[m[2]] !== undefined)
+    return { day:+m[1], month:MONTH_NAMES[m[2]], year:+m[3] };
+  m = str.match(/([a-z]+)\s+(\d{1,2})\s+(\d{4})/);
+  if (m && MONTH_NAMES[m[1]] !== undefined)
+    return { day:+m[2], month:MONTH_NAMES[m[1]], year:+m[3] };
+
+  // Try "6 june" or "june 6" (no year)
+  m = str.match(/(\d{1,2})\s+([a-z]+)/);
+  if (m && MONTH_NAMES[m[2]] !== undefined) {
+    const day=+m[1], month=MONTH_NAMES[m[2]];
+    return { day, month, year: resolveYear(day, month, contextYear) };
+  }
+  m = str.match(/([a-z]+)\s+(\d{1,2})/);
+  if (m && MONTH_NAMES[m[1]] !== undefined) {
+    const day=+m[2], month=MONTH_NAMES[m[1]];
+    return { day, month, year: resolveYear(day, month, contextYear) };
+  }
+
+  // Try day name only e.g. "saturday"
+  const dayIdx = DAY_NAMES.indexOf(str.split(/\s+/)[0]);
+  if (dayIdx !== -1) {
+    const now  = new Date(); now.setHours(0,0,0,0);
+    const diff = (dayIdx - now.getDay() + 7) % 7 || 7;
+    const d    = new Date(now); d.setDate(d.getDate() + diff);
+    const year = contextYear || d.getFullYear();
+    return { day:d.getDate(), month:d.getMonth(), year };
+  }
+
+  return null;
+}
+
+function formatDateISO(d) {
+  return `${d.year}-${String(d.month+1).padStart(2,"0")}-${String(d.day).padStart(2,"0")}`;
+}
+
+function formatDateDisplay(d) {
+  return `${String(d.day).padStart(2,"0")} ${MONTHS[d.month]} ${d.year}`;
+}
+
+// Detect section heading that sets context year
+// e.g. "June 2026", "July 2026 Dates"
+function detectContextYear(line) {
+  const l = line.toLowerCase();
+  for (const [name, idx] of Object.entries(MONTH_NAMES)) {
+    const m = l.match(new RegExp(name + "\\s+(\\d{4})"));
+    if (m) return +m[1];
+  }
+  // Also match standalone year like "2026 Dates"
+  const m = l.match(/\b(20\d{2})\b/);
+  if (m) return +m[1];
+  return null;
+}
+
+// Parse a single gig line
+// Format: [date part] - [venue], [city]
+//      or [date part] | [venue] | [city]
+function parseLine(line, contextYear) {
+  line = line.trim();
+  if (!line) return null;
+
+  // Split on first - or |
+  const sepMatch = line.match(/^(.+?)(?:\s*[-|]\s*)(.+)$/);
+  if (!sepMatch) return { raw:line, status:"needs_attention", reason:"Can't find separator" };
+
+  const datePart  = sepMatch[1].trim();
+  const remainder = sepMatch[2].trim();
+
+  // Parse date
+  const parsed = parseDate(datePart, contextYear);
+
+  // Split remainder into venue + city on last comma
+  const lastComma = remainder.lastIndexOf(",");
+  let venue = remainder, city = "";
+  if (lastComma !== -1) {
+    venue = remainder.slice(0, lastComma).trim();
+    city  = remainder.slice(lastComma + 1).trim();
+  }
+
+  // Validate
+  const issues = [];
+  if (!parsed)        issues.push("Date unclear");
+  if (!venue)         issues.push("No venue");
+  if (!city)          issues.push("No city");
+
+  return {
+    raw:    line,
+    date:   parsed ? formatDateISO(parsed)      : "",
+    dateDsp:parsed ? formatDateDisplay(parsed)  : datePart,
+    venue,
+    city,
+    status: issues.length === 0 ? "valid" : "needs_attention",
+    reason: issues.join(", "),
+  };
+}
+
+function parseGigText(text, contextYearOverride) {
+  const lines   = text.split("\n").map(l=>l.trim()).filter(Boolean);
+  const results = [];
+  let contextYear = contextYearOverride || null;
+
+  for (const line of lines) {
+    // Check if line is a section heading setting year context
+    const detectedYear = detectContextYear(line);
+    if (detectedYear) {
+      // Only treat as heading if line has no separator (not a gig line)
+      if (!line.match(/[-|]/)) {
+        contextYear = detectedYear;
+        continue;
+      } else {
+        // It's a gig line that happens to contain a year — use detected year
+        contextYear = detectedYear;
+      }
+    }
+
+    const result = parseLine(line, contextYear);
+    if (result) results.push(result);
+  }
+  return results;
+}
+
+// ── BulkImport Component ─────────────────────────────────────────
+function BulkImport({ bands, onImported }) {
+  const [selectedBand, setSelectedBand] = useState("");
+  const [defaultTime,  setDefaultTime]  = useState("20:00");
+  const [text,         setText]         = useState("");
+  const [rows,         setRows]         = useState(null); // null = not yet parsed
+  const [importing,    setImporting]    = useState(false);
+  const [result,       setResult]       = useState(null);
+
+  const bandOptions = bands.filter(b => b.band_name).sort((a,b)=>a.band_name.localeCompare(b.band_name));
+  const selectedBandObj = bandOptions.find(b => b.id === selectedBand);
+
+  const handlePreview = () => {
+    if (!text.trim()) return;
+    const parsed = parseGigText(text);
+    setRows(parsed.map((r, i) => ({
+      ...r,
+      id: i,
+      time:  defaultTime,
+      genre: selectedBandObj?.primary_genre || selectedBandObj?.genre || "Other",
+      editing: false,
+    })));
+    setResult(null);
+  };
+
+  const updateRow = (id, field, value) => {
+    setRows(rows => rows.map(r => r.id === id ? { ...r, [field]: value } : r));
+  };
+
+  const removeRow = (id) => {
+    setRows(rows => rows.filter(r => r.id !== id));
+  };
+
+  const validRows   = rows?.filter(r => r.status === "valid"          ) || [];
+  const warningRows = rows?.filter(r => r.status === "needs_attention") || [];
+
+  const handleImport = async () => {
+    if (!selectedBand) { alert("Please select a band first"); return; }
+    const toImport = rows.filter(r => r.date && r.venue);
+    if (!toImport.length) { alert("No valid gigs to import"); return; }
+
+    setImporting(true);
+    let successCount = 0, errorCount = 0;
+
+    for (const row of toImport) {
+      try {
+        // Generate slug
+        const { data: slugData } = await supabase.rpc("generate_gig_slug", {
+          band: selectedBandObj?.band_name || "unknown",
+          venue: row.venue,
+          gig_date: row.date,
+        });
+
+        const { error } = await supabase.from("gigs").insert({
+          band_name:    selectedBandObj?.band_name || "",
+          venue:        row.venue,
+          city:         row.city,
+          date:         row.date,
+          time:         row.time || "20:00",
+          genre:        row.genre || "Other",
+          status:       "approved",
+          submitted_by: (await supabase.auth.getUser()).data.user?.id,
+          slug:         slugData || null,
+          notes:        "",
+          tickets:      "",
+        });
+
+        if (error) errorCount++;
+        else successCount++;
+      } catch(e) {
+        errorCount++;
+      }
+    }
+
+    setImporting(false);
+    setResult({ success: successCount, errors: errorCount });
+    if (successCount > 0) {
+      if (onImported) onImported();
+      setRows(null);
+      setText("");
+    }
+  };
+
+  return (
+    <div>
+      <SectionLabel>BULK GIG IMPORT</SectionLabel>
+      <div style={{ fontSize:13, color:C.muted, marginBottom:24, maxWidth:700 }}>
+        Paste a band's gig list from their website. The tool will parse dates, venues and cities automatically.
+        All imported gigs are auto-approved and appear immediately on the calendar and artist profile.
+      </div>
+
+      {/* Setup */}
+      <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderTop:`3px solid ${C.red}`, borderRadius:8, padding:24, marginBottom:20 }}>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginBottom:16 }}>
+          <div>
+            <label style={{ display:"block", fontSize:13, color:C.white, letterSpacing:2, marginBottom:6, fontFamily:F.display }}>SELECT BAND *</label>
+            <select value={selectedBand} onChange={e=>setSelectedBand(e.target.value)} style={{ ...inputCss, cursor:"pointer" }}>
+              <option value="">— Choose a band —</option>
+              {bandOptions.map(b => <option key={b.id} value={b.id}>{b.band_name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ display:"block", fontSize:13, color:C.white, letterSpacing:2, marginBottom:6, fontFamily:F.display }}>DEFAULT DOORS TIME</label>
+            <input type="time" value={defaultTime} onChange={e=>setDefaultTime(e.target.value)} style={inputCss} />
+          </div>
+        </div>
+
+        {selectedBandObj && (
+          <div style={{ padding:"10px 14px", background:"rgba(232,32,58,0.06)", borderRadius:6, fontSize:12, color:C.muted, marginBottom:16 }}>
+            🎸 <span style={{ color:C.white }}>{selectedBandObj.band_name}</span>
+            {selectedBandObj.primary_genre && <> · <span style={{ color:GENRE_COLORS[selectedBandObj.primary_genre]||C.red }}>{selectedBandObj.primary_genre}</span></>}
+            {selectedBandObj.city && <> · 📍 {selectedBandObj.city}</>}
+          </div>
+        )}
+
+        <label style={{ display:"block", fontSize:13, color:C.white, letterSpacing:2, marginBottom:6, fontFamily:F.display }}>PASTE GIG LIST</label>
+        <textarea
+          value={text}
+          onChange={e=>{ setText(e.target.value); setRows(null); }}
+          rows={10}
+          placeholder={`Paste gig dates here. Examples:\n\nSaturday 6th June - The Obelisk, Woolston\nSaturday 13th June - Hothampton Arms, Bognor\nFriday 26th June - The Heroes, Waterlooville\n\nOr with year:\nJuly 2026\nSat 5th - The Brook, Southampton\nFri 11th - The Joiners, Southampton`}
+          style={{ ...inputCss, resize:"vertical", fontFamily:"monospace", fontSize:13 }}
+        />
+
+        <Btn onClick={handlePreview} disabled={!text.trim() || !selectedBand} style={{ marginTop:14, padding:"12px 32px" }}>
+          PREVIEW IMPORT →
+        </Btn>
+      </div>
+
+      {/* Preview */}
+      {rows && rows.length > 0 && (
+        <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, padding:24 }}>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:16, flexWrap:"wrap", gap:10 }}>
+            <div>
+              <div style={{ fontFamily:F.display, fontSize:18, color:C.white, letterSpacing:2 }}>PREVIEW — {rows.length} GIGS FOUND</div>
+              <div style={{ fontSize:12, color:C.muted, marginTop:4 }}>
+                <span style={{ color:C.green }}>✓ {validRows.length} valid</span>
+                {warningRows.length > 0 && <span style={{ color:C.amber, marginLeft:12 }}>⚠ {warningRows.length} need attention</span>}
+              </div>
+            </div>
+            <Btn variant="ghost" onClick={()=>setRows(null)}>← EDIT TEXT</Btn>
+          </div>
+
+          {/* Table */}
+          <div style={{ overflowX:"auto" }}>
+            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+              <thead>
+                <tr style={{ borderBottom:`1px solid ${C.border}` }}>
+                  {["","DATE","VENUE","CITY","TIME","GENRE",""].map((h,i) => (
+                    <th key={i} style={{ padding:"8px 10px", textAlign:"left", fontSize:10, color:C.muted, letterSpacing:2, fontFamily:F.display, whiteSpace:"nowrap" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(row => (
+                  <tr key={row.id} style={{ borderBottom:`1px solid rgba(255,255,255,0.04)`, background: row.status==="needs_attention" ? "rgba(244,162,97,0.05)" : "transparent" }}>
+                    {/* Status */}
+                    <td style={{ padding:"8px 10px", width:30 }}>
+                      <span title={row.reason||"Valid"}>
+                        {row.status==="valid" ? "✅" : "⚠️"}
+                      </span>
+                    </td>
+                    {/* Date */}
+                    <td style={{ padding:"8px 4px", minWidth:130 }}>
+                      <input
+                        type="date"
+                        value={row.date}
+                        onChange={e=>updateRow(row.id,"date",e.target.value)}
+                        style={{ ...inputCss, padding:"4px 8px", fontSize:12 }}
+                      />
+                    </td>
+                    {/* Venue */}
+                    <td style={{ padding:"8px 4px", minWidth:160 }}>
+                      <input
+                        value={row.venue}
+                        onChange={e=>updateRow(row.id,"venue",e.target.value)}
+                        style={{ ...inputCss, padding:"4px 8px", fontSize:12 }}
+                      />
+                    </td>
+                    {/* City */}
+                    <td style={{ padding:"8px 4px", minWidth:120 }}>
+                      <input
+                        value={row.city}
+                        onChange={e=>updateRow(row.id,"city",e.target.value)}
+                        style={{ ...inputCss, padding:"4px 8px", fontSize:12 }}
+                      />
+                    </td>
+                    {/* Time */}
+                    <td style={{ padding:"8px 4px", minWidth:90 }}>
+                      <input
+                        type="time"
+                        value={row.time}
+                        onChange={e=>updateRow(row.id,"time",e.target.value)}
+                        style={{ ...inputCss, padding:"4px 8px", fontSize:12 }}
+                      />
+                    </td>
+                    {/* Genre */}
+                    <td style={{ padding:"8px 4px", minWidth:130 }}>
+                      <select
+                        value={row.genre}
+                        onChange={e=>updateRow(row.id,"genre",e.target.value)}
+                        style={{ ...inputCss, padding:"4px 8px", fontSize:12, cursor:"pointer" }}
+                      >
+                        {GENRES.map(g=><option key={g} value={g}>{g}</option>)}
+                      </select>
+                    </td>
+                    {/* Remove */}
+                    <td style={{ padding:"8px 4px" }}>
+                      <button
+                        onClick={()=>removeRow(row.id)}
+                        style={{ background:"none", border:"none", color:C.muted, cursor:"pointer", fontSize:16, padding:"0 4px" }}
+                        title="Remove this row"
+                      >✕</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {warningRows.length > 0 && (
+            <div style={{ marginTop:16, padding:12, background:"rgba(244,162,97,0.08)", border:`1px solid ${C.amber}`, borderRadius:6, fontSize:12, color:C.amber }}>
+              ⚠️ Rows marked with a warning have missing or unclear data. Please edit them before importing, or remove them.
+            </div>
+          )}
+
+          <div style={{ marginTop:20, display:"flex", gap:12, alignItems:"center", flexWrap:"wrap" }}>
+            <Btn
+              onClick={handleImport}
+              disabled={importing || rows.filter(r=>r.date&&r.venue).length===0}
+              style={{ padding:"13px 32px" }}
+            >
+              {importing ? "IMPORTING..." : `IMPORT ${rows.filter(r=>r.date&&r.venue).length} GIGS →`}
+            </Btn>
+            <div style={{ fontSize:12, color:C.dim }}>
+              All gigs will be auto-approved and linked to {selectedBandObj?.band_name}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {rows && rows.length === 0 && (
+        <div style={{ padding:20, background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, color:C.amber, fontSize:14 }}>
+          ⚠️ No gigs could be parsed from the text. Check the format and try again.
+        </div>
+      )}
+
+      {/* Result */}
+      {result && (
+        <div style={{ marginTop:16, padding:16, background: result.errors===0 ? "rgba(67,170,139,0.1)" : "rgba(244,162,97,0.1)", border:`1px solid ${result.errors===0 ? C.green : C.amber}`, borderRadius:8 }}>
+          {result.success > 0 && <div style={{ color:C.green, fontSize:14 }}>✓ {result.success} gig{result.success!==1?"s":""} imported successfully!</div>}
+          {result.errors  > 0 && <div style={{ color:C.amber, fontSize:14, marginTop:4 }}>⚠ {result.errors} gig{result.errors!==1?"s":""} failed to import.</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════
 //  GLOBAL CSS
 // ════════════════════════════════════════════════════════════════════
 const GLOBAL_CSS = `
@@ -1931,8 +2346,9 @@ function MainApp() {
     { id:"submit",   label:"SUBMIT GIG" },
     ...(auth ? [{ id:"profile", label:"MY PROFILE" }] : []),
     ...(isAdmin ? [
-      { id:"admin", label:`ADMIN (${allGigs.filter(g=>g.status==="pending").length})` },
-      { id:"bands", label:`BANDS (${bands.length})` },
+      { id:"admin",  label:`ADMIN (${allGigs.filter(g=>g.status==="pending").length})` },
+      { id:"bands",  label:`BANDS (${bands.length})` },
+      { id:"import", label:"BULK IMPORT" },
     ] : []),
   ];
 
@@ -1989,6 +2405,11 @@ function MainApp() {
         {/* STATS */}
         {tab==="stats" && (
           <StatsPanel gigs={gigs} />
+        )}
+
+        {/* BULK IMPORT */}
+        {tab==="import" && isAdmin && (
+          <BulkImport bands={bands} onImported={refreshAdmin} />
         )}
 
         {/* BANDS */}
