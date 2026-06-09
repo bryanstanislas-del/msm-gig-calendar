@@ -2162,38 +2162,82 @@ function parseLine(line, contextYear) {
   line = line.trim();
   if (!line) return null;
 
-  // Split on first - or |
-  const sepMatch = line.match(/^(.+?)(?:\s*[-|]\s*)(.+)$/);
-  if (!sepMatch) return { raw:line, status:"needs_attention", reason:"Can't find separator" };
-
-  const datePart  = sepMatch[1].trim();
-  const remainder = sepMatch[2].trim();
-
-  // Parse date
-  const parsed = parseDate(datePart, contextYear);
-
-  // Split remainder into venue + city on last comma
-  const lastComma = remainder.lastIndexOf(",");
-  let venue = remainder, city = "";
-  if (lastComma !== -1) {
-    venue = remainder.slice(0, lastComma).trim();
-    city  = remainder.slice(lastComma + 1).trim();
+  // ── Step 1: Extract time if present anywhere in the line ──
+  // Matches: 8:30pm, 8:30 pm, 20:30, 8pm, 8 pm
+  let extractedTime = "";
+  const timeRegex = /\b(\d{1,2}):(\d{2})\s*([ap]m)?\b|\b(\d{1,2})\s*([ap]m)\b/gi;
+  const timeMatches = [...line.matchAll(timeRegex)];
+  if (timeMatches.length > 0) {
+    const tm = timeMatches[timeMatches.length - 1]; // use last time found
+    const raw = tm[0];
+    let h, m = "00";
+    if (tm[1]) { h = +tm[1]; m = tm[2]; const ampm = tm[3]?.toLowerCase(); if (ampm==="pm" && h<12) h+=12; if (ampm==="am" && h===12) h=0; }
+    else        { h = +tm[4]; const ampm = tm[5]?.toLowerCase(); if (ampm==="pm" && h<12) h+=12; if (ampm==="am" && h===12) h=0; }
+    extractedTime = `${String(h).padStart(2,"0")}:${m}`;
+    // Remove time from line for further parsing
+    line = line.replace(raw, "").replace(/\s*-\s*$/, "").trim();
   }
 
-  // Validate
+  // ── Step 2: Split date from venue/city ──
+  // The date part is everything up to the first separator AFTER the date tokens
+  // Strategy: find where date tokens end, then look for - or |
+  
+  // First try splitting on " - " or " | " (with spaces)
+  const sepMatch = line.match(/^(.+?)\s+[-–|]\s+(.+)$/);
+  if (!sepMatch) {
+    // Try just a dash/pipe
+    const simpleSep = line.match(/^(.+?)[-–|](.+)$/);
+    if (!simpleSep) return { raw:line, status:"needs_attention", reason:"Can't find separator" };
+    var datePart  = simpleSep[1].trim();
+    var remainder = simpleSep[2].trim();
+  } else {
+    var datePart  = sepMatch[1].trim();
+    var remainder = sepMatch[2].trim();
+  }
+
+  // ── Step 3: Parse the date part ──
+  const parsed = parseDate(datePart, contextYear);
+
+  // ── Step 4: Extract venue and city from remainder ──
+  // remainder may still contain a trailing time or description after another " - "
+  // e.g. "The Cabin, Elmer - special night" → venue=The Cabin, city=Elmer, desc=special night
+  let venueCity = remainder;
+  let description = "";
+
+  // Check if remainder has another separator (after venue/city)
+  const descSep = remainder.match(/^(.+?,\s*.+?)\s*[-–]\s*(.+)$/);
+  if (descSep) {
+    venueCity   = descSep[1].trim();
+    description = descSep[2].trim();
+  }
+
+  // Split venue + city on last comma
+  const lastComma = venueCity.lastIndexOf(",");
+  let venue = venueCity, city = "";
+  if (lastComma !== -1) {
+    venue = venueCity.slice(0, lastComma).trim();
+    city  = venueCity.slice(lastComma + 1).trim();
+  }
+
+  // Clean up city — remove any trailing time/description fragments
+  city = city.replace(timeRegex, "").trim();
+
+  // ── Step 5: Validate ──
   const issues = [];
-  if (!parsed)        issues.push("Date unclear");
-  if (!venue)         issues.push("No venue");
-  if (!city)          issues.push("No city");
+  if (!parsed) issues.push("Date unclear");
+  if (!venue)  issues.push("No venue");
+  if (!city)   issues.push("No city");
 
   return {
-    raw:    line,
-    date:   parsed ? formatDateISO(parsed)      : "",
-    dateDsp:parsed ? formatDateDisplay(parsed)  : datePart,
+    raw:         line,
+    date:        parsed ? formatDateISO(parsed)     : "",
+    dateDsp:     parsed ? formatDateDisplay(parsed) : datePart,
     venue,
     city,
-    status: issues.length === 0 ? "valid" : "needs_attention",
-    reason: issues.join(", "),
+    time:        extractedTime, // will override default if found
+    description,
+    status:      issues.length === 0 ? "valid" : "needs_attention",
+    reason:      issues.join(", "),
   };
 }
 
@@ -2239,10 +2283,11 @@ function BulkImport({ bands, onImported }) {
     const parsed = parseGigText(text);
     setRows(parsed.map((r, i) => ({
       ...r,
-      id: i,
-      time:  defaultTime,
-      genre: selectedBandObj?.primary_genre || selectedBandObj?.genre || "Other",
-      editing: false,
+      id:          i,
+      time:        r.time || defaultTime,
+      genre:       selectedBandObj?.primary_genre || selectedBandObj?.genre || "Other",
+      description: r.description || "",
+      editing:     false,
     })));
     setResult(null);
   };
@@ -2292,7 +2337,7 @@ function BulkImport({ bands, onImported }) {
           status:       "approved",
           submitted_by: userId,
           slug:         slugData || null,
-          notes:        "",
+          notes:        row.description || "",
           tickets:      "",
         });
 
@@ -2386,7 +2431,7 @@ function BulkImport({ bands, onImported }) {
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
               <thead>
                 <tr style={{ borderBottom:`1px solid ${C.border}` }}>
-                  {["","DATE","VENUE","CITY","TIME","GENRE",""].map((h,i) => (
+                  {["","DATE","VENUE","CITY","TIME","GENRE","NOTES",""].map((h,i) => (
                     <th key={i} style={{ padding:"8px 10px", textAlign:"left", fontSize:10, color:C.muted, letterSpacing:2, fontFamily:F.display, whiteSpace:"nowrap" }}>{h}</th>
                   ))}
                 </tr>
@@ -2443,6 +2488,15 @@ function BulkImport({ bands, onImported }) {
                       >
                         {GENRES.map(g=><option key={g} value={g}>{g}</option>)}
                       </select>
+                    </td>
+                    {/* Description / Notes */}
+                    <td style={{ padding:"8px 4px", minWidth:160 }}>
+                      <input
+                        value={row.description||""}
+                        onChange={e=>updateRow(row.id,"description",e.target.value)}
+                        placeholder="Notes..."
+                        style={{ ...inputCss, padding:"4px 8px", fontSize:12 }}
+                      />
                     </td>
                     {/* Remove */}
                     <td style={{ padding:"8px 4px" }}>
