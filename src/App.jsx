@@ -1651,8 +1651,8 @@ function BandProfilePage() {
             <div style={{ display:"flex", gap:12, flexWrap:"wrap", marginBottom:16, alignItems:"center" }}>
               {band.primary_genre && <Badge label={band.primary_genre} color={color} />}
               {band.secondary_genre && <Badge label={band.secondary_genre} color={C.muted} />}
-              {band.city && <span style={{ fontSize:13, color:C.muted }}>📍 {band.city}</span>}
-              {band.formation_year && <span style={{ fontSize:13, color:C.dim }}>Est. {band.formation_year}</span>}
+              {band.city && <span style={{ fontSize:13, color:"#cccccc" }}>📍 {band.city}</span>}
+              {band.formation_year && <span style={{ fontSize:13, color:"#aaaaaa" }}>Est. {band.formation_year}</span>}
             </div>
 
             {/* Social icons */}
@@ -1698,7 +1698,7 @@ function BandProfilePage() {
         {band.bio && (
           <div style={{ marginBottom:48 }}>
             <SectionLabel>ABOUT</SectionLabel>
-            <div style={{ fontSize:16, color:"#ccc", lineHeight:1.8, maxWidth:700 }}>{band.bio}</div>
+            <div style={{ fontSize:16, color:"#dddddd", lineHeight:1.8, maxWidth:700 }}>{band.bio}</div>
           </div>
         )}
 
@@ -1709,7 +1709,7 @@ function BandProfilePage() {
             <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(200px,1fr))", gap:16 }}>
               {band.booking_email && (
                 <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, padding:16 }}>
-                  <div style={{ fontSize:10, color:C.dim, letterSpacing:2, marginBottom:8 }}>BOOKING</div>
+                  <div style={{ fontSize:11, color:"#aaaaaa", letterSpacing:2, marginBottom:8, fontFamily:F.display }}>BOOKING</div>
                   <a href={`mailto:${band.booking_email}`} style={{
                     display:"inline-block", padding:"8px 16px",
                     background:C.red, color:"#fff", textDecoration:"none",
@@ -1719,19 +1719,19 @@ function BandProfilePage() {
               )}
               {band.management_contact && (
                 <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, padding:16 }}>
-                  <div style={{ fontSize:10, color:C.dim, letterSpacing:2, marginBottom:8 }}>MANAGEMENT</div>
+                  <div style={{ fontSize:11, color:"#aaaaaa", letterSpacing:2, marginBottom:8, fontFamily:F.display }}>MANAGEMENT</div>
                   {band.management_contact.includes("@")
                     ? <a href={`mailto:${band.management_contact}`} style={{ display:"inline-block", padding:"8px 16px", background:C.red, color:"#fff", textDecoration:"none", borderRadius:5, fontSize:12, fontFamily:F.display, letterSpacing:2 }}>CONTACT MANAGEMENT</a>
-                    : <div style={{ color:C.white, fontSize:14 }}>{band.management_contact}</div>
+                    : <div style={{ color:"#ffffff", fontSize:15, fontWeight:500 }}>{band.management_contact}</div>
                   }
                 </div>
               )}
               {band.press_contact && (
                 <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, padding:16 }}>
-                  <div style={{ fontSize:10, color:C.dim, letterSpacing:2, marginBottom:8 }}>PRESS</div>
+                  <div style={{ fontSize:11, color:"#aaaaaa", letterSpacing:2, marginBottom:8, fontFamily:F.display }}>PRESS</div>
                   {band.press_contact.includes("@")
                     ? <a href={`mailto:${band.press_contact}`} style={{ display:"inline-block", padding:"8px 16px", background:C.red, color:"#fff", textDecoration:"none", borderRadius:5, fontSize:12, fontFamily:F.display, letterSpacing:2 }}>PRESS ENQUIRIES</a>
-                    : <div style={{ color:C.white, fontSize:14 }}>{band.press_contact}</div>
+                    : <div style={{ color:"#ffffff", fontSize:15, fontWeight:500 }}>{band.press_contact}</div>
                   }
                 </div>
               )}
@@ -1755,8 +1755,8 @@ function BandProfilePage() {
                 }}>
                   <div style={{ fontFamily:F.display, fontSize:16, color:C.red, letterSpacing:1, minWidth:120 }}>{fmtDate(g.date)}</div>
                   <div style={{ flex:1 }}>
-                    <div style={{ fontSize:15, color:C.white }}>{g.venue}</div>
-                    <div style={{ fontSize:12, color:C.muted }}>{g.city}</div>
+                    <div style={{ fontSize:15, color:"#ffffff" }}>{g.venue}</div>
+                    <div style={{ fontSize:13, color:"#aaaaaa" }}>{g.city}</div>
                   </div>
                   <div style={{ display:"flex", gap:8 }}>
                     {g.tickets && (
