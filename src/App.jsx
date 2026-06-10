@@ -2626,6 +2626,212 @@ function BulkImport({ bands, onImported }) {
 }
 
 // ════════════════════════════════════════════════════════════════════
+//  ADMIN VENUES
+// ════════════════════════════════════════════════════════════════════
+function AdminVenues({ venues, allGigs, onRefresh }) {
+  const [view,     setView]     = useState("list"); // list | edit
+  const [search,   setSearch]   = useState("");
+  const [selected, setSelected] = useState(null);
+  const [editForm, setEditForm] = useState({});
+  const [msg,      setMsg]      = useState({ text:"", type:"" });
+
+  const setE = k => e => setEditForm(f=>({...f,[k]:e.target.value}));
+
+  const showMsg = (text, type="success") => {
+    setMsg({ text, type });
+    setTimeout(() => setMsg({ text:"", type:"" }), 4000);
+  };
+
+  // Gig counts per venue
+  const gigCounts = allGigs.reduce((acc, g) => {
+    if (g.venue_id) acc[g.venue_id] = (acc[g.venue_id]||0)+1;
+    return acc;
+  }, {});
+
+  const filtered = venues.filter(v => {
+    if (!search.trim()) return true;
+    const q = search.toLowerCase();
+    return (v.name||"").toLowerCase().includes(q) ||
+           (v.city||"").toLowerCase().includes(q);
+  }).sort((a,b) => (gigCounts[b.id]||0) - (gigCounts[a.id]||0));
+
+  const openEdit = (venue) => {
+    setSelected(venue);
+    setEditForm({
+      name:        venue.name        || "",
+      city:        venue.city        || "",
+      description: venue.description || "",
+      website:     venue.website     || "",
+      facebook:    venue.facebook    || "",
+      instagram:   venue.instagram   || "",
+      twitter:     venue.twitter     || "",
+      photo_url:   venue.photo_url   || "",
+    });
+    setView("edit");
+  };
+
+  const handleSave = async () => {
+    try {
+      await DB.updateVenue(selected.id, editForm);
+      showMsg("✓ Venue updated successfully");
+      setView("list");
+      if (onRefresh) onRefresh();
+    } catch(e) {
+      showMsg(e.message, "error");
+    }
+  };
+
+  // ── LIST VIEW ──
+  if (view === "list") return (
+    <div>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:16, flexWrap:"wrap", gap:12 }}>
+        <SectionLabel>VENUE DIRECTORY</SectionLabel>
+        <div style={{ fontSize:12, color:C.muted }}>Venues are created automatically from gig data</div>
+      </div>
+
+      {/* Stats */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(120px,1fr))", gap:12, marginBottom:20 }}>
+        {[
+          { label:"TOTAL VENUES", val: venues.length },
+          { label:"WITH DETAILS", val: venues.filter(v=>v.description||v.website).length },
+          { label:"MISSING INFO", val: venues.filter(v=>!v.description&&!v.website).length },
+        ].map(({ label, val }) => (
+          <div key={label} style={{ background:C.surfaceHigh, border:`1px solid ${C.border}`, borderRadius:6, padding:"10px 14px" }}>
+            <div style={{ fontSize:9, color:C.muted, letterSpacing:2, fontFamily:F.display }}>{label}</div>
+            <div style={{ fontSize:24, fontFamily:F.display, color:C.red, lineHeight:1.2 }}>{val}</div>
+          </div>
+        ))}
+      </div>
+
+      {msg.text && (
+        <div style={{ marginBottom:16, padding:12, background: msg.type==="error" ? "rgba(232,32,58,0.1)" : "rgba(67,170,139,0.1)", border:`1px solid ${msg.type==="error"?C.red:C.green}`, borderRadius:6, fontSize:13, color: msg.type==="error" ? C.red : C.green }}>
+          {msg.text}
+        </div>
+      )}
+
+      {/* Search */}
+      <div style={{ position:"relative", marginBottom:20 }}>
+        <span style={{ position:"absolute", left:14, top:"50%", transform:"translateY(-50%)", fontSize:16, color:C.muted }}>🔍</span>
+        <input type="text" placeholder="Search venues..." value={search} onChange={e=>setSearch(e.target.value)}
+          style={{ ...inputCss, paddingLeft:42 }}
+        />
+      </div>
+
+      {/* Venue list */}
+      <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+        {filtered.map(v => {
+          const count    = gigCounts[v.id] || 0;
+          const hasInfo  = v.description || v.website;
+          return (
+            <div key={v.id} style={{
+              background:C.surfaceHigh, border:`1px solid ${C.border}`,
+              borderLeft:`3px solid ${hasInfo ? C.green : C.amber}`,
+              borderRadius:8, padding:"14px 18px",
+              display:"flex", alignItems:"center", gap:14, flexWrap:"wrap",
+            }}>
+              <div style={{ flex:1, minWidth:200 }}>
+                <div style={{ fontFamily:F.display, fontSize:16, letterSpacing:1.5, color:C.white }}>
+                  {v.name}
+                </div>
+                <div style={{ fontSize:12, color:C.muted, marginTop:2 }}>
+                  📍 {v.city}
+                  {v.slug && <span style={{ color:C.dim, marginLeft:8 }}>/{v.slug}</span>}
+                </div>
+                <div style={{ display:"flex", gap:8, marginTop:6, flexWrap:"wrap" }}>
+                  <span style={{ fontSize:11, color: count>0 ? C.red : C.dim, fontFamily:F.display }}>
+                    🎸 {count} gig{count!==1?"s":""}
+                  </span>
+                  {!hasInfo && <span style={{ fontSize:11, color:C.amber }}>⚠ Needs info</span>}
+                  {v.website && <span style={{ fontSize:11, color:C.green }}>✓ Website</span>}
+                  {v.description && <span style={{ fontSize:11, color:C.green }}>✓ Description</span>}
+                </div>
+              </div>
+              <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                <Btn variant="ghost" onClick={()=>openEdit(v)} style={{ fontSize:11, padding:"6px 12px" }}>✏️ EDIT</Btn>
+                {v.slug && (
+                  <a href={`/venue/${v.slug}`} target="_blank" rel="noreferrer"
+                    style={{ ...btnCss("ghost"), fontSize:11, padding:"6px 12px", textDecoration:"none", display:"inline-block" }}
+                  >👁 VIEW</a>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+
+  // ── EDIT VIEW ──
+  if (view === "edit" && selected) return (
+    <div style={{ maxWidth:600 }}>
+      <div style={{ display:"flex", alignItems:"center", gap:16, marginBottom:24, flexWrap:"wrap" }}>
+        <span onClick={()=>setView("list")} style={{ color:C.muted, cursor:"pointer", fontSize:13 }}>← Back to venues</span>
+        <div style={{ fontFamily:F.display, fontSize:20, color:C.white, letterSpacing:2 }}>EDITING: {selected.name}</div>
+        {selected.slug && (
+          <a href={`/venue/${selected.slug}`} target="_blank" rel="noreferrer"
+            style={{ fontSize:11, color:C.red, textDecoration:"none" }}
+          >↗ View public page</a>
+        )}
+      </div>
+
+      {msg.text && (
+        <div style={{ marginBottom:16, padding:12, background: msg.type==="error" ? "rgba(232,32,58,0.1)" : "rgba(67,170,139,0.1)", border:`1px solid ${msg.type==="error"?C.red:C.green}`, borderRadius:6, fontSize:13, color: msg.type==="error" ? C.red : C.green }}>
+          {msg.text}
+        </div>
+      )}
+
+      <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderTop:`3px solid ${C.red}`, borderRadius:8, padding:26 }}>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
+
+          <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2 }}>VENUE INFORMATION</div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <Input label="VENUE NAME" value={editForm.name} onChange={setE("name")} required />
+          </div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <Input label="CITY / TOWN" value={editForm.city} onChange={setE("city")} required />
+          </div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <label style={{ display:"block", fontSize:13, color:C.white, letterSpacing:2, marginBottom:6, fontFamily:F.display }}>DESCRIPTION</label>
+            <textarea value={editForm.description} onChange={setE("description")} rows={4}
+              placeholder="Tell visitors about this venue..."
+              style={{ ...inputCss, resize:"vertical" }}
+            />
+          </div>
+
+          <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8 }}>ONLINE</div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <Input label="WEBSITE" type="url" value={editForm.website} onChange={setE("website")} placeholder="https://..." />
+          </div>
+          <Input label="FACEBOOK"  type="url" value={editForm.facebook}  onChange={setE("facebook")}  placeholder="https://facebook.com/..." />
+          <Input label="INSTAGRAM" type="url" value={editForm.instagram} onChange={setE("instagram")} placeholder="https://instagram.com/..." />
+          <div style={{ gridColumn:"1/-1" }}>
+            <Input label="X / TWITTER" type="url" value={editForm.twitter} onChange={setE("twitter")} placeholder="https://x.com/..." />
+          </div>
+
+          <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8 }}>PHOTO</div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <Input label="PHOTO URL" type="url" value={editForm.photo_url} onChange={setE("photo_url")} placeholder="https://..." />
+            {editForm.photo_url && (
+              <img src={editForm.photo_url} alt="Venue"
+                style={{ marginTop:10, width:"100%", maxHeight:200, objectFit:"cover", borderRadius:6, border:`1px solid ${C.border}` }}
+              />
+            )}
+          </div>
+
+          <div style={{ gridColumn:"1/-1", padding:"12px 14px", background:"rgba(255,255,255,0.02)", border:`1px solid ${C.border}`, borderRadius:6, fontSize:11, color:C.dim }}>
+            🔗 Public URL: <span style={{ color:C.muted }}>musicscenemagazine.co.uk/venue/{selected.slug}</span>
+          </div>
+        </div>
+
+        <Btn onClick={handleSave} style={{ width:"100%", marginTop:24, padding:"13px" }}>SAVE VENUE</Btn>
+      </div>
+    </div>
+  );
+
+  return null;
+}
+
+// ════════════════════════════════════════════════════════════════════
 //  GLOBAL CSS
 // ════════════════════════════════════════════════════════════════════
 const GLOBAL_CSS = `
@@ -2687,6 +2893,7 @@ function MainApp() {
   const [gigs,    setGigs]    = useState([]);
   const [allGigs, setAllGigs] = useState([]);   // admin only
   const [bands,   setBands]   = useState([]);    // admin only
+  const [venues,  setVenues]  = useState([]);    // admin only
   const [loading, setLoading] = useState(true);
   const [tab,     setTab]     = useState("calendar"); // calendar | list | submit | admin
   const [selGig,  setSelGig]  = useState(null);
@@ -2705,7 +2912,8 @@ function MainApp() {
   useEffect(() => {
     if (isAdmin) {
       DB.getAllGigs().then(setAllGigs);
-      DB.getBands(true).then(setBands); // include disabled for admin
+      DB.getBands(true).then(setBands);
+      DB.getVenues().then(setVenues);
     }
   }, [isAdmin, auth]);
 
@@ -2716,6 +2924,8 @@ function MainApp() {
     setGigs(approvedFresh);
     const freshBands = await DB.getBands(true);
     setBands(freshBands);
+    const freshVenues = await DB.getVenues();
+    setVenues(freshVenues);
   }, [auth]);
 
   const handleAuth = (result) => { setAuth(result); setTab("submit"); };
@@ -2756,6 +2966,7 @@ function MainApp() {
       { id:"admin",  label:`ADMIN (${allGigs.filter(g=>g.status==="pending").length})` },
       { id:"bands",  label:`BANDS (${bands.length})` },
       { id:"import", label:"BULK IMPORT" },
+      { id:"venues", label:`VENUES (${venues.length})` },
     ] : []),
   ];
 
@@ -2812,6 +3023,11 @@ function MainApp() {
         {/* STATS */}
         {tab==="stats" && (
           <StatsPanel gigs={gigs} />
+        )}
+
+        {/* VENUES */}
+        {tab==="venues" && isAdmin && (
+          <AdminVenues venues={venues} allGigs={allGigs} onRefresh={refreshAdmin} />
         )}
 
         {/* BULK IMPORT */}
