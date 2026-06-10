@@ -330,6 +330,23 @@ function MSMLogo({ height = 80, showWordmark = true }) {
   );
 }
 
+// ── Venue link helper ──────────────────────────────────────────────
+function VenueLink({ gig, venues=[] }) {
+  const venue = venues.find(v => v.id === gig.venue_id);
+  if (venue?.slug) {
+    return (
+      <span style={{ fontSize:13, color:C.muted }}>
+        <Link to={`/venue/${venue.slug}`}
+          style={{ color:C.muted, textDecoration:"none" }}
+          onMouseEnter={e=>e.currentTarget.style.color=C.red}
+          onMouseLeave={e=>e.currentTarget.style.color=C.muted}
+        >{gig.venue}</Link> · {gig.city}
+      </span>
+    );
+  }
+  return <span style={{ fontSize:13, color:C.muted }}>{gig.venue} · {gig.city}</span>;
+}
+
 // ── Band name link ─────────────────────────────────────────────────
 // Wraps a band name with a link to their profile if slug available
 function BandLink({ name, slug, style={} }) {
@@ -1059,7 +1076,7 @@ function ListView({ gigs, onGigClick, bands=[] }) {
 // ════════════════════════════════════════════════════════════════════
 //  GIG MODAL
 // ════════════════════════════════════════════════════════════════════
-function GigModal({ gig, onClose, bands=[] }) {
+function GigModal({ gig, onClose, bands=[], venues=[] }) {
   if (!gig) return null;
   const color    = GENRE_COLORS[gig.genre]||"#888";
   // Find matching band profile for artist page link
@@ -1092,7 +1109,7 @@ function GigModal({ gig, onClose, bands=[] }) {
             style={{ fontSize:11, color:C.red, textDecoration:"none", letterSpacing:1 }}
           >VIEW ARTIST PAGE →</Link>
         )}
-        <div style={{ fontSize:13, color:C.muted, margin:"6px 0 20px" }}>{gig.venue} · {gig.city}</div>
+        <VenueLink gig={gig} venues={venues} />
         <div style={{ display:"flex", gap:24, marginBottom:20 }}>
           <div>
             <div style={{ fontSize:9, color:C.dim, letterSpacing:2, marginBottom:3 }}>{gig.end_date ? "FROM" : "DATE"}</div>
@@ -1877,6 +1894,178 @@ function EditProfile({ user, profile, onSaved }) {
 
         {status==="success" && <div style={{ marginTop:12, color:C.green, fontSize:13 }}>✓ {msg}</div>}
         {status==="error"   && <div style={{ marginTop:12, color:C.red,   fontSize:13 }}>{msg}</div>}
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  PUBLIC VENUE PROFILE PAGE
+// ════════════════════════════════════════════════════════════════════
+function VenueProfilePage() {
+  const { slug }    = useParams();
+  const navigate    = useNavigate();
+  const [venue,     setVenue]   = useState(null);
+  const [gigs,      setGigs]    = useState([]);
+  const [loading,   setLoading] = useState(true);
+  const today = new Date().toISOString().slice(0,10);
+
+  useEffect(() => {
+    async function load() {
+      setLoading(true);
+      const v = await DB.getVenueBySlug(slug);
+      if (!v) { setLoading(false); return; }
+      setVenue(v);
+      const g = await DB.getGigsByVenue(v.id);
+      setGigs(g);
+      setLoading(false);
+    }
+    load();
+  }, [slug]);
+
+  if (loading) return (
+    <div style={{ minHeight:"100vh", background:C.bg, display:"flex", alignItems:"center", justifyContent:"center" }}>
+      <style>{GLOBAL_CSS}</style>
+      <div style={{ color:C.muted, fontSize:16, fontFamily:F.display, letterSpacing:2 }}>LOADING...</div>
+    </div>
+  );
+
+  if (!venue) return (
+    <div style={{ minHeight:"100vh", background:C.bg, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:20 }}>
+      <style>{GLOBAL_CSS}</style>
+      <div style={{ color:C.white, fontFamily:F.display, fontSize:32, letterSpacing:2 }}>VENUE NOT FOUND</div>
+      <span onClick={()=>navigate("/")} style={{ color:C.red, cursor:"pointer", fontSize:14 }}>← Back to Calendar</span>
+    </div>
+  );
+
+  const upcomingGigs = gigs.filter(g => g.date >= today);
+  const pastGigs     = gigs.filter(g => g.date <  today).reverse();
+
+  const socialLinks = [
+    { url: venue.instagram, icon:"📷", label:"Instagram" },
+    { url: venue.facebook,  icon:"👍", label:"Facebook"  },
+    { url: venue.twitter,   icon:"🐦", label:"X/Twitter" },
+  ].filter(s => s.url);
+
+  return (
+    <div style={{ minHeight:"100vh", background:C.bg, color:C.white, fontFamily:F.body }}>
+      <style>{GLOBAL_CSS}</style>
+
+      {/* Header */}
+      <header style={{ background:"#0a0a0a", borderBottom:`1px solid ${C.border}`, padding:"0 28px", display:"flex", alignItems:"center", justifyContent:"space-between", height:70 }}>
+        <span onClick={()=>navigate("/")} style={{ cursor:"pointer", display:"flex", alignItems:"center", gap:12 }}>
+          <MSMLogo height={50} showWordmark={true} />
+        </span>
+        <span onClick={()=>navigate("/")} style={{ fontSize:12, color:C.muted, cursor:"pointer", letterSpacing:1 }}>
+          ← BACK TO CALENDAR
+        </span>
+      </header>
+
+      {/* Hero */}
+      <div style={{
+        background: venue.photo_url
+          ? `linear-gradient(180deg, rgba(0,0,0,0.6) 0%, #0d0d0d 100%), url(${venue.photo_url}) center/cover`
+          : `linear-gradient(180deg, rgba(232,32,58,0.15) 0%, #0d0d0d 100%)`,
+        borderBottom:`1px solid rgba(232,32,58,0.3)`,
+        padding:"48px 32px 40px",
+      }}>
+        <div style={{ maxWidth:900, margin:"0 auto" }}>
+          <div style={{ fontSize:11, color:C.muted, letterSpacing:3, fontFamily:F.display, marginBottom:8 }}>VENUE</div>
+          <div style={{ fontFamily:F.display, fontSize:48, letterSpacing:2, color:C.white, lineHeight:1, marginBottom:10 }}>
+            {venue.name}
+          </div>
+          <div style={{ display:"flex", gap:16, alignItems:"center", flexWrap:"wrap", marginBottom:20 }}>
+            <span style={{ fontSize:15, color:"#cccccc" }}>📍 {venue.city}</span>
+            <span style={{ fontSize:13, color:C.dim }}>🎸 {gigs.length} gig{gigs.length!==1?"s":""} listed</span>
+          </div>
+
+          {/* Social links */}
+          {socialLinks.length > 0 && (
+            <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom:16 }}>
+              {socialLinks.map(s => (
+                <a key={s.label} href={s.url} target="_blank" rel="noreferrer"
+                  style={{ fontSize:11, color:C.muted, textDecoration:"none", border:`1px solid ${C.border}`, borderRadius:5, padding:"5px 10px", display:"flex", alignItems:"center", gap:5 }}
+                  onMouseEnter={e=>e.currentTarget.style.borderColor=C.red}
+                  onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}
+                >{s.icon} {s.label}</a>
+              ))}
+            </div>
+          )}
+
+          {venue.website && (
+            <a href={venue.website} target="_blank" rel="noreferrer"
+              style={{ fontSize:12, fontFamily:F.display, letterSpacing:2, background:"rgba(255,255,255,0.08)", color:C.white, textDecoration:"none", borderRadius:5, padding:"8px 16px", border:`1px solid ${C.border}`, display:"inline-block" }}
+            >VISIT WEBSITE</a>
+          )}
+        </div>
+      </div>
+
+      {/* Content */}
+      <div style={{ maxWidth:900, margin:"0 auto", padding:"40px 32px" }}>
+
+        {/* Description */}
+        {venue.description && (
+          <div style={{ marginBottom:48 }}>
+            <SectionLabel>ABOUT</SectionLabel>
+            <div style={{ fontSize:16, color:"#dddddd", lineHeight:1.8, maxWidth:700 }}>{venue.description}</div>
+          </div>
+        )}
+
+        {/* Upcoming Gigs */}
+        <div style={{ marginBottom:48 }}>
+          <SectionLabel>UPCOMING GIGS</SectionLabel>
+          {upcomingGigs.length === 0 ? (
+            <div style={{ color:C.dim, fontSize:14 }}>No upcoming gigs listed.</div>
+          ) : (
+            <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+              {upcomingGigs.map(g => {
+                const color = GENRE_COLORS[g.genre] || "#888";
+                return (
+                  <div key={g.id} style={{
+                    display:"flex", alignItems:"center", gap:16, padding:"14px 18px",
+                    background:C.surface, border:`1px solid ${C.border}`,
+                    borderLeft:`3px solid ${color}`, borderRadius:8, flexWrap:"wrap",
+                  }}>
+                    <div style={{ fontFamily:F.display, fontSize:16, color:C.red, letterSpacing:1, minWidth:120 }}>{fmtDate(g.date)}</div>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontSize:15, color:C.white }}>{g.band_name}</div>
+                      <div style={{ fontSize:12, color:C.muted }}>{g.genre} · {g.time}</div>
+                    </div>
+                    <div style={{ display:"flex", gap:8 }}>
+                      {g.tickets && (
+                        <a href={g.tickets} target="_blank" rel="noreferrer"
+                          style={{ fontSize:11, fontFamily:F.display, letterSpacing:2, background:C.red, color:"#fff", textDecoration:"none", borderRadius:4, padding:"6px 12px" }}
+                        >TICKETS</a>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Past Gigs */}
+        {pastGigs.length > 0 && (
+          <div style={{ marginBottom:48 }}>
+            <SectionLabel>PAST GIGS</SectionLabel>
+            <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+              {pastGigs.slice(0,10).map(g => (
+                <div key={g.id} style={{
+                  display:"flex", alignItems:"center", gap:16, padding:"10px 18px",
+                  background:"rgba(255,255,255,0.02)", border:`1px solid ${C.border}`,
+                  borderRadius:6, opacity:0.7, flexWrap:"wrap",
+                }}>
+                  <div style={{ fontFamily:F.display, fontSize:14, color:C.dim, minWidth:120 }}>{fmtDate(g.date)}</div>
+                  <div style={{ flex:1 }}>
+                    <span style={{ fontSize:14, color:"#aaa" }}>{g.band_name}</span>
+                    <span style={{ fontSize:12, color:C.dim, marginLeft:8 }}>{g.genre}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -2882,7 +3071,8 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/artist/:slug" element={<BandProfilePage />} />
-        <Route path="/*" element={<MainApp />} />
+        <Route path="/venue/:slug"  element={<VenueProfilePage />} />
+        <Route path="/*"            element={<MainApp />} />
       </Routes>
     </BrowserRouter>
   );
@@ -2906,6 +3096,7 @@ function MainApp() {
   useEffect(() => {
     DB.getApprovedGigs().then(data=>{ setGigs(data); setLoading(false); });
     DB.getBands().then(setBands);
+    DB.getVenues().then(setVenues);
   }, []);
 
   // Load all gigs when admin logs in
@@ -3103,7 +3294,7 @@ function MainApp() {
         )}
       </div>
 
-      <GigModal gig={selGig} bands={bands} onClose={()=>setSelGig(null)} />
+      <GigModal gig={selGig} bands={bands} venues={venues} onClose={()=>setSelGig(null)} />
     </div>
   );
 }
