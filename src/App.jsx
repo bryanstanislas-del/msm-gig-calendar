@@ -804,7 +804,7 @@ function AdminPanel({ allGigs, onRefresh }) {
               <div style={{ display:"flex", alignItems:"flex-start", gap:12, flexWrap:"wrap" }}>
                 <div style={{ flex:1, minWidth:200 }}>
                   <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", marginBottom:4 }}>
-                    <span style={{ fontFamily:F.display, fontSize:16, letterSpacing:1.5, color:C.white }}>{g.band_name}</span>
+                    {(() => { const bp = bands.find(b=>b.band_name?.toLowerCase()===g.band_name?.toLowerCase()); return bp?.band_slug ? <Link to={`/artist/${bp.band_slug}`} style={{ fontFamily:F.display, fontSize:16, letterSpacing:1.5, color:C.white, textDecoration:"none" }} onMouseEnter={e=>e.currentTarget.style.color=C.red} onMouseLeave={e=>e.currentTarget.style.color=C.white}>{g.band_name}</Link> : <span style={{ fontFamily:F.display, fontSize:16, letterSpacing:1.5, color:C.white }}>{g.band_name}</span>; })()}
                     <StatusBadge status={g.status} />
                     <Badge label={g.genre} color={color} />
               {g.is_recurring && <Badge label="↻" color={C.amber} />}
@@ -867,7 +867,7 @@ function FiltersBar({ gigs, filters, setFilters, onExport }) {
 // ════════════════════════════════════════════════════════════════════
 //  CALENDAR VIEW
 // ════════════════════════════════════════════════════════════════════
-function CalendarView({ gigs, onGigClick }) {
+function CalendarView({ gigs, onGigClick, bands=[] }) {
   const todayStr = today();
   const [y, setY] = useState(new Date().getFullYear());
   const [m, setM] = useState(new Date().getMonth());
@@ -972,7 +972,7 @@ function CalendarView({ gigs, onGigClick }) {
 // ════════════════════════════════════════════════════════════════════
 //  LIST VIEW
 // ════════════════════════════════════════════════════════════════════
-function ListView({ gigs, onGigClick }) {
+function ListView({ gigs, onGigClick, bands=[] }) {
   const sorted = [...gigs].sort((a,b)=>a.date.localeCompare(b.date));
   if (!sorted.length) return <div style={{ color:C.dim, fontSize:13, padding:"24px 0" }}>No gigs match your filters.</div>;
   return (
@@ -989,7 +989,7 @@ function ListView({ gigs, onGigClick }) {
             onMouseLeave={e=>e.currentTarget.style.background="rgba(255,255,255,0.02)"}
           >
             <div style={{ flex:1 }}>
-              <div style={{ fontFamily:F.display, fontSize:15, letterSpacing:1.5, color:C.white }}>{g.band_name}</div>
+              {(() => { const bp = bands.find(b=>b.band_name?.toLowerCase()===g.band_name?.toLowerCase()); return bp?.band_slug ? <Link to={`/artist/${bp.band_slug}`} style={{ fontFamily:F.display, fontSize:15, letterSpacing:1.5, color:C.white, textDecoration:"none", display:"block" }} onMouseEnter={e=>e.currentTarget.style.color=C.red} onMouseLeave={e=>e.currentTarget.style.color=C.white}>{g.band_name}</Link> : <div style={{ fontFamily:F.display, fontSize:15, letterSpacing:1.5, color:C.white }}>{g.band_name}</div>; })()}
               <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>{g.venue} · {g.city}</div>
             </div>
             <Badge label={g.genre} color={color} />
@@ -1009,9 +1009,13 @@ function ListView({ gigs, onGigClick }) {
 // ════════════════════════════════════════════════════════════════════
 //  GIG MODAL
 // ════════════════════════════════════════════════════════════════════
-function GigModal({ gig, onClose }) {
+function GigModal({ gig, onClose, bands=[] }) {
   if (!gig) return null;
-  const color = GENRE_COLORS[gig.genre]||"#888";
+  const color    = GENRE_COLORS[gig.genre]||"#888";
+  // Find matching band profile for artist page link
+  const bandProfile = bands.find(b =>
+    b.band_name?.toLowerCase() === gig.band_name?.toLowerCase()
+  );
   return (
     <div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.85)", zIndex:300,
       display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
@@ -1023,7 +1027,21 @@ function GigModal({ gig, onClose }) {
         <button onClick={onClose} style={{ position:"absolute", top:14, right:16, background:"none", border:"none", color:C.muted, fontSize:20, cursor:"pointer" }}>✕</button>
         <Badge label={gig.genre} color={color} />
         {gig.is_recurring && <Badge label={`↻ ${gig.recurrence}`} color={C.amber} />}
-        <div style={{ fontFamily:F.display, fontSize:30, letterSpacing:2, color:C.white, marginTop:10, lineHeight:1 }}>{gig.band_name}</div>
+        <div style={{ fontFamily:F.display, fontSize:30, letterSpacing:2, color:C.white, marginTop:10, lineHeight:1 }}>
+          {bandProfile?.band_slug
+            ? <Link to={`/artist/${bandProfile.band_slug}`} onClick={onClose}
+                style={{ color:C.white, textDecoration:"none" }}
+                onMouseEnter={e=>e.currentTarget.style.color=C.red}
+                onMouseLeave={e=>e.currentTarget.style.color=C.white}
+              >{gig.band_name}</Link>
+            : gig.band_name
+          }
+        </div>
+        {bandProfile?.band_slug && (
+          <Link to={`/artist/${bandProfile.band_slug}`} onClick={onClose}
+            style={{ fontSize:11, color:C.red, textDecoration:"none", letterSpacing:1 }}
+          >VIEW ARTIST PAGE →</Link>
+        )}
         <div style={{ fontSize:13, color:C.muted, margin:"6px 0 20px" }}>{gig.venue} · {gig.city}</div>
         <div style={{ display:"flex", gap:24, marginBottom:20 }}>
           <div>
@@ -2621,9 +2639,10 @@ function MainApp() {
 
   const isAdmin = auth?.profile?.role === "admin";
 
-  // Load public gigs on mount
+  // Load public gigs and bands on mount
   useEffect(() => {
     DB.getApprovedGigs().then(data=>{ setGigs(data); setLoading(false); });
+    DB.getBands().then(setBands);
   }, []);
 
   // Load all gigs when admin logs in
@@ -2797,8 +2816,8 @@ function MainApp() {
                     onExport={()=>exportICal(filteredGigs)}
                   />
                   {tab==="calendar"
-                    ? <CalendarView gigs={filteredGigs} onGigClick={setSelGig} />
-                    : <ListView     gigs={filteredGigs} onGigClick={setSelGig} />
+                    ? <CalendarView gigs={filteredGigs} onGigClick={setSelGig} bands={bands} />
+                    : <ListView     gigs={filteredGigs} onGigClick={setSelGig} bands={bands} />
                   }
                   <div style={{ marginTop:16, fontSize:13, color:C.dim }}>
                     Showing {filteredGigs.length} of {gigs.length} gigs
@@ -2812,7 +2831,7 @@ function MainApp() {
         )}
       </div>
 
-      <GigModal gig={selGig} onClose={()=>setSelGig(null)} />
+      <GigModal gig={selGig} bands={bands} onClose={()=>setSelGig(null)} />
     </div>
   );
 }
