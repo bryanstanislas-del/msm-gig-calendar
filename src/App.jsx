@@ -1271,10 +1271,15 @@ function AdminBands({ bands, onRefresh }) {
 
       showMsg(`✓ Band account created! Slug: ${slugData}`);
       setCreateForm(emptyCreate);
+
+      // Fetch fresh band data and go straight to edit
+      const { data: newBand } = await supabase.from("profiles").select("*").eq("id", user.id);
       if (onRefresh) await onRefresh();
-      // Go straight to editing the new band profile
-      const { data: newBand } = await supabase.from("profiles").select("*").eq("id", user.id).single();
-      if (newBand) { openEdit(newBand); } else { setView("list"); }
+      if (newBand && newBand[0]) {
+        openEdit(newBand[0]);
+      } else {
+        setView("list");
+      }
     } catch(e) {
       showMsg(e.message, "error");
     }
