@@ -178,14 +178,16 @@ const DB = {
     return data[0];
   },
 
-  async getGigsByBand(bandName) {
+  async getGigsByBand(bandName, bandProfileId) {
     if (USE_MOCK) return MOCK_GIGS.filter(g => g.band_name === bandName && g.status === "approved");
-    const { data, error } = await supabase
-      .from("gigs")
-      .select("*")
-      .eq("band_name", bandName)
-      .eq("status", "approved")
-      .order("date", { ascending: true });
+    // Prefer ID-based lookup, fall back to name match
+    let query = supabase.from("gigs").select("*").eq("status","approved").order("date", { ascending: true });
+    if (bandProfileId) {
+      query = query.eq("band_profile_id", bandProfileId);
+    } else {
+      query = query.ilike("band_name", bandName.trim());
+    }
+    const { data, error } = await query;
     if (error) return [];
     return data;
   },
@@ -215,13 +217,18 @@ const DB = {
     return data;
   },
 
-  async submitGig(gig, userId) {
+  async submitGig(gig, userId, bandProfileId) {
     if (USE_MOCK) {
       const newGig = { ...gig, id: String(mockIdCounter++), status:"pending", submitted_by: userId };
       MOCK_GIGS.push(newGig);
       return newGig;
     }
-    const { data, error } = await supabase.from("gigs").insert({ ...gig, submitted_by: userId, status:"pending" }).select();
+    const { data, error } = await supabase.from("gigs").insert({
+      ...gig,
+      submitted_by:    userId,
+      status:          "pending",
+      band_profile_id: bandProfileId || null,
+    }).select();
     if (error) throw new Error(error.message);
     return data[0];
   },
@@ -235,6 +242,49 @@ const DB = {
     const { data, error } = await supabase.from("gigs").update({ status }).eq("id", gigId).select();
     if (error) throw new Error(error.message);
     return data[0];
+  },
+
+  async getVenues() {
+    if (USE_MOCK) return [];
+    const { data, error } = await supabase
+      .from("venues")
+      .select("*")
+      .order("name");
+    if (error) throw new Error(error.message);
+    return data;
+  },
+
+  async getVenueBySlug(slug) {
+    if (USE_MOCK) return null;
+    const { data, error } = await supabase
+      .from("venues")
+      .select("*")
+      .eq("slug", slug);
+    if (error || !data || data.length === 0) return null;
+    return data[0];
+  },
+
+  async updateVenue(venueId, updates) {
+    if (USE_MOCK) return updates;
+    const { data, error } = await supabase
+      .from("venues")
+      .update(updates)
+      .eq("id", venueId)
+      .select();
+    if (error) throw new Error(error.message);
+    return data[0];
+  },
+
+  async getGigsByVenue(venueId) {
+    if (USE_MOCK) return [];
+    const { data, error } = await supabase
+      .from("gigs")
+      .select("*")
+      .eq("venue_id", venueId)
+      .eq("status", "approved")
+      .order("date", { ascending: true });
+    if (error) return [];
+    return data;
   },
 
   async deleteGig(gigId) {
@@ -620,7 +670,7 @@ function SubmitGigForm({ user, profile, onSubmitted, onEditProfile }) {
     if (Object.keys(e).length) { setErrors(e); return; }
     setStatus("loading");
     try {
-      await DB.submitGig(form, user.id);
+      await DB.submitGig(form, user.id, profile?.id);
       // Send email notification
       try {
         await fetch("/api/notify", {
@@ -1849,7 +1899,7 @@ function BandProfilePage() {
       const b = await DB.getBandBySlug(slug);
       if (!b) { setLoading(false); return; }
       setBand(b);
-      const g = await DB.getGigsByBand(b.band_name);
+      const g = await DB.getGigsByBand(b.band_name, b.id);
       setGigs(g);
       setLoading(false);
     }
@@ -2351,17 +2401,18 @@ function BulkImport({ bands, onImported }) {
         } catch(slugErr) { console.warn("Slug generation failed:", slugErr); }
 
         const { error } = await supabase.from("gigs").insert({
-          band_name:    selectedBandObj?.band_name || "",
-          venue:        row.venue,
-          city:         row.city,
-          date:         row.date,
-          time:         row.time || "20:00",
-          genre:        row.genre || "Other",
-          status:       "approved",
-          submitted_by: userId,
-          slug:         slugData || null,
-          notes:        row.description || "",
-          tickets:      "",
+          band_name:       selectedBandObj?.band_name || "",
+          venue:           row.venue,
+          city:            row.city,
+          date:            row.date,
+          time:            row.time || "20:00",
+          genre:           row.genre || "Other",
+          status:          "approved",
+          submitted_by:    userId,
+          slug:            slugData || null,
+          notes:           row.description || "",
+          tickets:         "",
+          band_profile_id: selectedBand || null,
         });
 
         if (error) {
