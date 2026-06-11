@@ -1096,7 +1096,7 @@ function AdminPanel({ allGigs, onRefresh, bands=[] }) {
               <div style={{ display:"flex", alignItems:"flex-start", gap:12, flexWrap:"wrap" }}>
                 <div style={{ flex:1, minWidth:200 }}>
                   <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", marginBottom:4 }}>
-                    {(() => { const bp = bands.find(b=>b.band_name?.toLowerCase()===g.band_name?.toLowerCase()); return bp?.band_slug ? <Link to={`/artist/${bp.band_slug}`} style={{ fontFamily:F.display, fontSize:16, letterSpacing:1.5, color:C.white, textDecoration:"none" }} onMouseEnter={e=>e.currentTarget.style.color=C.red} onMouseLeave={e=>e.currentTarget.style.color=C.white}>{g.band_name}</Link> : <span style={{ fontFamily:F.display, fontSize:16, letterSpacing:1.5, color:C.white }}>{g.band_name}</span>; })()}
+                    {(() => { const bp = g.band_profile_id ? bands.find(b=>b.id===g.band_profile_id) : bands.find(b=>b.band_name?.toLowerCase()===g.band_name?.toLowerCase()); return bp?.band_slug ? <Link to={`/artist/${bp.band_slug}`} style={{ fontFamily:F.display, fontSize:16, letterSpacing:1.5, color:C.white, textDecoration:"none" }} onMouseEnter={e=>e.currentTarget.style.color=C.red} onMouseLeave={e=>e.currentTarget.style.color=C.white}>{g.band_name}</Link> : <span style={{ fontFamily:F.display, fontSize:16, letterSpacing:1.5, color:C.white }}>{g.band_name}</span>; })()}
                     <StatusBadge status={g.status} />
                     <Badge label={g.genre} color={color} />
                     {g.featured && <Badge label="★ FEATURED" color={C.amber} />}
@@ -1286,7 +1286,7 @@ function ListView({ gigs, onGigClick, bands=[] }) {
             onMouseLeave={e=>e.currentTarget.style.background="rgba(255,255,255,0.02)"}
           >
             <div style={{ flex:1 }}>
-              {(() => { const bp = bands.find(b=>b.band_name?.toLowerCase()===g.band_name?.toLowerCase()); return bp?.band_slug ? <Link to={`/artist/${bp.band_slug}`} style={{ fontFamily:F.display, fontSize:15, letterSpacing:1.5, color:C.white, textDecoration:"none", display:"block" }} onMouseEnter={e=>e.currentTarget.style.color=C.red} onMouseLeave={e=>e.currentTarget.style.color=C.white}>{g.band_name}</Link> : <div style={{ fontFamily:F.display, fontSize:15, letterSpacing:1.5, color:C.white }}>{g.band_name}</div>; })()}
+              {(() => { const bp = g.band_profile_id ? bands.find(b=>b.id===g.band_profile_id) : bands.find(b=>b.band_name?.toLowerCase()===g.band_name?.toLowerCase()); return bp?.band_slug ? <Link to={`/artist/${bp.band_slug}`} style={{ fontFamily:F.display, fontSize:15, letterSpacing:1.5, color:C.white, textDecoration:"none", display:"block" }} onMouseEnter={e=>e.currentTarget.style.color=C.red} onMouseLeave={e=>e.currentTarget.style.color=C.white}>{g.band_name}</Link> : <div style={{ fontFamily:F.display, fontSize:15, letterSpacing:1.5, color:C.white }}>{g.band_name}</div>; })()}
               <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>{g.venue} · {g.city}</div>
             </div>
             <Badge label={g.genre} color={color} />
@@ -1310,9 +1310,10 @@ function GigModal({ gig, onClose, bands=[], venues=[] }) {
   if (!gig) return null;
   const color    = GENRE_COLORS[gig.genre]||"#888";
   // Find matching band profile for artist page link
-  const bandProfile = bands.find(b =>
-    b.band_name?.toLowerCase() === gig.band_name?.toLowerCase()
-  );
+  // Prefer ID-based lookup, fall back to name matching
+  const bandProfile = gig.band_profile_id
+    ? bands.find(b => b.id === gig.band_profile_id)
+    : bands.find(b => b.band_name?.toLowerCase() === gig.band_name?.toLowerCase());
   return (
     <div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.85)", zIndex:300,
       display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
@@ -1901,6 +1902,7 @@ function AdminBands({ bands, onRefresh }) {
       secondary_genre:     band.secondary_genre     || "",
       tertiary_genre:      band.tertiary_genre      || "",
       bio:                 band.bio                 || "",
+      photo_url:           band.photo_url           || "",
       website:             band.website             || "",
       spotify:             band.spotify             || "",
       instagram:           band.instagram           || "",
@@ -2221,6 +2223,15 @@ function AdminBands({ bands, onRefresh }) {
             <textarea value={editForm.bio} onChange={setE("bio")} rows={4}
               style={{ ...inputCss, resize:"vertical" }}
               placeholder="Band biography..."
+            />
+          </div>
+
+          <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8 }}>PROFILE PHOTO</div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <PhotoUpload
+              userId={selected.id}
+              currentUrl={editForm.photo_url}
+              onUploaded={(url) => setEditForm(f=>({...f, photo_url:url}))}
             />
           </div>
 
