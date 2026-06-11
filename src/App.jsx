@@ -3023,168 +3023,186 @@ function AdminVenues({ venues, allGigs, onRefresh }) {
 // ════════════════════════════════════════════════════════════════════
 //  ADMIN BACKUPS
 // ════════════════════════════════════════════════════════════════════
-function AdminBackups({ bands, allGigs, venues }) {
-  const [lastExport, setLastExport] = useState(
-    localStorage.getItem("msm_last_export_iso") || null
-  );
-  const [storageStats, setStorageStats] = useState(null);
-  const [exporting, setExporting] = useState("");
+function AdminBackups({ bands, allGigs, venues, currentUser }) {
+  const [backupHistory,  setBackupHistory]  = useState([]);
+  const [verifyLog,      setVerifyLog]      = useState([]);
+  const [storageStats,   setStorageStats]   = useState(null);
+  const [exporting,      setExporting]      = useState("");
+  const [verifying,      setVerifying]      = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(true);
 
-  // ── Timestamp helpers ──
-  const fmtTimestamp = (iso) => {
+  // ── Load history and verify log ──
+  useEffect(() => {
+    async function load() {
+      setLoadingHistory(true);
+      const { data: hist }   = await supabase.from("backup_log").select("*").order("exported_at", { ascending:false }).limit(10);
+      const { data: verify } = await supabase.from("backup_verify_log").select("*").order("verified_at", { ascending:false }).limit(1);
+      setBackupHistory(hist || []);
+      setVerifyLog(verify || []);
+      setLoadingHistory(false);
+    }
+    load();
+    loadStorage();
+  }, []);
+
+  async function loadStorage() {
+    try {
+      const { data: items } = await supabase.storage.from("band-photos").list("", { limit:1000 });
+      let total = 0;
+      if (items) {
+        for (const item of items) {
+          if (!item.id) {
+            const { data: files } = await supabase.storage.from("band-photos").list(item.name, { limit:100 });
+            total += files?.length || 0;
+          } else total++;
+        }
+      }
+      setStorageStats({ bandPhotos: total, venuePhotos: 0, total });
+    } catch(e) {
+      setStorageStats({ bandPhotos: 0, venuePhotos: 0, total: 0 });
+    }
+  }
+
+  // ── Helpers ──
+  const fmtDT = (iso) => {
     if (!iso) return null;
-    const d = new Date(iso);
-    return d.toLocaleString("en-GB", { day:"2-digit", month:"2-digit", year:"numeric", hour:"2-digit", minute:"2-digit", second:"2-digit" });
+    return new Date(iso).toLocaleString("en-GB", { day:"2-digit", month:"2-digit", year:"numeric", hour:"2-digit", minute:"2-digit", second:"2-digit" });
   };
 
-  const fileTimestamp = () => {
-    const d = new Date();
-    const yr = d.getFullYear();
-    const mo = String(d.getMonth()+1).padStart(2,"0");
-    const dy = String(d.getDate()).padStart(2,"0");
-    const hr = String(d.getHours()).padStart(2,"0");
-    const mn = String(d.getMinutes()).padStart(2,"0");
-    return `${yr}-${mo}-${dy}-${hr}${mn}`;
+  const fileTS = () => {
+    const d  = new Date();
+    const p  = n => String(n).padStart(2,"0");
+    return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
   };
 
   const nowISO = () => new Date().toISOString();
 
-  const markExported = () => {
-    const iso = nowISO();
-    localStorage.setItem("msm_last_export_iso", iso);
-    setLastExport(iso);
-  };
+  const lastExport  = backupHistory[0] || null;
+  const lastVerify  = verifyLog[0]     || null;
 
   // ── Backup health ──
-  const backupHealth = () => {
-    if (!lastExport) return { status:"critical", color:C.red,   icon:"🔴", label:"CRITICAL", desc:"No backup on record" };
-    const days = (Date.now() - new Date(lastExport).getTime()) / (1000*60*60*24);
-    if (days < 7)  return { status:"healthy",  color:C.green,  icon:"🟢", label:"HEALTHY",  desc:`Last export ${Math.floor(days)} day${Math.floor(days)!==1?"s":""} ago` };
-    if (days < 30) return { status:"warning",  color:C.amber,  icon:"🟠", label:"WARNING",  desc:`Last export ${Math.floor(days)} days ago — backup recommended` };
-    return             { status:"critical", color:C.red,   icon:"🔴", label:"CRITICAL", desc:`Last export ${Math.floor(days)} days ago — backup overdue` };
+  const health = () => {
+    if (!lastExport) return { color:C.red,   icon:"🔴", label:"CRITICAL", desc:"No backup on record — export now" };
+    const days = (Date.now() - new Date(lastExport.exported_at).getTime()) / (1000*60*60*24);
+    if (days < 7)  return { color:C.green,  icon:"🟢", label:"HEALTHY",  desc:`Last export ${Math.floor(days)} day${Math.floor(days)!==1?"s":""} ago` };
+    if (days < 30) return { color:C.amber,  icon:"🟠", label:"WARNING",  desc:`Last export ${Math.floor(days)} days ago — backup recommended` };
+    return               { color:C.red,   icon:"🔴", label:"CRITICAL", desc:`Last export ${Math.floor(days)} days ago — backup overdue` };
   };
 
-  // ── Next recommended backup ──
   const nextBackup = () => {
     if (!lastExport) return "Now";
-    const d = new Date(lastExport);
+    const d = new Date(lastExport.exported_at);
     d.setDate(d.getDate() + 7);
-    return d.toLocaleDateString("en-GB", { day:"2-digit", month:"2-digit", year:"numeric" });
+    return d.toLocaleDateString("en-GB");
   };
 
-  // ── Load storage stats ──
-  useEffect(() => {
-    async function loadStorage() {
-      try {
-        const { data: bandPhotos } = await supabase.storage.from("band-photos").list("", { limit:1000 });
-        const bandCount = bandPhotos?.length || 0;
-        // Count files across all user folders
-        let totalFiles = 0;
-        if (bandPhotos) {
-          for (const folder of bandPhotos) {
-            if (folder.id === null) { // it's a folder
-              const { data: files } = await supabase.storage.from("band-photos").list(folder.name, { limit:100 });
-              totalFiles += files?.length || 0;
-            } else {
-              totalFiles++;
-            }
-          }
-        }
-        setStorageStats({ bandPhotos: totalFiles, venuePhotos: 0, total: totalFiles });
-      } catch(e) {
-        setStorageStats({ bandPhotos: 0, venuePhotos: 0, total: 0 });
-      }
-    }
-    loadStorage();
-  }, []);
+  const recoveryFiles = backupHistory.length;
 
-  // ── Metadata wrapper ──
-  const wrapMeta = (data, type) => ({
-    backup_version: "1.0",
-    exported_at:    nowISO(),
-    platform:       "Music Scene Magazine",
-    type,
-    meta: {
-      total_bands:  bands.length,
-      total_gigs:   allGigs.length,
-      total_venues: venues.length,
-    },
-    ...data,
-  });
+  // ── Log backup to Supabase ──
+  const logBackup = async (type, filename, counts) => {
+    const { data: u } = await supabase.auth.getUser();
+    await supabase.from("backup_log").insert({
+      export_type:   type,
+      filename,
+      exported_by:   u?.user?.id || null,
+      record_counts: counts,
+    });
+    const { data: hist } = await supabase.from("backup_log").select("*").order("exported_at", { ascending:false }).limit(10);
+    setBackupHistory(hist || []);
+  };
+
+  // ── Mark as verified ──
+  const markVerified = async () => {
+    setVerifying(true);
+    const { data: u } = await supabase.auth.getUser();
+    const { data: profile } = await supabase.from("profiles").select("band_name").eq("id", u?.user?.id || "").single();
+    await supabase.from("backup_verify_log").insert({
+      verified_by:      u?.user?.id || null,
+      verified_by_name: profile?.band_name || u?.user?.email || "Administrator",
+      status:           "verified",
+    });
+    const { data: verify } = await supabase.from("backup_verify_log").select("*").order("verified_at", { ascending:false }).limit(1);
+    setVerifyLog(verify || []);
+    setVerifying(false);
+  };
 
   // ── Download helpers ──
   const downloadJSON = (data, filename) => {
     const blob = new Blob([JSON.stringify(data, null, 2)], { type:"application/json" });
     const url  = URL.createObjectURL(blob);
-    const a    = document.createElement("a");
-    a.href = url; a.download = filename; a.click();
+    const a    = document.createElement("a"); a.href=url; a.download=filename; a.click();
     URL.revokeObjectURL(url);
   };
 
   const downloadCSV = (rows, filename) => {
     if (!rows.length) return;
     const keys   = Object.keys(rows[0]);
-    const escape = v => {
-      if (v == null) return "";
-      const s = String(v).replace(/"/g, '""');
-      return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s}"` : s;
-    };
-    const lines = rows.map(r => keys.map(k => escape(r[k])).join(","));
-    const csv   = [keys.join(","), ...lines].join("\n");
-    const blob  = new Blob([csv], { type:"text/csv" });
-    const url   = URL.createObjectURL(blob);
-    const a     = document.createElement("a");
-    a.href = url; a.download = filename; a.click();
+    const escape = v => { if (v==null) return ""; const s=String(v).replace(/"/g,'""'); return s.includes(",")||s.includes('"')||s.includes("\n")?`"${s}"`:s; };
+    const csv    = [keys.join(","), ...rows.map(r=>keys.map(k=>escape(r[k])).join(","))].join("\n");
+    const blob   = new Blob([csv], { type:"text/csv" });
+    const url    = URL.createObjectURL(blob);
+    const a      = document.createElement("a"); a.href=url; a.download=filename; a.click();
     URL.revokeObjectURL(url);
   };
 
+  const wrapMeta = (data, type) => ({
+    backup_version: "1.0",
+    exported_at:    nowISO(),
+    platform:       "Music Scene Magazine",
+    type,
+    meta: {
+      total_bands:   bands.length,
+      total_gigs:    allGigs.length,
+      total_venues:  venues.length,
+    },
+    ...data,
+  });
+
   // ── Export functions ──
-  const exportBandsJSON = () => {
-    setExporting("bands-json");
-    downloadJSON(wrapMeta({ bands }, "bands"), `MSM-Bands-${fileTimestamp()}.json`);
-    markExported(); setExporting("");
+  const doExport = async (type, label, jsonFn, csvFn, counts) => {
+    const fn = jsonFn ? `MSM-${label}-${fileTS()}.json` : `MSM-${label}-${fileTS()}.csv`;
+    if (jsonFn) jsonFn(fn); else csvFn(fn);
+    await logBackup(type, fn, counts);
   };
-  const exportBandsCSV = () => {
-    setExporting("bands-csv");
-    downloadCSV(bands, `MSM-Bands-${fileTimestamp()}.csv`);
-    markExported(); setExporting("");
-  };
-  const exportGigsJSON = () => {
-    setExporting("gigs-json");
-    downloadJSON(wrapMeta({ gigs: allGigs }, "gigs"), `MSM-Gigs-${fileTimestamp()}.json`);
-    markExported(); setExporting("");
-  };
-  const exportGigsCSV = () => {
-    setExporting("gigs-csv");
-    downloadCSV(allGigs, `MSM-Gigs-${fileTimestamp()}.csv`);
-    markExported(); setExporting("");
-  };
-  const exportVenuesJSON = () => {
-    setExporting("venues-json");
-    downloadJSON(wrapMeta({ venues }, "venues"), `MSM-Venues-${fileTimestamp()}.json`);
-    markExported(); setExporting("");
-  };
-  const exportVenuesCSV = () => {
-    setExporting("venues-csv");
-    downloadCSV(venues, `MSM-Venues-${fileTimestamp()}.csv`);
-    markExported(); setExporting("");
-  };
+
+  const exportBandsJSON   = async () => { setExporting("bands-json");  const fn=`MSM-Bands-${fileTS()}.json`;   downloadJSON(wrapMeta({bands},"bands"),fn);   await logBackup("bands",fn,{bands:bands.length});   setExporting(""); };
+  const exportBandsCSV    = async () => { setExporting("bands-csv");   const fn=`MSM-Bands-${fileTS()}.csv`;    downloadCSV(bands,fn);                         await logBackup("bands",fn,{bands:bands.length});   setExporting(""); };
+  const exportGigsJSON    = async () => { setExporting("gigs-json");   const fn=`MSM-Gigs-${fileTS()}.json`;    downloadJSON(wrapMeta({gigs:allGigs},"gigs"),fn); await logBackup("gigs",fn,{gigs:allGigs.length});  setExporting(""); };
+  const exportGigsCSV     = async () => { setExporting("gigs-csv");    const fn=`MSM-Gigs-${fileTS()}.csv`;     downloadCSV(allGigs,fn);                        await logBackup("gigs",fn,{gigs:allGigs.length});  setExporting(""); };
+  const exportVenuesJSON  = async () => { setExporting("venues-json"); const fn=`MSM-Venues-${fileTS()}.json`;  downloadJSON(wrapMeta({venues},"venues"),fn);   await logBackup("venues",fn,{venues:venues.length}); setExporting(""); };
+  const exportVenuesCSV   = async () => { setExporting("venues-csv");  const fn=`MSM-Venues-${fileTS()}.csv`;   downloadCSV(venues,fn);                         await logBackup("venues",fn,{venues:venues.length}); setExporting(""); };
 
   const exportEverything = async () => {
     setExporting("all");
     const { data: profiles } = await supabase.from("profiles").select("*").eq("role","band");
-    const backup = wrapMeta({
+    const bandsWithRel  = allGigs.filter(g=>g.band_profile_id).length;
+    const venuesWithRel = allGigs.filter(g=>g.venue_id).length;
+    const backup = {
+      backup_version: "1.0",
+      exported_at:    nowISO(),
+      platform:       "Music Scene Magazine",
+      type:           "full",
+      meta: {
+        total_bands:        bands.length,
+        total_gigs:         allGigs.length,
+        total_venues:       venues.length,
+        total_profiles:     profiles?.length || 0,
+        band_photos:        storageStats?.bandPhotos || 0,
+        gigs_with_band_id:  bandsWithRel,
+        gigs_with_venue_id: venuesWithRel,
+      },
       bands,
       gigs:     allGigs,
       venues,
       profiles: profiles || [],
-    }, "full");
-    downloadJSON(backup, `MSM-Full-Backup-${fileTimestamp()}.json`);
-    markExported();
+    };
+    const fn = `MSM-Full-Backup-${fileTS()}.json`;
+    downloadJSON(backup, fn);
+    await logBackup("full", fn, backup.meta);
     setExporting("");
   };
 
-  const health = backupHealth();
+  const h = health();
 
   const ExportCard = ({ title, icon, count, unit, onJSON, onCSV, id }) => (
     <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderTop:`3px solid ${C.red}`, borderRadius:8, padding:24 }}>
@@ -3196,15 +3214,14 @@ function AdminBackups({ bands, allGigs, venues }) {
         </div>
       </div>
       <div style={{ display:"flex", gap:8 }}>
-        <Btn onClick={onJSON} disabled={!!exporting} style={{ flex:1, padding:"10px" }}>
-          {exporting===`${id}-json` ? "..." : "↓ JSON"}
-        </Btn>
-        <Btn variant="ghost" onClick={onCSV} disabled={!!exporting} style={{ flex:1, padding:"10px" }}>
-          {exporting===`${id}-csv` ? "..." : "↓ CSV"}
-        </Btn>
+        <Btn onClick={onJSON} disabled={!!exporting} style={{ flex:1, padding:"10px" }}>{exporting===`${id}-json`?"...":"↓ JSON"}</Btn>
+        <Btn variant="ghost" onClick={onCSV} disabled={!!exporting} style={{ flex:1, padding:"10px" }}>{exporting===`${id}-csv`?"...":"↓ CSV"}</Btn>
       </div>
     </div>
   );
+
+  const typeLabel = t => ({ full:"Full Platform", bands:"Bands", gigs:"Gigs", venues:"Venues" }[t] || t);
+  const typeColor = t => ({ full:C.red, bands:"#9b59b6", gigs:C.green, venues:C.amber }[t] || "#888");
 
   return (
     <div>
@@ -3212,60 +3229,147 @@ function AdminBackups({ bands, allGigs, venues }) {
 
       {/* Migration warning */}
       <div style={{ marginBottom:24, padding:16, background:"rgba(244,162,97,0.08)", border:`1px solid ${C.amber}`, borderRadius:8 }}>
-        <div style={{ fontFamily:F.display, fontSize:13, color:C.amber, letterSpacing:2, marginBottom:6 }}>
-          ⚠ BEFORE ANY SQL MIGRATION OR DATABASE CHANGES
-        </div>
+        <div style={{ fontFamily:F.display, fontSize:13, color:C.amber, letterSpacing:2, marginBottom:6 }}>⚠ BEFORE ANY SQL MIGRATION OR DATABASE CHANGES</div>
         <div style={{ fontSize:13, color:"#ccc", lineHeight:1.7 }}>
           Always export a full backup before running SQL migrations or making database changes.
           You are on Supabase Free — there are no automated backups. This export is your only safety net.
         </div>
       </div>
 
-      {/* Health + stats strip */}
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(160px,1fr))", gap:12, marginBottom:28 }}>
-        {/* Backup health */}
-        <div style={{ background:C.surfaceHigh, border:`2px solid ${health.color}`, borderRadius:8, padding:"14px 16px", gridColumn:"span 2" }}>
-          <div style={{ fontSize:9, color:C.muted, letterSpacing:2, fontFamily:F.display, marginBottom:6 }}>BACKUP HEALTH</div>
-          <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-            <span style={{ fontSize:22 }}>{health.icon}</span>
-            <div>
-              <div style={{ fontFamily:F.display, fontSize:16, color:health.color, letterSpacing:2 }}>{health.label}</div>
-              <div style={{ fontSize:12, color:C.muted, marginTop:2 }}>{health.desc}</div>
+      {/* RECOVERY STATUS */}
+      <div style={{ marginBottom:24, padding:20, background:C.surface, border:`1px solid ${C.border}`, borderTop:`3px solid ${h.color}`, borderRadius:8 }}>
+        <div style={{ fontFamily:F.display, fontSize:14, color:C.white, letterSpacing:2, marginBottom:16 }}>RECOVERY STATUS</div>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(180px,1fr))", gap:12 }}>
+          {/* Health */}
+          <div style={{ padding:"12px 14px", background:C.surfaceHigh, border:`1px solid ${h.color}40`, borderRadius:6 }}>
+            <div style={{ fontSize:9, color:C.muted, letterSpacing:2, fontFamily:F.display, marginBottom:6 }}>BACKUP HEALTH</div>
+            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+              <span style={{ fontSize:18 }}>{h.icon}</span>
+              <div>
+                <div style={{ fontFamily:F.display, fontSize:13, color:h.color }}>{h.label}</div>
+                <div style={{ fontSize:11, color:C.dim, marginTop:1 }}>{h.desc}</div>
+              </div>
             </div>
           </div>
+          {/* Last export */}
+          <div style={{ padding:"12px 14px", background:C.surfaceHigh, border:`1px solid ${C.border}`, borderRadius:6 }}>
+            <div style={{ fontSize:9, color:C.muted, letterSpacing:2, fontFamily:F.display, marginBottom:6 }}>LAST EXPORT</div>
+            <div style={{ fontSize:13, color: lastExport ? C.green : C.amber, fontFamily:F.display }}>
+              {lastExport ? fmtDT(lastExport.exported_at) : "NEVER"}
+            </div>
+            {lastExport && <div style={{ fontSize:10, color:C.dim, marginTop:2 }}>{typeLabel(lastExport.export_type)}</div>}
+          </div>
+          {/* Last verified */}
+          <div style={{ padding:"12px 14px", background:C.surfaceHigh, border:`1px solid ${C.border}`, borderRadius:6 }}>
+            <div style={{ fontSize:9, color:C.muted, letterSpacing:2, fontFamily:F.display, marginBottom:6 }}>LAST VERIFIED RESTORE TEST</div>
+            {lastVerify ? (
+              <>
+                <div style={{ fontSize:13, color:C.green, fontFamily:F.display }}>{fmtDT(lastVerify.verified_at)}</div>
+                <div style={{ fontSize:10, color:C.dim, marginTop:2 }}>Verified by {lastVerify.verified_by_name}</div>
+              </>
+            ) : (
+              <div style={{ fontSize:13, color:C.amber, fontFamily:F.display }}>NEVER VERIFIED</div>
+            )}
+          </div>
+          {/* Recovery files */}
+          <div style={{ padding:"12px 14px", background:C.surfaceHigh, border:`1px solid ${C.border}`, borderRadius:6 }}>
+            <div style={{ fontSize:9, color:C.muted, letterSpacing:2, fontFamily:F.display, marginBottom:6 }}>RECOVERY FILES</div>
+            <div style={{ fontSize:22, fontFamily:F.display, color:C.white }}>{recoveryFiles}</div>
+            <div style={{ fontSize:10, color:C.dim, marginTop:2 }}>exports on record</div>
+          </div>
         </div>
-        {[
-          { label:"BANDS",          val: bands.length   },
-          { label:"GIGS",           val: allGigs.length },
-          { label:"VENUES",         val: venues.length  },
-        ].map(({ label, val }) => (
-          <div key={label} style={{ background:C.surfaceHigh, border:`1px solid ${C.border}`, borderRadius:6, padding:"12px 16px" }}>
-            <div style={{ fontSize:9, color:C.muted, letterSpacing:2, fontFamily:F.display }}>{label}</div>
-            <div style={{ fontSize:22, fontFamily:F.display, color:C.red, lineHeight:1.3, marginTop:2 }}>{val}</div>
-          </div>
-        ))}
-        <div style={{ background:C.surfaceHigh, border:`1px solid ${C.border}`, borderRadius:6, padding:"12px 16px" }}>
-          <div style={{ fontSize:9, color:C.muted, letterSpacing:2, fontFamily:F.display }}>LAST EXPORT</div>
-          <div style={{ fontSize:14, fontFamily:F.display, color: lastExport ? C.green : C.amber, lineHeight:1.3, marginTop:4 }}>
-            {lastExport ? fmtTimestamp(lastExport) : "NEVER"}
-          </div>
-        </div>
-        <div style={{ background:C.surfaceHigh, border:`1px solid ${C.border}`, borderRadius:6, padding:"12px 16px" }}>
-          <div style={{ fontSize:9, color:C.muted, letterSpacing:2, fontFamily:F.display }}>NEXT RECOMMENDED</div>
-          <div style={{ fontSize:14, fontFamily:F.display, color:C.white, lineHeight:1.3, marginTop:4 }}>
-            {nextBackup()}
-          </div>
+        {/* Next backup */}
+        <div style={{ marginTop:12, fontSize:12, color:C.muted }}>
+          Next recommended backup: <span style={{ color:C.white }}>{nextBackup()}</span>
         </div>
       </div>
 
+      {/* Export Everything */}
+      <div style={{ marginBottom:24, padding:24, background:"rgba(232,32,58,0.06)", border:`2px solid ${C.red}`, borderRadius:10 }}>
+        <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", flexWrap:"wrap", gap:16 }}>
+          <div style={{ flex:1 }}>
+            <div style={{ fontFamily:F.display, fontSize:22, color:C.white, letterSpacing:2, marginBottom:6 }}>FULL PLATFORM BACKUP</div>
+            <div style={{ fontSize:13, color:C.muted, marginBottom:12 }}>
+              Single JSON file — all bands, gigs, venues, profiles, relationships and metadata.
+            </div>
+            {/* Coverage summary */}
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:4, fontSize:12, color:"#aaa" }}>
+              <span>✓ {bands.length} Bands</span>
+              <span>✓ {allGigs.length} Gigs</span>
+              <span>✓ {venues.length} Venues</span>
+              <span>✓ {storageStats?.bandPhotos || 0} Band Photos</span>
+              <span>✓ {allGigs.filter(g=>g.band_profile_id).length} Band/Gig Links</span>
+              <span>✓ {allGigs.filter(g=>g.venue_id).length} Venue/Gig Links</span>
+            </div>
+          </div>
+          <Btn onClick={exportEverything} disabled={!!exporting} style={{ padding:"14px 32px", fontSize:14, whiteSpace:"nowrap" }}>
+            {exporting==="all" ? "EXPORTING..." : "⬇ EXPORT EVERYTHING"}
+          </Btn>
+        </div>
+      </div>
+
+      {/* Individual exports */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(240px,1fr))", gap:16, marginBottom:24 }}>
+        <ExportCard title="BANDS"  icon="🎸" count={bands.length}   unit="profiles" id="bands"  onJSON={exportBandsJSON}  onCSV={exportBandsCSV}  />
+        <ExportCard title="GIGS"   icon="📅" count={allGigs.length} unit="gigs"     id="gigs"   onJSON={exportGigsJSON}   onCSV={exportGigsCSV}   />
+        <ExportCard title="VENUES" icon="📍" count={venues.length}  unit="venues"   id="venues" onJSON={exportVenuesJSON} onCSV={exportVenuesCSV} />
+      </div>
+
+      {/* Verify restore */}
+      <div style={{ marginBottom:24, padding:20, background:C.surface, border:`1px solid ${C.border}`, borderRadius:8 }}>
+        <div style={{ fontFamily:F.display, fontSize:14, color:C.white, letterSpacing:2, marginBottom:8 }}>RESTORE VERIFICATION</div>
+        <div style={{ fontSize:13, color:C.muted, marginBottom:14, lineHeight:1.7 }}>
+          After manually verifying that a backup file can be restored successfully, click below to log the verification.
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:16, flexWrap:"wrap" }}>
+          <Btn variant="ghost" onClick={markVerified} disabled={verifying} style={{ padding:"10px 20px" }}>
+            {verifying ? "SAVING..." : "✓ MARK AS VERIFIED"}
+          </Btn>
+          {lastVerify && (
+            <div style={{ fontSize:12, color:C.green }}>
+              Last verified: {fmtDT(lastVerify.verified_at)} by {lastVerify.verified_by_name}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Backup history */}
+      <div style={{ marginBottom:24, padding:20, background:C.surface, border:`1px solid ${C.border}`, borderRadius:8 }}>
+        <div style={{ fontFamily:F.display, fontSize:14, color:C.white, letterSpacing:2, marginBottom:16 }}>BACKUP HISTORY</div>
+        {loadingHistory ? (
+          <div style={{ color:C.dim, fontSize:13 }}>Loading...</div>
+        ) : backupHistory.length === 0 ? (
+          <div style={{ color:C.dim, fontSize:13 }}>No exports on record yet.</div>
+        ) : (
+          <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+            {backupHistory.map((b,i) => (
+              <div key={b.id} style={{
+                display:"flex", alignItems:"center", gap:16, padding:"10px 14px",
+                background: i===0 ? "rgba(232,32,58,0.05)" : "rgba(255,255,255,0.02)",
+                border:`1px solid ${i===0 ? C.red+"40" : C.border}`,
+                borderLeft:`3px solid ${typeColor(b.export_type)}`,
+                borderRadius:6, flexWrap:"wrap",
+              }}>
+                <div style={{ fontSize:13, color:C.muted, minWidth:140, fontFamily:"monospace" }}>{fmtDT(b.exported_at)}</div>
+                <div style={{ minWidth:100 }}>
+                  <Badge label={typeLabel(b.export_type)} color={typeColor(b.export_type)} />
+                </div>
+                <div style={{ flex:1, fontSize:11, color:C.dim, fontFamily:"monospace" }}>{b.filename}</div>
+                {i===0 && <Badge label="LATEST" color={C.green} />}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* Storage stats */}
-      <div style={{ marginBottom:28, padding:18, background:C.surface, border:`1px solid ${C.border}`, borderRadius:8 }}>
+      <div style={{ marginBottom:24, padding:18, background:C.surface, border:`1px solid ${C.border}`, borderRadius:8 }}>
         <div style={{ fontFamily:F.display, fontSize:13, color:C.white, letterSpacing:2, marginBottom:14 }}>STORAGE</div>
         <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(140px,1fr))", gap:12 }}>
           {[
-            { label:"BAND PHOTOS",   val: storageStats ? storageStats.bandPhotos : "—" },
-            { label:"VENUE PHOTOS",  val: storageStats ? storageStats.venuePhotos : "—" },
-            { label:"TOTAL FILES",   val: storageStats ? storageStats.total : "—" },
+            { label:"BAND PHOTOS",  val: storageStats?.bandPhotos  ?? "—" },
+            { label:"VENUE PHOTOS", val: storageStats?.venuePhotos ?? "—" },
+            { label:"TOTAL FILES",  val: storageStats?.total       ?? "—" },
           ].map(({ label, val }) => (
             <div key={label} style={{ background:C.surfaceHigh, border:`1px solid ${C.border}`, borderRadius:6, padding:"10px 14px" }}>
               <div style={{ fontSize:9, color:C.muted, letterSpacing:2, fontFamily:F.display }}>{label}</div>
@@ -3275,40 +3379,13 @@ function AdminBackups({ bands, allGigs, venues }) {
         </div>
       </div>
 
-      {/* Export Everything — prominent */}
-      <div style={{ marginBottom:28, padding:24, background:"rgba(232,32,58,0.06)", border:`2px solid ${C.red}`, borderRadius:10 }}>
-        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:16 }}>
-          <div>
-            <div style={{ fontFamily:F.display, fontSize:22, color:C.white, letterSpacing:2 }}>FULL PLATFORM BACKUP</div>
-            <div style={{ fontSize:13, color:C.muted, marginTop:4 }}>
-              Single JSON file — bands, gigs, venues, profiles + metadata. Save to Google Drive or Dropbox.
-            </div>
-            <div style={{ fontSize:11, color:C.dim, marginTop:4 }}>
-              File: MSM-Full-Backup-{fileTimestamp()}.json
-            </div>
-          </div>
-          <Btn onClick={exportEverything} disabled={!!exporting}
-            style={{ padding:"14px 32px", fontSize:14, whiteSpace:"nowrap" }}
-          >
-            {exporting==="all" ? "EXPORTING..." : "⬇ EXPORT EVERYTHING"}
-          </Btn>
-        </div>
-      </div>
-
-      {/* Individual exports */}
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(240px,1fr))", gap:16, marginBottom:28 }}>
-        <ExportCard title="BANDS"  icon="🎸" count={bands.length}   unit="profiles" id="bands"  onJSON={exportBandsJSON}  onCSV={exportBandsCSV}  />
-        <ExportCard title="GIGS"   icon="📅" count={allGigs.length} unit="gigs"     id="gigs"   onJSON={exportGigsJSON}   onCSV={exportGigsCSV}   />
-        <ExportCard title="VENUES" icon="📍" count={venues.length}  unit="venues"   id="venues" onJSON={exportVenuesJSON} onCSV={exportVenuesCSV} />
-      </div>
-
-      {/* Recovery instructions */}
+      {/* Recovery notes */}
       <div style={{ padding:20, background:"rgba(255,255,255,0.02)", border:`1px solid ${C.border}`, borderRadius:8 }}>
         <div style={{ fontFamily:F.display, fontSize:13, color:C.white, letterSpacing:2, marginBottom:12 }}>RECOVERY NOTES</div>
         <div style={{ display:"flex", flexDirection:"column", gap:8, fontSize:12, color:C.muted, lineHeight:1.8 }}>
           <div>📁 <strong style={{ color:"#ccc" }}>Store in:</strong> Google Drive → MSM Backups → [Year] → [Month]</div>
           <div>📅 <strong style={{ color:"#ccc" }}>Schedule:</strong> Full backup every Sunday + before any SQL migration</div>
-          <div>🔄 <strong style={{ color:"#ccc" }}>To restore:</strong> Use the JSON backup to reimport via Supabase dashboard or future restore tool</div>
+          <div>🔄 <strong style={{ color:"#ccc" }}>To restore:</strong> Use JSON backup to reimport via Supabase dashboard or future restore tool</div>
           <div>🔑 <strong style={{ color:"#ccc" }}>Project ID:</strong> fmlaaiolqwknowhtdeue</div>
           <div>⚠ <strong style={{ color:C.amber }}>Free tier:</strong> No automated backups — these exports are your only protection</div>
         </div>
