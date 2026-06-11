@@ -413,6 +413,23 @@ function BandLink({ name, slug, style={} }) {
   );
 }
 
+// ── Activity logger ────────────────────────────────────────────────
+async function logActivity(action, entityType, entityName, entityId) {
+  try {
+    const { data: u } = await supabase.auth.getUser();
+    const userId = u?.user?.id;
+    let performedByName = "Administrator";
+    if (userId) {
+      const { data: p } = await supabase.from("profiles").select("band_name").eq("id", userId);
+      if (p?.[0]?.band_name) performedByName = p[0].band_name;
+    }
+    await supabase.from("activity_log").insert({
+      action, entity_type: entityType, entity_name: entityName,
+      entity_id: entityId || null, performed_by: userId, performed_by_name: performedByName,
+    });
+  } catch(e) { console.warn("Activity log failed:", e); }
+}
+
 // ── Profile completeness ───────────────────────────────────────────
 function getProfileCompleteness(profile) {
   const fields = [
@@ -882,7 +899,9 @@ function AdminPanel({ allGigs, onRefresh, bands=[] }) {
 
   const action = async (gigId, status) => {
     setLoading(l=>({...l,[gigId]:true}));
+    const gig = allGigs.find(g=>g.id===gigId);
     await DB.updateGigStatus(gigId, status);
+    await logActivity(`gig_${status}`, "gig", gig?.band_name, gigId);
     await onRefresh();
     setLoading(l=>({...l,[gigId]:false}));
   };
@@ -891,6 +910,7 @@ function AdminPanel({ allGigs, onRefresh, bands=[] }) {
     if (!confirm(`Delete "${bandName}" permanently? This cannot be undone.`)) return;
     setLoading(l=>({...l,[gigId]:true}));
     await DB.deleteGig(gigId);
+    await logActivity("gig_deleted", "gig", bandName, gigId);
     await onRefresh();
   };
 
@@ -925,6 +945,7 @@ function AdminPanel({ allGigs, onRefresh, bands=[] }) {
       }
       // venue_id handled by trigger on venue/city update
       await DB.updateGig(editing.id, { ...editForm, ...extra });
+      await logActivity("gig_edited", "gig", editForm.band_name, editing.id);
       setEditMsg("✓ Gig updated");
       await onRefresh();
       setTimeout(() => { setEditing(null); setEditMsg(""); }, 1000);
@@ -1435,30 +1456,48 @@ function StatsPanel({ gigs }) {
 // ════════════════════════════════════════════════════════════════════
 //  ADMIN DASHBOARD
 // ════════════════════════════════════════════════════════════════════
-function AdminDashboard({ bands, allGigs, venues, onNav }) {
-  const today     = new Date();
-  const todayStr  = today.toISOString().slice(0,10);
-  const weekStr   = new Date(today.getTime() + 7*24*60*60*1000).toISOString().slice(0,10);
-  const monthStart= `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-01`;
-  const monthEnd  = new Date(today.getFullYear(), today.getMonth()+1, 0).toISOString().slice(0,10);
+function AdminDashboard({ bands, allGigs, venues, onNav, onEditGig }) {
+  const today      = new Date();
+  const todayStr   = today.toISOString().slice(0,10);
+  const weekStr    = new Date(today.getTime() + 7*24*60*60*1000).toISOString().slice(0,10);
+  const monthStart = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-01`;
+  const monthEnd   = new Date(today.getFullYear(), today.getMonth()+1, 0).toISOString().slice(0,10);
+  const [activity, setActivity] = useState([]);
+  const [loadingActivity, setLoadingActivity] = useState(true);
 
-  const approvedGigs   = allGigs.filter(g => g.status === "approved");
-  const pendingGigs    = allGigs.filter(g => g.status === "pending");
-  const upcomingWeek   = approvedGigs.filter(g => g.date >= todayStr && g.date <= weekStr);
-  const thisMonth      = approvedGigs.filter(g => g.date >= monthStart && g.date <= monthEnd);
-  const incompleteBands  = bands.filter(b => getProfileCompleteness(b).score < 60);
+  useEffect(() => {
+    supabase.from("activity_log").select("*").order("created_at", { ascending:false }).limit(20)
+      .then(({ data }) => { setActivity(data||[]); setLoadingActivity(false); });
+  }, []);
+
+  const approvedGigs    = allGigs.filter(g => g.status === "approved");
+  const pendingGigs     = allGigs.filter(g => g.status === "pending");
+  const upcomingWeek    = approvedGigs.filter(g => g.date >= todayStr && g.date <= weekStr);
+  const thisMonth       = approvedGigs.filter(g => g.date >= monthStart && g.date <= monthEnd);
+  const upcoming10      = approvedGigs.filter(g => g.date >= todayStr).sort((a,b)=>a.date.localeCompare(b.date)||a.time.localeCompare(b.time)).slice(0,10);
+  const incompleteBands  = bands.filter(b => getProfileCompleteness(b).score < 60 && !b.disabled);
+  const completeBands    = bands.filter(b => getProfileCompleteness(b).score >= 60 && !b.disabled);
   const incompleteVenues = venues.filter(v => !v.description && !v.website);
   const disabledBands    = bands.filter(b => b.disabled);
 
-  // Backup health from localStorage
-  const lastExport   = localStorage.getItem("msm_last_export_iso");
-  const backupDays   = lastExport ? Math.floor((Date.now() - new Date(lastExport).getTime()) / (1000*60*60*24)) : null;
-  const backupHealth = !lastExport ? { icon:"🔴", label:"NO BACKUP", color:C.red }
-    : backupDays < 7  ? { icon:"🟢", label:`${backupDays}d ago`, color:C.green }
-    : backupDays < 30 ? { icon:"🟠", label:`${backupDays}d ago`, color:C.amber }
-    : { icon:"🔴", label:`${backupDays}d ago`, color:C.red };
+  // Backup health
+  const lastExportISO = localStorage.getItem("msm_last_export_iso");
+  const backupDays    = lastExportISO ? Math.floor((Date.now()-new Date(lastExportISO).getTime())/(1000*60*60*24)) : null;
+  const backupHealth  = !lastExportISO ? { icon:"🔴", label:"NO BACKUP", color:C.red }
+    : backupDays < 7  ? { icon:"🟢", label:"HEALTHY", color:C.green }
+    : backupDays < 30 ? { icon:"🟠", label:"WARNING", color:C.amber }
+    : { icon:"🔴", label:"CRITICAL", color:C.red };
+  const backupDateStr = lastExportISO
+    ? new Date(lastExportISO).toLocaleString("en-GB", { day:"numeric", month:"long", year:"numeric", hour:"2-digit", minute:"2-digit" })
+    : null;
 
-  const StatCard = ({ icon, label, val, sub, color=C.red, onClick, alert=false }) => (
+  // Profile completion stats
+  const activeBands       = bands.filter(b => !b.disabled);
+  const completeCount     = completeBands.length;
+  const incompleteCount   = incompleteBands.length;
+  const completePct       = activeBands.length > 0 ? Math.round((completeCount/activeBands.length)*100) : 0;
+
+  const StatCard = ({ icon, label, val, sub, color=C.red, onClick, alert=false, badge=null }) => (
     <div onClick={onClick} style={{
       background: alert ? "rgba(244,162,97,0.08)" : C.surfaceHigh,
       border:`1px solid ${alert ? C.amber : C.border}`,
@@ -1470,28 +1509,43 @@ function AdminDashboard({ bands, allGigs, venues, onNav }) {
       onMouseEnter={e=>{ if(onClick) e.currentTarget.style.background=C.surface; }}
       onMouseLeave={e=>{ if(onClick) e.currentTarget.style.background=alert?"rgba(244,162,97,0.08)":C.surfaceHigh; }}
     >
-      <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
-        <span style={{ fontSize:20 }}>{icon}</span>
-        <div style={{ fontSize:9, color:C.muted, letterSpacing:2, fontFamily:F.display }}>{label}</div>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          <span style={{ fontSize:20 }}>{icon}</span>
+          <div style={{ fontSize:9, color:C.muted, letterSpacing:2, fontFamily:F.display }}>{label}</div>
+        </div>
+        {badge && <Badge label={badge.text} color={badge.color} />}
       </div>
       <div style={{ fontSize:28, fontFamily:F.display, color, lineHeight:1 }}>{val}</div>
       {sub && <div style={{ fontSize:11, color:C.dim, marginTop:4 }}>{sub}</div>}
-      {onClick && <div style={{ fontSize:10, color:C.muted, marginTop:6, letterSpacing:1 }}>CLICK TO MANAGE →</div>}
+      {onClick && <div style={{ fontSize:10, color:C.muted, marginTop:6, letterSpacing:1 }}>TAP TO MANAGE →</div>}
     </div>
   );
 
+  const actionIcon = { band:"🎸", venue:"📍", gig:"📅", backup:"💾", import:"📥", edit:"✏️", approve:"✓", reject:"✗", delete:"🗑", create:"➕" };
+
   return (
     <div>
-      <SectionLabel>ADMIN DASHBOARD</SectionLabel>
-      <div style={{ fontSize:12, color:C.muted, marginBottom:24 }}>
-        {today.toLocaleDateString("en-GB", { weekday:"long", day:"numeric", month:"long", year:"numeric" })}
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8, flexWrap:"wrap", gap:12 }}>
+        <SectionLabel>ADMIN DASHBOARD</SectionLabel>
+        <div style={{ fontSize:12, color:C.muted }}>{today.toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}</div>
       </div>
 
-      {/* Attention required */}
-      {(pendingGigs.length > 0 || incompleteBands.length > 0 || !lastExport || backupDays >= 7) && (
-        <div style={{ marginBottom:28, padding:16, background:"rgba(244,162,97,0.06)", border:`1px solid ${C.amber}`, borderRadius:8 }}>
+      {/* ── QUICK ACTIONS ── */}
+      <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:24, padding:"14px 16px", background:C.surface, border:`1px solid ${C.border}`, borderRadius:8 }}>
+        <div style={{ fontSize:9, color:C.muted, letterSpacing:2, fontFamily:F.display, width:"100%", marginBottom:4 }}>QUICK ACTIONS</div>
+        <Btn onClick={()=>onNav("bands")}   style={{ fontSize:12, padding:"8px 16px" }}>➕ CREATE BAND</Btn>
+        <Btn onClick={()=>onNav("venues")}  style={{ fontSize:12, padding:"8px 16px" }}>➕ CREATE VENUE</Btn>
+        <Btn onClick={()=>onNav("admin")}   variant="ghost" style={{ fontSize:12, padding:"8px 16px" }}>📋 REVIEW GIGS</Btn>
+        <Btn onClick={()=>onNav("import")}  variant="ghost" style={{ fontSize:12, padding:"8px 16px" }}>📥 IMPORT GIGS</Btn>
+        <Btn onClick={()=>onNav("backups")} variant="ghost" style={{ fontSize:12, padding:"8px 16px" }}>💾 BACKUP NOW</Btn>
+      </div>
+
+      {/* ── ATTENTION REQUIRED ── */}
+      {(pendingGigs.length > 0 || incompleteBands.length > 0 || !lastExportISO || backupDays >= 7) && (
+        <div style={{ marginBottom:24, padding:16, background:"rgba(244,162,97,0.06)", border:`1px solid ${C.amber}`, borderRadius:8 }}>
           <div style={{ fontFamily:F.display, fontSize:13, color:C.amber, letterSpacing:2, marginBottom:10 }}>⚠ REQUIRES ATTENTION</div>
-          <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+          <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
             {pendingGigs.length > 0 && (
               <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
                 <span style={{ fontSize:13, color:"#ccc" }}>📋 {pendingGigs.length} gig{pendingGigs.length!==1?"s":""} pending approval</span>
@@ -1504,9 +1558,9 @@ function AdminDashboard({ bands, allGigs, venues, onNav }) {
                 <Btn variant="ghost" onClick={()=>onNav("bands")} style={{ fontSize:11, padding:"5px 12px" }}>MANAGE →</Btn>
               </div>
             )}
-            {(!lastExport || backupDays >= 7) && (
+            {(!lastExportISO || backupDays >= 7) && (
               <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
-                <span style={{ fontSize:13, color:"#ccc" }}>💾 {!lastExport ? "No backup on record" : `Last backup ${backupDays} days ago`}</span>
+                <span style={{ fontSize:13, color:"#ccc" }}>💾 {!lastExportISO ? "No backup on record" : `Last backup ${backupDays} days ago`}</span>
                 <Btn variant="ghost" onClick={()=>onNav("backups")} style={{ fontSize:11, padding:"5px 12px" }}>BACKUP →</Btn>
               </div>
             )}
@@ -1514,65 +1568,159 @@ function AdminDashboard({ bands, allGigs, venues, onNav }) {
         </div>
       )}
 
-      {/* Platform stats */}
+      {/* ── PLATFORM OVERVIEW ── */}
       <div style={{ fontFamily:F.display, fontSize:11, color:C.muted, letterSpacing:3, marginBottom:12 }}>PLATFORM OVERVIEW</div>
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(150px,1fr))", gap:12, marginBottom:28 }}>
-        <StatCard icon="🎸" label="TOTAL BANDS"    val={bands.length}    color={C.red}   onClick={()=>onNav("bands")}  sub={`${disabledBands.length} disabled`} />
-        <StatCard icon="📍" label="TOTAL VENUES"   val={venues.length}   color={C.amber} onClick={()=>onNav("venues")} sub={`${incompleteVenues.length} need info`} />
-        <StatCard icon="📅" label="TOTAL GIGS"     val={allGigs.length}  color={C.red}   sub={`${approvedGigs.length} approved`} />
-        <StatCard icon="⏳" label="PENDING"         val={pendingGigs.length} color={pendingGigs.length>0?C.amber:C.green} onClick={pendingGigs.length>0?()=>onNav("admin"):null} alert={pendingGigs.length>0} />
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(150px,1fr))", gap:12, marginBottom:24 }}>
+        <StatCard icon="🎸" label="TOTAL BANDS"  val={bands.length}   color={C.red}   onClick={()=>onNav("bands")}  sub={`${disabledBands.length} disabled`} />
+        <StatCard icon="📍" label="TOTAL VENUES" val={venues.length}  color={C.amber} onClick={()=>onNav("venues")} sub={`${incompleteVenues.length} need info`} />
+        <StatCard icon="📅" label="TOTAL GIGS"   val={allGigs.length} color={C.red}   sub={`${approvedGigs.length} approved`} />
+        <StatCard icon="⏳" label="PENDING"       val={pendingGigs.length}
+          color={pendingGigs.length>0?C.amber:C.green}
+          onClick={pendingGigs.length>0?()=>onNav("admin"):null}
+          alert={pendingGigs.length>0}
+          badge={pendingGigs.length>0?{text:"ACTION",color:C.amber}:null}
+        />
       </div>
 
-      {/* This week / month */}
+      {/* ── UPCOMING ── */}
       <div style={{ fontFamily:F.display, fontSize:11, color:C.muted, letterSpacing:3, marginBottom:12 }}>UPCOMING GIGS</div>
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(150px,1fr))", gap:12, marginBottom:28 }}>
-        <StatCard icon="📆" label="NEXT 7 DAYS"  val={upcomingWeek.length}  color={C.green} sub="upcoming gigs" />
-        <StatCard icon="🗓" label="THIS MONTH"   val={thisMonth.length}     color={C.green} sub={today.toLocaleDateString("en-GB",{month:"long"})} />
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(150px,1fr))", gap:12, marginBottom:24 }}>
+        <StatCard icon="📆" label="NEXT 7 DAYS" val={upcomingWeek.length} color={C.green} sub="upcoming gigs" />
+        <StatCard icon="🗓" label="THIS MONTH"  val={thisMonth.length}    color={C.green} sub={today.toLocaleDateString("en-GB",{month:"long"})} />
       </div>
 
-      {/* Profile health */}
+      {/* ── PROFILE HEALTH ── */}
       <div style={{ fontFamily:F.display, fontSize:11, color:C.muted, letterSpacing:3, marginBottom:12 }}>PROFILE HEALTH</div>
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(150px,1fr))", gap:12, marginBottom:28 }}>
-        <StatCard icon="⚠" label="INCOMPLETE BANDS"  val={incompleteBands.length}  color={incompleteBands.length>0?C.amber:C.green}  alert={incompleteBands.length>0}  onClick={incompleteBands.length>0?()=>onNav("bands"):null} sub="below 60%" />
-        <StatCard icon="⚠" label="INCOMPLETE VENUES" val={incompleteVenues.length} color={incompleteVenues.length>0?C.amber:C.green} alert={incompleteVenues.length>0} onClick={incompleteVenues.length>0?()=>onNav("venues"):null} sub="no desc or website" />
-        <StatCard icon="🚫" label="DISABLED BANDS"   val={disabledBands.length}    color={disabledBands.length>0?C.dim:C.green} onClick={disabledBands.length>0?()=>onNav("bands"):null} />
-      </div>
-
-      {/* Backup status */}
-      <div style={{ fontFamily:F.display, fontSize:11, color:C.muted, letterSpacing:3, marginBottom:12 }}>BACKUP STATUS</div>
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(150px,1fr))", gap:12, marginBottom:28 }}>
-        <StatCard icon={backupHealth.icon} label="BACKUP HEALTH" val={backupHealth.label} color={backupHealth.color}
-          alert={!lastExport || backupDays >= 7} onClick={()=>onNav("backups")} sub="click to backup" />
-        <StatCard icon="💾" label="LAST BACKUP" val={lastExport ? new Date(lastExport).toLocaleDateString("en-GB") : "NEVER"}
-          color={lastExport ? C.green : C.red} alert={!lastExport} onClick={()=>onNav("backups")} />
-      </div>
-
-      {/* Upcoming gigs list */}
-      {upcomingWeek.length > 0 && (
-        <div>
-          <div style={{ fontFamily:F.display, fontSize:11, color:C.muted, letterSpacing:3, marginBottom:12 }}>NEXT 7 DAYS</div>
-          <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-            {upcomingWeek.slice(0,10).map(g => {
-              const color = GENRE_COLORS[g.genre] || "#888";
-              return (
-                <div key={g.id} style={{
-                  display:"flex", alignItems:"center", gap:14, padding:"10px 16px",
-                  background:C.surfaceHigh, border:`1px solid ${C.border}`,
-                  borderLeft:`3px solid ${color}`, borderRadius:6, flexWrap:"wrap",
-                }}>
-                  <div style={{ fontFamily:F.display, fontSize:14, color:C.red, minWidth:100 }}>{fmtDate(g.date)}</div>
-                  <div style={{ flex:1 }}>
-                    <div style={{ fontSize:14, color:C.white }}>{g.band_name}</div>
-                    <div style={{ fontSize:11, color:C.muted }}>{g.venue} · {g.city}</div>
-                  </div>
-                  <Badge label={g.genre} color={color} />
-                  {g.slug && <Link to={`/gig/${g.slug}`} target="_blank" style={{ fontSize:10, color:C.muted, textDecoration:"none" }}>↗</Link>}
-                </div>
-              );
-            })}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(150px,1fr))", gap:12, marginBottom:24 }}>
+        {/* Profile completion card */}
+        <div style={{ background:C.surfaceHigh, border:`1px solid ${C.border}`, borderTop:`3px solid ${completePct>=80?C.green:C.amber}`, borderRadius:8, padding:"16px 18px", gridColumn:"span 2" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}>
+            <span style={{ fontSize:20 }}>📊</span>
+            <div style={{ fontSize:9, color:C.muted, letterSpacing:2, fontFamily:F.display }}>PROFILE COMPLETION</div>
           </div>
+          <div style={{ display:"flex", alignItems:"center", gap:16, marginBottom:10 }}>
+            <div style={{ fontSize:36, fontFamily:F.display, color:completePct>=80?C.green:C.amber, lineHeight:1 }}>{completePct}%</div>
+            <div style={{ flex:1 }}>
+              <div style={{ background:"rgba(255,255,255,0.08)", borderRadius:4, height:8, overflow:"hidden" }}>
+                <div style={{ width:`${completePct}%`, height:"100%", background:completePct>=80?C.green:C.amber, borderRadius:4, transition:"width 0.5s" }} />
+              </div>
+              <div style={{ display:"flex", justifyContent:"space-between", marginTop:6, fontSize:11 }}>
+                <span style={{ color:C.green }}>✓ {completeCount} complete</span>
+                <span style={{ color:C.amber }}>⚠ {incompleteCount} incomplete</span>
+              </div>
+            </div>
+          </div>
+          {incompleteCount > 0 && (
+            <Btn variant="ghost" onClick={()=>onNav("bands")} style={{ fontSize:11, padding:"6px 14px" }}>VIEW INCOMPLETE →</Btn>
+          )}
         </div>
-      )}
+        {/* Incomplete venues — clickable to filtered view */}
+        <div onClick={()=>onNav("venues-incomplete")} style={{
+          background: incompleteVenues.length>0?"rgba(244,162,97,0.08)":C.surfaceHigh,
+          border:`1px solid ${incompleteVenues.length>0?C.amber:C.border}`,
+          borderTop:`3px solid ${incompleteVenues.length>0?C.amber:C.green}`,
+          borderRadius:8, padding:"16px 18px", cursor:"pointer",
+        }}
+          onMouseEnter={e=>e.currentTarget.style.background=C.surface}
+          onMouseLeave={e=>e.currentTarget.style.background=incompleteVenues.length>0?"rgba(244,162,97,0.08)":C.surfaceHigh}
+        >
+          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+            <span style={{ fontSize:20 }}>⚠</span>
+            <div style={{ fontSize:9, color:C.muted, letterSpacing:2, fontFamily:F.display }}>INCOMPLETE VENUES</div>
+          </div>
+          <div style={{ fontSize:28, fontFamily:F.display, color:incompleteVenues.length>0?C.amber:C.green }}>{incompleteVenues.length}</div>
+          <div style={{ fontSize:11, color:C.dim, marginTop:4 }}>no desc or website</div>
+          <div style={{ fontSize:10, color:C.muted, marginTop:6, letterSpacing:1 }}>TAP TO MANAGE →</div>
+        </div>
+      </div>
+
+      {/* ── BACKUP STATUS ── */}
+      <div style={{ fontFamily:F.display, fontSize:11, color:C.muted, letterSpacing:3, marginBottom:12 }}>BACKUP STATUS</div>
+      <div style={{ marginBottom:24, padding:"16px 20px", background:C.surfaceHigh, border:`1px solid ${backupHealth.color}40`, borderTop:`3px solid ${backupHealth.color}`, borderRadius:8, cursor:"pointer" }}
+        onClick={()=>onNav("backups")}
+      >
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:12 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+            <span style={{ fontSize:28 }}>{backupHealth.icon}</span>
+            <div>
+              <div style={{ fontFamily:F.display, fontSize:16, color:backupHealth.color, letterSpacing:2 }}>{backupHealth.label}</div>
+              {backupDateStr
+                ? <div style={{ fontSize:12, color:"#ccc", marginTop:3 }}>Last backup: {backupDateStr}</div>
+                : <div style={{ fontSize:12, color:C.red, marginTop:3 }}>No backup on record — export now</div>
+              }
+            </div>
+          </div>
+          <Btn variant="ghost" onClick={e=>{e.stopPropagation();onNav("backups");}} style={{ fontSize:12, padding:"8px 16px" }}>💾 BACKUP NOW</Btn>
+        </div>
+      </div>
+
+      {/* ── UPCOMING GIGS TABLE ── */}
+      <div style={{ fontFamily:F.display, fontSize:11, color:C.muted, letterSpacing:3, marginBottom:12 }}>NEXT 10 UPCOMING GIGS</div>
+      <div style={{ marginBottom:28, background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, overflow:"hidden" }}>
+        {upcoming10.length === 0 ? (
+          <div style={{ padding:20, color:C.dim, fontSize:13 }}>No upcoming gigs.</div>
+        ) : (
+          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+            <thead>
+              <tr style={{ borderBottom:`1px solid ${C.border}`, background:"rgba(255,255,255,0.02)" }}>
+                {["DATE","BAND","VENUE","CITY","GENRE",""].map((h,i)=>(
+                  <th key={i} style={{ padding:"10px 14px", textAlign:"left", fontSize:9, color:C.muted, letterSpacing:2, fontFamily:F.display }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {upcoming10.map(g => {
+                const color = GENRE_COLORS[g.genre]||"#888";
+                return (
+                  <tr key={g.id} style={{ borderBottom:`1px solid ${C.border}`, cursor:"pointer" }}
+                    onMouseEnter={e=>e.currentTarget.style.background="rgba(255,255,255,0.03)"}
+                    onMouseLeave={e=>e.currentTarget.style.background="transparent"}
+                    onClick={()=>onEditGig && onEditGig(g)}
+                  >
+                    <td style={{ padding:"10px 14px", fontFamily:F.display, color:C.red, whiteSpace:"nowrap" }}>{fmtDate(g.date)}</td>
+                    <td style={{ padding:"10px 14px", color:C.white }}>{g.band_name}</td>
+                    <td style={{ padding:"10px 14px", color:"#ccc" }}>{g.venue}</td>
+                    <td style={{ padding:"10px 14px", color:C.muted }}>{g.city}</td>
+                    <td style={{ padding:"10px 14px" }}><Badge label={g.genre} color={color} /></td>
+                    <td style={{ padding:"10px 14px" }}>
+                      {g.slug && <Link to={`/gig/${g.slug}`} target="_blank" onClick={e=>e.stopPropagation()} style={{ fontSize:11, color:C.muted, textDecoration:"none" }}>↗</Link>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* ── RECENT ACTIVITY ── */}
+      <div style={{ fontFamily:F.display, fontSize:11, color:C.muted, letterSpacing:3, marginBottom:12 }}>RECENT ACTIVITY</div>
+      <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, overflow:"hidden" }}>
+        {loadingActivity ? (
+          <div style={{ padding:20, color:C.dim, fontSize:13 }}>Loading...</div>
+        ) : activity.length === 0 ? (
+          <div style={{ padding:20, color:C.dim, fontSize:13 }}>No activity logged yet. Actions will appear here.</div>
+        ) : (
+          <div style={{ display:"flex", flexDirection:"column" }}>
+            {activity.map((a,i) => (
+              <div key={a.id} style={{
+                display:"flex", alignItems:"center", gap:14, padding:"10px 16px",
+                borderBottom: i<activity.length-1 ? `1px solid ${C.border}` : "none",
+                background: i%2===0 ? "transparent" : "rgba(255,255,255,0.01)",
+              }}>
+                <span style={{ fontSize:16, flexShrink:0 }}>{actionIcon[a.action?.split("_")[0]] || "•"}</span>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:13, color:C.white }}>{a.action?.replace(/_/g," ")}{a.entity_name ? ` — ${a.entity_name}` : ""}</div>
+                  {a.performed_by_name && <div style={{ fontSize:11, color:C.dim }}>by {a.performed_by_name}</div>}
+                </div>
+                <div style={{ fontSize:11, color:C.dim, whiteSpace:"nowrap", flexShrink:0 }}>
+                  {new Date(a.created_at).toLocaleString("en-GB",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -3483,7 +3631,7 @@ function BulkImport({ bands, onImported }) {
 // ════════════════════════════════════════════════════════════════════
 //  ADMIN VENUES
 // ════════════════════════════════════════════════════════════════════
-function AdminVenues({ venues, allGigs, onRefresh }) {
+function AdminVenues({ venues, allGigs, onRefresh, filterMode="all", onFilterModeChange }) {
   const [view,     setView]     = useState("list"); // list | edit
   const [search,   setSearch]   = useState("");
   const [selected, setSelected] = useState(null);
@@ -3504,6 +3652,7 @@ function AdminVenues({ venues, allGigs, onRefresh }) {
   }, {});
 
   const filtered = venues.filter(v => {
+    if (filterMode === "incomplete" && (v.description || v.website)) return false;
     if (!search.trim()) return true;
     const q = search.toLowerCase();
     return (v.name||"").toLowerCase().includes(q) ||
@@ -3562,7 +3711,12 @@ function AdminVenues({ venues, allGigs, onRefresh }) {
     <div>
       <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:16, flexWrap:"wrap", gap:12 }}>
         <SectionLabel>VENUE DIRECTORY</SectionLabel>
-        <div style={{ fontSize:12, color:C.muted }}>Venues are created automatically from gig data</div>
+        <div style={{ display:"flex", gap:6 }}>
+          <button onClick={()=>onFilterModeChange?.("all")} style={{ padding:"6px 14px", border:"none", borderRadius:5, cursor:"pointer", fontFamily:F.display, letterSpacing:1, fontSize:11, background:filterMode==="all"?C.red:"rgba(255,255,255,0.05)", color:filterMode==="all"?"#fff":C.muted }}>ALL ({venues.length})</button>
+          <button onClick={()=>onFilterModeChange?.("incomplete")} style={{ padding:"6px 14px", border:"none", borderRadius:5, cursor:"pointer", fontFamily:F.display, letterSpacing:1, fontSize:11, background:filterMode==="incomplete"?C.amber:"rgba(255,255,255,0.05)", color:filterMode==="incomplete"?"#000":C.muted }}>
+            INCOMPLETE ({venues.filter(v=>!v.description&&!v.website).length})
+          </button>
+        </div>
       </div>
 
       {/* Stats */}
@@ -4152,6 +4306,7 @@ function MainApp() {
   const [allGigs, setAllGigs] = useState([]);   // admin only
   const [bands,   setBands]   = useState([]);    // admin only
   const [venues,  setVenues]  = useState([]);    // admin only
+  const [venueFilterMode, setVenueFilterMode] = useState("all"); // all | incomplete
   const [loading, setLoading] = useState(true);
   const [tab,     setTab]     = useState("calendar"); // calendar | list | submit | admin
   const [selGig,  setSelGig]  = useState(null);
@@ -4288,7 +4443,10 @@ function MainApp() {
 
         {/* DASHBOARD */}
         {tab==="dashboard" && isAdmin && (
-          <AdminDashboard bands={bands} allGigs={allGigs} venues={venues} onNav={setTab} />
+          <AdminDashboard bands={bands} allGigs={allGigs} venues={venues}
+            onNav={(t) => { if(t==="venues-incomplete"){ setTab("venues"); setVenueFilterMode("incomplete"); } else setTab(t); }}
+            onEditGig={(g) => { setTab("admin"); setTimeout(()=>window._editGig&&window._editGig(g),100); }}
+          />
         )}
 
         {/* BACKUPS */}
@@ -4298,7 +4456,7 @@ function MainApp() {
 
         {/* VENUES */}
         {tab==="venues" && isAdmin && (
-          <AdminVenues venues={venues} allGigs={allGigs} onRefresh={refreshAdmin} />
+          <AdminVenues venues={venues} allGigs={allGigs} onRefresh={refreshAdmin} filterMode={venueFilterMode} onFilterModeChange={setVenueFilterMode} />
         )}
 
         {/* BULK IMPORT */}
