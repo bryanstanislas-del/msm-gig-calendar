@@ -1,3 +1,4 @@
+
 // ════════════════════════════════════════════════════════════════════
 //  MUSIC SCENE MAGAZINE — GIG CALENDAR
 //  Full-featured: Auth · Admin · Filters · iCal · Supabase-ready
@@ -815,7 +816,7 @@ function SubmitGigForm({ user, profile, onSubmitted, onEditProfile }) {
 // ════════════════════════════════════════════════════════════════════
 //  ADMIN PANEL
 // ════════════════════════════════════════════════════════════════════
-function AdminPanel({ allGigs, onRefresh }) {
+function AdminPanel({ allGigs, onRefresh, bands=[] }) {
   const [filter, setFilter] = useState("pending");
   const [loading, setLoading] = useState({});
 
@@ -3233,7 +3234,7 @@ function MainApp() {
 
         {/* ADMIN */}
         {tab==="admin" && isAdmin && (
-          <AdminPanel allGigs={allGigs} onRefresh={refreshAdmin} />
+          <AdminPanel allGigs={allGigs} bands={bands} onRefresh={refreshAdmin} />
         )}
 
         {/* MY PROFILE */}
