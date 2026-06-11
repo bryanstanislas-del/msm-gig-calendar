@@ -254,6 +254,37 @@ const DB = {
     return data;
   },
 
+  async getGigBySlug(slug) {
+    if (USE_MOCK) return null;
+    const { data, error } = await supabase
+      .from("gigs")
+      .select("*")
+      .eq("slug", slug)
+      .eq("status", "approved");
+    if (error || !data || data.length === 0) return null;
+    return data[0];
+  },
+
+  async getPrevNextGigs(date, time, currentId) {
+    if (USE_MOCK) return { prev: null, next: null };
+    const dt = `${date}T${time||"00:00"}`;
+    const [{ data: prev }, { data: next }] = await Promise.all([
+      supabase.from("gigs").select("id,slug,band_name,venue,city,date,time,genre")
+        .eq("status","approved")
+        .or(`date.lt.${date},and(date.eq.${date},time.lt.${time||"00:00"})`)
+        .neq("id", currentId)
+        .order("date", { ascending:false }).order("time", { ascending:false })
+        .limit(1),
+      supabase.from("gigs").select("id,slug,band_name,venue,city,date,time,genre")
+        .eq("status","approved")
+        .or(`date.gt.${date},and(date.eq.${date},time.gt.${time||"00:00"})`)
+        .neq("id", currentId)
+        .order("date", { ascending:true }).order("time", { ascending:true })
+        .limit(1),
+    ]);
+    return { prev: prev?.[0] || null, next: next?.[0] || null };
+  },
+
   async getVenueBySlug(slug) {
     if (USE_MOCK) return null;
     const { data, error } = await supabase
@@ -1095,18 +1126,33 @@ function GigModal({ gig, onClose, bands=[], venues=[] }) {
         <Badge label={gig.genre} color={color} />
         {gig.is_recurring && <Badge label={`↻ ${gig.recurrence}`} color={C.amber} />}
         <div style={{ fontFamily:F.display, fontSize:30, letterSpacing:2, color:C.white, marginTop:10, lineHeight:1 }}>
-          {bandProfile?.band_slug
-            ? <Link to={`/artist/${bandProfile.band_slug}`} onClick={onClose}
+          {gig.slug
+            ? <Link to={`/gig/${gig.slug}`} onClick={onClose}
                 style={{ color:C.white, textDecoration:"none" }}
                 onMouseEnter={e=>e.currentTarget.style.color=C.red}
                 onMouseLeave={e=>e.currentTarget.style.color=C.white}
               >{gig.band_name}</Link>
-            : gig.band_name
+            : bandProfile?.band_slug
+              ? <Link to={`/artist/${bandProfile.band_slug}`} onClick={onClose}
+                  style={{ color:C.white, textDecoration:"none" }}
+                  onMouseEnter={e=>e.currentTarget.style.color=C.red}
+                  onMouseLeave={e=>e.currentTarget.style.color=C.white}
+                >{gig.band_name}</Link>
+              : gig.band_name
           }
         </div>
+        {/* VIEW FULL GIG PAGE */}
+        {gig.slug && (
+          <Link to={`/gig/${gig.slug}`} onClick={onClose} style={{
+            display:"inline-block", marginTop:8, marginBottom:4,
+            padding:"7px 16px", background:C.red, color:"#fff",
+            textDecoration:"none", borderRadius:5,
+            fontFamily:F.display, fontSize:12, letterSpacing:2,
+          }}>VIEW FULL GIG PAGE →</Link>
+        )}
         {bandProfile?.band_slug && (
           <Link to={`/artist/${bandProfile.band_slug}`} onClick={onClose}
-            style={{ fontSize:11, color:C.red, textDecoration:"none", letterSpacing:1 }}
+            style={{ fontSize:11, color:C.muted, textDecoration:"none", letterSpacing:1, display:"block", marginTop:4 }}
           >VIEW ARTIST PAGE →</Link>
         )}
         <VenueLink gig={gig} venues={venues} />
@@ -1894,6 +1940,345 @@ function EditProfile({ user, profile, onSaved }) {
 
         {status==="success" && <div style={{ marginTop:12, color:C.green, fontSize:13 }}>✓ {msg}</div>}
         {status==="error"   && <div style={{ marginTop:12, color:C.red,   fontSize:13 }}>{msg}</div>}
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  GIG DETAIL PAGE
+// ════════════════════════════════════════════════════════════════════
+function GigDetailPage() {
+  const { slug }   = useParams();
+  const navigate   = useNavigate();
+  const [gig,      setGig]      = useState(null);
+  const [band,     setBand]     = useState(null);
+  const [venue,    setVenue]    = useState(null);
+  const [venueGigs,setVenueGigs]= useState([]);
+  const [prevNext, setPrevNext] = useState({ prev:null, next:null });
+  const [loading,  setLoading]  = useState(true);
+  const [copied,   setCopied]   = useState(false);
+  const today = new Date().toISOString().slice(0,10);
+
+  useEffect(() => {
+    async function load() {
+      setLoading(true);
+      const g = await DB.getGigBySlug(slug);
+      if (!g) { setLoading(false); return; }
+      setGig(g);
+
+      // Set SEO title
+      document.title = `${g.band_name} at ${g.venue}, ${g.city} | ${fmtDate(g.date)} | Music Scene Magazine`;
+
+      // Load band, venue, prev/next in parallel
+      const [bandData, venueData, pn] = await Promise.all([
+        g.band_profile_id
+          ? supabase.from("profiles").select("*").eq("id", g.band_profile_id).then(r => r.data?.[0] || null)
+          : Promise.resolve(null),
+        g.venue_id
+          ? supabase.from("venues").select("*").eq("id", g.venue_id).then(r => r.data?.[0] || null)
+          : Promise.resolve(null),
+        DB.getPrevNextGigs(g.date, g.time, g.id),
+      ]);
+
+      setBand(bandData);
+      setVenue(venueData);
+      setPrevNext(pn);
+
+      // Load other gigs at this venue
+      if (g.venue_id) {
+        const vg = await DB.getGigsByVenue(g.venue_id);
+        setVenueGigs(vg.filter(v => v.id !== g.id && v.date >= today).slice(0, 6));
+      }
+
+      setLoading(false);
+    }
+    load();
+    return () => { document.title = "Music Scene Magazine"; };
+  }, [slug]);
+
+  if (loading) return (
+    <div style={{ minHeight:"100vh", background:C.bg, display:"flex", alignItems:"center", justifyContent:"center" }}>
+      <style>{GLOBAL_CSS}</style>
+      <div style={{ color:C.muted, fontFamily:F.display, letterSpacing:2 }}>LOADING...</div>
+    </div>
+  );
+
+  if (!gig) return (
+    <div style={{ minHeight:"100vh", background:C.bg, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:20 }}>
+      <style>{GLOBAL_CSS}</style>
+      <div style={{ color:C.white, fontFamily:F.display, fontSize:32, letterSpacing:2 }}>GIG NOT FOUND</div>
+      <span onClick={()=>navigate("/")} style={{ color:C.red, cursor:"pointer", fontSize:14 }}>← Back to Calendar</span>
+    </div>
+  );
+
+  const color   = GENRE_COLORS[gig.genre] || C.red;
+  const gigUrl  = `https://musicscenemagazine.co.uk/gig/${gig.slug}`;
+  const mapsUrl = `https://www.google.com/maps/search/${encodeURIComponent(`${gig.venue} ${gig.city}`)}`;
+  const gcalUrl = (() => {
+    const d = gig.date.replace(/-/g,"");
+    const [h,m] = (gig.time||"20:00").split(":");
+    const start = `${d}T${h}${m}00`;
+    const endH  = String(+h+2).padStart(2,"0");
+    const end   = `${d}T${endH}${m}00`;
+    return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(`${gig.band_name} at ${gig.venue}`)}&dates=${start}/${end}&details=${encodeURIComponent(`${gig.band_name} live at ${gig.venue}, ${gig.city}`)}&location=${encodeURIComponent(`${gig.venue}, ${gig.city}`)}`;
+  })();
+
+  const copyLink = () => {
+    navigator.clipboard.writeText(gigUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const fbShare  = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(gigUrl)}`;
+  const xShare   = `https://twitter.com/intent/tweet?text=${encodeURIComponent(`${gig.band_name} live at ${gig.venue}, ${gig.city} — ${fmtDate(gig.date)}`)}&url=${encodeURIComponent(gigUrl)}`;
+
+  // Day of week helper
+  const dayName = (dateStr) => new Date(dateStr).toLocaleDateString("en-GB", { weekday:"long" });
+
+  const NavGigCard = ({ g, dir }) => (
+    <Link to={`/gig/${g.slug}`} style={{ textDecoration:"none", flex:1, minWidth:200 }}>
+      <div style={{
+        padding:"14px 18px", background:C.surface, border:`1px solid ${C.border}`,
+        borderTop:`2px solid ${GENRE_COLORS[g.genre]||C.red}`, borderRadius:8,
+        cursor:"pointer",
+        transition:"border-color 0.2s",
+      }}
+        onMouseEnter={e=>e.currentTarget.style.borderColor=C.red}
+        onMouseLeave={e=>e.currentTarget.style.borderColor=GENRE_COLORS[g.genre]||C.red}
+      >
+        <div style={{ fontSize:10, color:C.dim, letterSpacing:2, fontFamily:F.display, marginBottom:6 }}>
+          {dir === "prev" ? "← PREVIOUS GIG" : "NEXT GIG →"}
+        </div>
+        <div style={{ fontFamily:F.display, fontSize:16, color:C.white, letterSpacing:1 }}>{g.band_name}</div>
+        <div style={{ fontSize:12, color:C.muted, marginTop:3 }}>{g.venue} · {g.city}</div>
+        <div style={{ fontSize:12, color:color, marginTop:3, fontFamily:F.display }}>{fmtDate(g.date)}</div>
+      </div>
+    </Link>
+  );
+
+  return (
+    <div style={{ minHeight:"100vh", background:C.bg, color:C.white, fontFamily:F.body }}>
+      <style>{GLOBAL_CSS}</style>
+
+      {/* Header */}
+      <header style={{ background:"#0a0a0a", borderBottom:`1px solid ${C.border}`, padding:"0 28px", display:"flex", alignItems:"center", justifyContent:"space-between", height:70 }}>
+        <span onClick={()=>navigate("/")} style={{ cursor:"pointer" }}>
+          <MSMLogo height={50} showWordmark={true} />
+        </span>
+        <span onClick={()=>navigate("/")} style={{ fontSize:12, color:C.muted, cursor:"pointer", letterSpacing:1 }}>← BACK TO CALENDAR</span>
+      </header>
+
+      {/* Hero */}
+      <div style={{
+        background: gig.poster_url
+          ? `linear-gradient(180deg, rgba(0,0,0,0.7) 0%, #0d0d0d 100%), url(${gig.poster_url}) center/cover`
+          : `linear-gradient(180deg, ${color}22 0%, #0d0d0d 100%)`,
+        borderBottom:`1px solid ${color}44`,
+        padding:"48px 32px 40px",
+      }}>
+        <div style={{ maxWidth:900, margin:"0 auto" }}>
+          <Badge label={gig.genre} color={color} />
+          {gig.is_recurring && <Badge label={`↻ ${gig.recurrence}`} color={C.amber} />}
+          <div style={{ fontFamily:F.display, fontSize:52, letterSpacing:2, color:C.white, lineHeight:1, margin:"12px 0 8px" }}>
+            {band?.band_slug
+              ? <Link to={`/artist/${band.band_slug}`} style={{ color:C.white, textDecoration:"none" }}
+                  onMouseEnter={e=>e.currentTarget.style.color=C.red}
+                  onMouseLeave={e=>e.currentTarget.style.color=C.white}
+                >{gig.band_name}</Link>
+              : gig.band_name
+            }
+          </div>
+          <div style={{ fontSize:18, color:"#cccccc", marginBottom:6 }}>
+            {dayName(gig.date)} {fmtDate(gig.date)}
+          </div>
+          <div style={{ display:"flex", gap:20, flexWrap:"wrap", fontSize:14, color:"#aaaaaa", marginBottom:20 }}>
+            <span>📍 {gig.venue}, {gig.city}</span>
+            <span>🕐 {gig.time}</span>
+          </div>
+          {/* Action buttons */}
+          <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+            {gig.tickets && (
+              <a href={gig.tickets} target="_blank" rel="noreferrer"
+                style={{ padding:"12px 24px", background:C.red, color:"#fff", textDecoration:"none", borderRadius:5, fontFamily:F.display, fontSize:13, letterSpacing:2 }}
+              >GET TICKETS →</a>
+            )}
+            <a href={gcalUrl} target="_blank" rel="noreferrer"
+              style={{ padding:"12px 20px", background:"rgba(255,255,255,0.08)", color:C.white, textDecoration:"none", borderRadius:5, fontFamily:F.display, fontSize:12, letterSpacing:2, border:`1px solid ${C.border}` }}
+            >📅 GOOGLE CALENDAR</a>
+            <button onClick={()=>exportICal([gig])}
+              style={{ padding:"12px 20px", background:"rgba(255,255,255,0.08)", color:C.white, border:`1px solid ${C.border}`, borderRadius:5, cursor:"pointer", fontFamily:F.display, fontSize:12, letterSpacing:2 }}
+            >⬇ ICAL</button>
+          </div>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div style={{ maxWidth:900, margin:"0 auto", padding:"40px 32px" }}>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:32, marginBottom:48 }}>
+
+          {/* Band section */}
+          {band && (
+            <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderTop:`3px solid ${color}`, borderRadius:8, padding:24 }}>
+              <div style={{ fontSize:10, color:C.dim, letterSpacing:3, fontFamily:F.display, marginBottom:14 }}>THE BAND</div>
+              <div style={{ display:"flex", gap:14, alignItems:"flex-start", marginBottom:14 }}>
+                {band.photo_url && (
+                  <img src={band.photo_url} alt={band.band_name}
+                    style={{ width:64, height:64, borderRadius:"50%", objectFit:"cover", border:`2px solid ${color}`, flexShrink:0 }}
+                  />
+                )}
+                <div>
+                  <div style={{ fontFamily:F.display, fontSize:20, color:C.white, letterSpacing:1.5 }}>{band.band_name}</div>
+                  {(band.primary_genre||band.genre) && <Badge label={band.primary_genre||band.genre} color={color} />}
+                  {band.city && <div style={{ fontSize:12, color:C.muted, marginTop:4 }}>📍 {band.city}</div>}
+                </div>
+              </div>
+              {band.bio && (
+                <div style={{ fontSize:13, color:"#ccc", lineHeight:1.7, marginBottom:14,
+                  display:"-webkit-box", WebkitLineClamp:3, WebkitBoxOrient:"vertical", overflow:"hidden"
+                }}>{band.bio}</div>
+              )}
+              {band.band_slug && (
+                <Link to={`/artist/${band.band_slug}`}
+                  style={{ display:"inline-block", padding:"9px 18px", background:C.red, color:"#fff", textDecoration:"none", borderRadius:5, fontFamily:F.display, fontSize:11, letterSpacing:2 }}
+                >VIEW ARTIST PROFILE →</Link>
+              )}
+            </div>
+          )}
+
+          {/* Venue section */}
+          {venue && (
+            <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderTop:`3px solid ${C.amber}`, borderRadius:8, padding:24 }}>
+              <div style={{ fontSize:10, color:C.dim, letterSpacing:3, fontFamily:F.display, marginBottom:14 }}>THE VENUE</div>
+              <div style={{ display:"flex", gap:14, alignItems:"flex-start", marginBottom:14 }}>
+                {venue.photo_url && (
+                  <img src={venue.photo_url} alt={venue.name}
+                    style={{ width:64, height:64, borderRadius:6, objectFit:"cover", border:`2px solid ${C.amber}`, flexShrink:0 }}
+                  />
+                )}
+                <div>
+                  <div style={{ fontFamily:F.display, fontSize:20, color:C.white, letterSpacing:1.5 }}>{venue.name}</div>
+                  <div style={{ fontSize:12, color:C.muted, marginTop:4 }}>📍 {venue.city}</div>
+                </div>
+              </div>
+              {venue.description && (
+                <div style={{ fontSize:13, color:"#ccc", lineHeight:1.7, marginBottom:14,
+                  display:"-webkit-box", WebkitLineClamp:3, WebkitBoxOrient:"vertical", overflow:"hidden"
+                }}>{venue.description}</div>
+              )}
+              <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                {venue.slug && (
+                  <Link to={`/venue/${venue.slug}`}
+                    style={{ display:"inline-block", padding:"9px 18px", background:C.amber, color:"#000", textDecoration:"none", borderRadius:5, fontFamily:F.display, fontSize:11, letterSpacing:2 }}
+                  >VIEW VENUE PROFILE →</Link>
+                )}
+                <a href={mapsUrl} target="_blank" rel="noreferrer"
+                  style={{ display:"inline-block", padding:"9px 18px", background:"rgba(255,255,255,0.08)", color:C.white, textDecoration:"none", borderRadius:5, fontFamily:F.display, fontSize:11, letterSpacing:2, border:`1px solid ${C.border}` }}
+                >📍 GOOGLE MAPS →</a>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Gig info */}
+        <div style={{ marginBottom:48 }}>
+          <SectionLabel>GIG INFORMATION</SectionLabel>
+          <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, padding:24 }}>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(160px,1fr))", gap:16, marginBottom: gig.notes ? 20 : 0 }}>
+              {[
+                { label:"DATE",  val: `${dayName(gig.date)}, ${fmtDate(gig.date)}` },
+                { label:"DOORS", val: gig.time },
+                { label:"VENUE", val: gig.venue },
+                { label:"CITY",  val: gig.city  },
+                { label:"GENRE", val: gig.genre  },
+              ].map(({ label, val }) => (
+                <div key={label}>
+                  <div style={{ fontSize:9, color:C.dim, letterSpacing:2, fontFamily:F.display, marginBottom:4 }}>{label}</div>
+                  <div style={{ fontSize:14, color:"#ddd" }}>{val}</div>
+                </div>
+              ))}
+            </div>
+            {gig.notes && (
+              <div style={{ marginTop:16, padding:"12px 16px", background:"rgba(255,255,255,0.03)", borderLeft:`3px solid ${color}`, borderRadius:4 }}>
+                <div style={{ fontSize:10, color:C.dim, letterSpacing:2, fontFamily:F.display, marginBottom:6 }}>NOTES</div>
+                <div style={{ fontSize:13, color:"#ccc", lineHeight:1.7 }}>{gig.notes}</div>
+              </div>
+            )}
+            {gig.description && (
+              <div style={{ marginTop:12, padding:"12px 16px", background:"rgba(255,255,255,0.03)", borderLeft:`3px solid ${C.muted}`, borderRadius:4 }}>
+                <div style={{ fontSize:10, color:C.dim, letterSpacing:2, fontFamily:F.display, marginBottom:6 }}>DESCRIPTION</div>
+                <div style={{ fontSize:13, color:"#ccc", lineHeight:1.7 }}>{gig.description}</div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Share */}
+        <div style={{ marginBottom:48 }}>
+          <SectionLabel>SHARE THIS GIG</SectionLabel>
+          <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+            <a href={fbShare} target="_blank" rel="noreferrer"
+              style={{ padding:"10px 20px", background:"#1877f2", color:"#fff", textDecoration:"none", borderRadius:5, fontFamily:F.display, fontSize:12, letterSpacing:2 }}
+            >FACEBOOK</a>
+            <a href={xShare} target="_blank" rel="noreferrer"
+              style={{ padding:"10px 20px", background:"#000", color:"#fff", textDecoration:"none", borderRadius:5, fontFamily:F.display, fontSize:12, letterSpacing:2, border:`1px solid #333` }}
+            >X / TWITTER</a>
+            <button onClick={copyLink}
+              style={{ padding:"10px 20px", background: copied ? C.green : "rgba(255,255,255,0.08)", color:"#fff", border:`1px solid ${C.border}`, borderRadius:5, cursor:"pointer", fontFamily:F.display, fontSize:12, letterSpacing:2 }}
+            >{copied ? "✓ COPIED!" : "COPY LINK"}</button>
+          </div>
+        </div>
+
+        {/* Other gigs at this venue */}
+        {venueGigs.length > 0 && (
+          <div style={{ marginBottom:48 }}>
+            <SectionLabel>OTHER GIGS AT {gig.venue.toUpperCase()}</SectionLabel>
+            <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+              {venueGigs.map(g => {
+                const gc = GENRE_COLORS[g.genre] || "#888";
+                return (
+                  <Link key={g.id} to={`/gig/${g.slug}`} style={{ textDecoration:"none" }}>
+                    <div style={{
+                      display:"flex", alignItems:"center", gap:16, padding:"12px 18px",
+                      background:C.surface, border:`1px solid ${C.border}`,
+                      borderLeft:`3px solid ${gc}`, borderRadius:8, flexWrap:"wrap",
+                      cursor:"pointer",
+                    }}
+                      onMouseEnter={e=>e.currentTarget.style.background=C.surfaceHigh}
+                      onMouseLeave={e=>e.currentTarget.style.background=C.surface}
+                    >
+                      <div style={{ fontFamily:F.display, fontSize:15, color:C.red, minWidth:110 }}>{fmtDate(g.date)}</div>
+                      <div style={{ flex:1 }}>
+                        <div style={{ fontSize:15, color:C.white }}>{g.band_name}</div>
+                        <div style={{ fontSize:11, color:C.muted }}>{g.genre} · {g.time}</div>
+                      </div>
+                      <Badge label={g.genre} color={gc} />
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* MSM Coverage placeholder */}
+        <div style={{ marginBottom:48, padding:24, background:"rgba(255,255,255,0.02)", border:`1px dashed ${C.border}`, borderRadius:8 }}>
+          <SectionLabel>MSM COVERAGE</SectionLabel>
+          <div style={{ fontSize:13, color:C.dim }}>
+            Reviews, interviews and features related to {gig.band_name} will appear here.
+          </div>
+        </div>
+
+        {/* Prev / Next navigation */}
+        {(prevNext.prev || prevNext.next) && (
+          <div style={{ marginBottom:48 }}>
+            <SectionLabel>KEEP EXPLORING</SectionLabel>
+            <div style={{ display:"flex", gap:16, flexWrap:"wrap" }}>
+              {prevNext.prev && <NavGigCard g={prevNext.prev} dir="prev" />}
+              {prevNext.next && <NavGigCard g={prevNext.next} dir="next" />}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -3446,6 +3831,7 @@ export default function App() {
       <Routes>
         <Route path="/artist/:slug" element={<BandProfilePage />} />
         <Route path="/venue/:slug"  element={<VenueProfilePage />} />
+        <Route path="/gig/:slug"    element={<GigDetailPage />} />
         <Route path="/*"            element={<MainApp />} />
       </Routes>
     </BrowserRouter>
