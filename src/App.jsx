@@ -2,7 +2,7 @@
 //  MUSIC SCENE MAGAZINE — GIG CALENDAR
 //  Full-featured: Auth · Admin · Filters · iCal · Supabase-ready
 // ════════════════════════════════════════════════════════════════════
-// 
+//
 //  SUPABASE SETUP
 //  ─────────────
 //  1. Create a project at https://supabase.com
@@ -3544,7 +3544,6 @@ function AdminVenues({ venues, allGigs, onRefresh }) {
     } catch(e) {
       showMsg(e.message, "error");
     }
-  };
   };
 
   const handleSave = async () => {
