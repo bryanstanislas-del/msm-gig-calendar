@@ -3512,14 +3512,21 @@ function BulkImport({ bands, onImported }) {
   const bandOptions = bands.filter(b => b.band_name).sort((a,b)=>a.band_name.localeCompare(b.band_name));
   const selectedBandObj = bandOptions.find(b => b.id === selectedBand);
 
+  const bandGenre = selectedBandObj?.primary_genre || selectedBandObj?.genre || "";
+
   const handlePreview = () => {
     if (!text.trim()) return;
+    // Warn if band has no genre set
+    if (!bandGenre) {
+      // Don't block — just let the user see the warning in the UI
+    }
     const parsed = parseGigText(text);
     setRows(parsed.map((r, i) => ({
       ...r,
       id:          i,
       time:        r.time || defaultTime,
-      genre:       selectedBandObj?.primary_genre || selectedBandObj?.genre || "Other",
+      // Use band profile genre if available, otherwise leave blank to force selection
+      genre:       bandGenre || "",
       description: r.description || "",
       editing:     false,
     })));
@@ -3541,6 +3548,16 @@ function BulkImport({ bands, onImported }) {
     if (!selectedBand) { alert("Please select a band first"); return; }
     const toImport = rows.filter(r => r.date && r.venue);
     if (!toImport.length) { alert("No valid gigs to import"); return; }
+
+    // Block if any gig has no genre
+    const missingGenre = toImport.filter(r => !r.genre);
+    if (missingGenre.length > 0) {
+      setResult({
+        success: 0, errors: missingGenre.length,
+        firstError: `Genre required for all gigs before import. ${missingGenre.length} gig${missingGenre.length!==1?"s":""} missing genre.`
+      });
+      return;
+    }
 
     setImporting(true);
     let successCount = 0, errorCount = 0;
@@ -3567,7 +3584,7 @@ function BulkImport({ bands, onImported }) {
           city:            row.city,
           date:            row.date,
           time:            row.time || "20:00",
-          genre:           row.genre || "Other",
+          genre:           row.genre || bandGenre || null,
           status:          "approved",
           submitted_by:    userId,
           slug:            slugData || null,
@@ -3628,7 +3645,10 @@ function BulkImport({ bands, onImported }) {
         {selectedBandObj && (
           <div style={{ padding:"10px 14px", background:"rgba(232,32,58,0.06)", borderRadius:6, fontSize:12, color:C.muted, marginBottom:16 }}>
             🎸 <span style={{ color:C.white }}>{selectedBandObj.band_name}</span>
-            {selectedBandObj.primary_genre && <> · <span style={{ color:GENRE_COLORS[selectedBandObj.primary_genre]||C.red }}>{selectedBandObj.primary_genre}</span></>}
+            {bandGenre
+              ? <> · <span style={{ color:GENRE_COLORS[bandGenre]||C.red }}>{bandGenre}</span> <span style={{ color:C.green, fontSize:10 }}>✓ will be applied to all imported gigs</span></>
+              : <> · <span style={{ color:C.amber }}>⚠ No genre set on profile — you will need to set genre manually for each gig</span></>
+            }
             {selectedBandObj.city && <> · 📍 {selectedBandObj.city}</>}
           </div>
         )}
@@ -3750,6 +3770,12 @@ function BulkImport({ bands, onImported }) {
           {warningRows.length > 0 && (
             <div style={{ marginTop:16, padding:12, background:"rgba(244,162,97,0.08)", border:`1px solid ${C.amber}`, borderRadius:6, fontSize:12, color:C.amber }}>
               ⚠️ Rows marked with a warning have missing or unclear data. Please edit them before importing, or remove them.
+            </div>
+          )}
+
+          {rows && rows.some(r => !r.genre) && (
+            <div style={{ marginTop:12, padding:12, background:"rgba(232,32,58,0.08)", border:`1px solid ${C.red}`, borderRadius:6, fontSize:12, color:C.red }}>
+              ⚠️ Some gigs have no genre set. Please select a genre for each row before importing.
             </div>
           )}
 
