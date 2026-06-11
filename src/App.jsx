@@ -2356,7 +2356,7 @@ function EditProfile({ user, profile, onSaved }) {
   const [form, setForm] = useState({
     band_name:           profile?.band_name           || "",
     city:                profile?.city                || "",
-    genre:               profile?.genre               || "Indie Rock",
+    genre:               profile?.genre               || "",
     primary_genre:       profile?.primary_genre       || "",
     secondary_genre:     profile?.secondary_genre     || "",
     tertiary_genre:      profile?.tertiary_genre      || "",
@@ -3512,7 +3512,7 @@ function BulkImport({ bands, onImported }) {
   const bandOptions = bands.filter(b => b.band_name).sort((a,b)=>a.band_name.localeCompare(b.band_name));
   const selectedBandObj = bandOptions.find(b => b.id === selectedBand);
 
-  const bandGenre = selectedBandObj?.primary_genre || selectedBandObj?.genre || "";
+  const bandGenre = selectedBandObj?.primary_genre || "";
 
   const handlePreview = () => {
     if (!text.trim()) return;
