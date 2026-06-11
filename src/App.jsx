@@ -318,6 +318,29 @@ const DB = {
     return data;
   },
 
+  async deleteBand(bandId) {
+    if (USE_MOCK) return;
+    // Orphan related gigs (set band_profile_id to null)
+    await supabase.from("gigs").update({ band_profile_id: null }).eq("band_profile_id", bandId);
+    const { error } = await supabase.from("profiles").delete().eq("id", bandId);
+    if (error) throw new Error(error.message);
+  },
+
+  async deleteVenue(venueId) {
+    if (USE_MOCK) return;
+    // Orphan related gigs
+    await supabase.from("gigs").update({ venue_id: null }).eq("venue_id", venueId);
+    const { error } = await supabase.from("venues").delete().eq("id", venueId);
+    if (error) throw new Error(error.message);
+  },
+
+  async updateGig(gigId, updates) {
+    if (USE_MOCK) return updates;
+    const { data, error } = await supabase.from("gigs").update(updates).eq("id", gigId).select();
+    if (error) throw new Error(error.message);
+    return data[0];
+  },
+
   async deleteGig(gigId) {
     if (USE_MOCK) { MOCK_GIGS = MOCK_GIGS.filter(g => g.id !== gigId); return; }
     const { error } = await supabase.from("gigs").delete().eq("id", gigId);
@@ -847,10 +870,15 @@ function SubmitGigForm({ user, profile, onSubmitted, onEditProfile }) {
 //  ADMIN PANEL
 // ════════════════════════════════════════════════════════════════════
 function AdminPanel({ allGigs, onRefresh, bands=[] }) {
-  const [filter, setFilter] = useState("pending");
+  const [filter,  setFilter]  = useState("pending");
   const [loading, setLoading] = useState({});
+  const [editing, setEditing] = useState(null); // gig being edited
+  const [editForm, setEditForm] = useState({});
+  const [saving,  setSaving]  = useState(false);
+  const [editMsg, setEditMsg] = useState("");
 
   const visible = allGigs.filter(g => filter === "all" ? true : g.status === filter);
+  const counts  = { all:allGigs.length, pending:allGigs.filter(g=>g.status==="pending").length, approved:allGigs.filter(g=>g.status==="approved").length, rejected:allGigs.filter(g=>g.status==="rejected").length };
 
   const action = async (gigId, status) => {
     setLoading(l=>({...l,[gigId]:true}));
@@ -859,20 +887,111 @@ function AdminPanel({ allGigs, onRefresh, bands=[] }) {
     setLoading(l=>({...l,[gigId]:false}));
   };
 
-  const remove = async (gigId) => {
-    if (!confirm("Delete this gig permanently?")) return;
+  const remove = async (gigId, bandName) => {
+    if (!confirm(`Delete "${bandName}" permanently? This cannot be undone.`)) return;
     setLoading(l=>({...l,[gigId]:true}));
     await DB.deleteGig(gigId);
     await onRefresh();
   };
 
-  const counts = { all:allGigs.length, pending:allGigs.filter(g=>g.status==="pending").length, approved:allGigs.filter(g=>g.status==="approved").length, rejected:allGigs.filter(g=>g.status==="rejected").length };
+  const openEdit = (g) => {
+    setEditing(g);
+    setEditForm({
+      band_name:    g.band_name    || "",
+      venue:        g.venue        || "",
+      city:         g.city         || "",
+      date:         g.date         || "",
+      time:         g.time         || "20:00",
+      genre:        g.genre        || "Other",
+      status:       g.status       || "pending",
+      notes:        g.notes        || "",
+      description:  g.description  || "",
+      tickets:      g.tickets      || "",
+      poster_url:   g.poster_url   || "",
+      featured:     g.featured     || false,
+      spotify:      g.spotify      || "",
+    });
+    setEditMsg("");
+  };
 
+  const saveEdit = async () => {
+    setSaving(true);
+    try {
+      // Re-link band_profile_id if band_name changed
+      let extra = {};
+      if (editForm.band_name !== editing.band_name) {
+        const { data: bp } = await supabase.from("profiles").select("id").ilike("band_name", editForm.band_name.trim()).limit(1);
+        extra.band_profile_id = bp?.[0]?.id || null;
+      }
+      // venue_id handled by trigger on venue/city update
+      await DB.updateGig(editing.id, { ...editForm, ...extra });
+      setEditMsg("✓ Gig updated");
+      await onRefresh();
+      setTimeout(() => { setEditing(null); setEditMsg(""); }, 1000);
+    } catch(e) {
+      setEditMsg(e.message);
+    }
+    setSaving(false);
+  };
+
+  // ── EDIT VIEW ──
+  if (editing) return (
+    <div style={{ maxWidth:700 }}>
+      <div style={{ display:"flex", alignItems:"center", gap:16, marginBottom:24, flexWrap:"wrap" }}>
+        <span onClick={()=>setEditing(null)} style={{ color:C.muted, cursor:"pointer", fontSize:13 }}>← Back to moderation</span>
+        <div style={{ fontFamily:F.display, fontSize:20, color:C.white, letterSpacing:2 }}>EDIT GIG</div>
+      </div>
+      {editMsg && (
+        <div style={{ marginBottom:16, padding:12, background: editMsg.startsWith("✓") ? "rgba(67,170,139,0.1)" : "rgba(232,32,58,0.1)", border:`1px solid ${editMsg.startsWith("✓")?C.green:C.red}`, borderRadius:6, fontSize:13, color: editMsg.startsWith("✓")?C.green:C.red }}>
+          {editMsg}
+        </div>
+      )}
+      <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderTop:`3px solid ${C.red}`, borderRadius:8, padding:26 }}>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
+          <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2 }}>GIG DETAILS</div>
+          <div style={{ gridColumn:"1/-1" }}><Input label="BAND / ARTIST NAME" value={editForm.band_name} onChange={e=>setEditForm(f=>({...f,band_name:e.target.value}))} /></div>
+          <Input label="VENUE"  value={editForm.venue} onChange={e=>setEditForm(f=>({...f,venue:e.target.value}))} />
+          <Input label="CITY"   value={editForm.city}  onChange={e=>setEditForm(f=>({...f,city:e.target.value}))} />
+          <Input label="DATE"   type="date" value={editForm.date} onChange={e=>setEditForm(f=>({...f,date:e.target.value}))} />
+          <Input label="TIME"   type="time" value={editForm.time} onChange={e=>setEditForm(f=>({...f,time:e.target.value}))} />
+          <Select label="GENRE" value={editForm.genre} onChange={e=>setEditForm(f=>({...f,genre:e.target.value}))} options={GENRES} />
+          <Select label="STATUS" value={editForm.status} onChange={e=>setEditForm(f=>({...f,status:e.target.value}))}
+            options={[{value:"pending",label:"Pending"},{value:"approved",label:"Approved"},{value:"rejected",label:"Rejected"}]}
+          />
+          <div style={{ gridColumn:"1/-1" }}><Input label="TICKET LINK" type="url" value={editForm.tickets} onChange={e=>setEditForm(f=>({...f,tickets:e.target.value}))} placeholder="https://..." /></div>
+          <div style={{ gridColumn:"1/-1" }}><Input label="POSTER URL"  type="url" value={editForm.poster_url} onChange={e=>setEditForm(f=>({...f,poster_url:e.target.value}))} placeholder="https://..." /></div>
+          <div style={{ gridColumn:"1/-1" }}><Input label="SPOTIFY URL" type="url" value={editForm.spotify} onChange={e=>setEditForm(f=>({...f,spotify:e.target.value}))} placeholder="https://open.spotify.com/artist/..." /></div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <label style={{ display:"block", fontSize:13, color:C.white, letterSpacing:2, marginBottom:6, fontFamily:F.display }}>NOTES</label>
+            <textarea value={editForm.notes} onChange={e=>setEditForm(f=>({...f,notes:e.target.value}))} rows={3} style={{ ...inputCss, resize:"vertical" }} />
+          </div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <label style={{ display:"block", fontSize:13, color:C.white, letterSpacing:2, marginBottom:6, fontFamily:F.display }}>DESCRIPTION</label>
+            <textarea value={editForm.description} onChange={e=>setEditForm(f=>({...f,description:e.target.value}))} rows={4} style={{ ...inputCss, resize:"vertical" }} />
+          </div>
+          <div style={{ gridColumn:"1/-1", display:"flex", alignItems:"center", justifyContent:"space-between", padding:"14px 16px", background:"rgba(255,255,255,0.03)", border:`1px solid ${C.border}`, borderRadius:6 }}>
+            <div>
+              <div style={{ fontSize:13, color:C.white, fontFamily:F.display, letterSpacing:1 }}>FEATURED GIG</div>
+              <div style={{ fontSize:11, color:C.dim, marginTop:2 }}>Highlighted on the calendar</div>
+            </div>
+            <div onClick={()=>setEditForm(f=>({...f,featured:!f.featured}))}
+              style={{ width:48, height:26, borderRadius:13, cursor:"pointer", background: editForm.featured ? C.red : "rgba(255,255,255,0.1)", position:"relative", flexShrink:0, transition:"background 0.2s" }}
+            >
+              <div style={{ width:20, height:20, borderRadius:"50%", background:"#fff", position:"absolute", top:3, left: editForm.featured ? 25 : 3, transition:"left 0.2s" }} />
+            </div>
+          </div>
+        </div>
+        <Btn onClick={saveEdit} disabled={saving} style={{ width:"100%", marginTop:20, padding:"13px" }}>
+          {saving ? "SAVING..." : "SAVE GIG"}
+        </Btn>
+      </div>
+    </div>
+  );
+
+  // ── LIST VIEW ──
   return (
     <div>
-      <SectionLabel>ADMIN — MODERATION PANEL</SectionLabel>
-
-      {/* Filter tabs */}
+      <SectionLabel>MODERATION PANEL</SectionLabel>
       <div style={{ display:"flex", gap:6, marginBottom:20, flexWrap:"wrap" }}>
         {[["all","ALL"],["pending","PENDING"],["approved","APPROVED"],["rejected","REJECTED"]].map(([k,l]) => (
           <button key={k} onClick={()=>setFilter(k)} style={{
@@ -885,35 +1004,32 @@ function AdminPanel({ allGigs, onRefresh, bands=[] }) {
           </button>
         ))}
       </div>
-
-      {visible.length === 0 && (
-        <div style={{ color:C.dim, fontSize:13, padding:"24px 0" }}>No gigs in this category.</div>
-      )}
-
+      {visible.length === 0 && <div style={{ color:C.dim, fontSize:13, padding:"24px 0" }}>No gigs in this category.</div>}
       <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
         {visible.map(g => {
           const color = GENRE_COLORS[g.genre]||"#888";
           const spin  = loading[g.id];
           return (
-            <div key={g.id} style={{
-              background:C.surfaceHigh, border:`1px solid ${C.border}`,
-              borderLeft:`3px solid ${color}`, borderRadius:6, padding:"14px 16px",
-            }}>
+            <div key={g.id} style={{ background:C.surfaceHigh, border:`1px solid ${C.border}`, borderLeft:`3px solid ${color}`, borderRadius:6, padding:"14px 16px" }}>
               <div style={{ display:"flex", alignItems:"flex-start", gap:12, flexWrap:"wrap" }}>
                 <div style={{ flex:1, minWidth:200 }}>
                   <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", marginBottom:4 }}>
                     {(() => { const bp = bands.find(b=>b.band_name?.toLowerCase()===g.band_name?.toLowerCase()); return bp?.band_slug ? <Link to={`/artist/${bp.band_slug}`} style={{ fontFamily:F.display, fontSize:16, letterSpacing:1.5, color:C.white, textDecoration:"none" }} onMouseEnter={e=>e.currentTarget.style.color=C.red} onMouseLeave={e=>e.currentTarget.style.color=C.white}>{g.band_name}</Link> : <span style={{ fontFamily:F.display, fontSize:16, letterSpacing:1.5, color:C.white }}>{g.band_name}</span>; })()}
                     <StatusBadge status={g.status} />
                     <Badge label={g.genre} color={color} />
-              {g.is_recurring && <Badge label="↻" color={C.amber} />}
+                    {g.featured && <Badge label="★ FEATURED" color={C.amber} />}
+                    {g.is_recurring && <Badge label="↻" color={C.amber} />}
                   </div>
                   <div style={{ fontSize:12, color:C.muted }}>{g.venue} · {g.city}</div>
                   <div style={{ fontSize:11, color:C.dim, marginTop:2 }}>{fmtDate(g.date)} at {g.time}{g.notes ? ` · ${g.notes}` : ""}</div>
+                  {g.slug && <div style={{ fontSize:10, color:C.dim, marginTop:2, fontFamily:"monospace" }}>/gig/{g.slug}</div>}
                 </div>
                 <div style={{ display:"flex", gap:6, flexWrap:"wrap", alignItems:"center" }}>
-                  {g.status !== "approved"  && <Btn variant="success" onClick={()=>action(g.id,"approved")}  disabled={spin}>✓ APPROVE</Btn>}
-                  {g.status !== "rejected"  && <Btn variant="ghost"   onClick={()=>action(g.id,"rejected")}  disabled={spin}>✗ REJECT</Btn>}
-                  <Btn variant="danger" onClick={()=>remove(g.id)} disabled={spin}>🗑</Btn>
+                  <Btn variant="ghost" onClick={()=>openEdit(g)} disabled={spin} style={{ fontSize:11, padding:"6px 12px" }}>✏️ EDIT</Btn>
+                  {g.slug && <Link to={`/gig/${g.slug}`} target="_blank" style={{ ...btnCss("ghost"), fontSize:11, padding:"6px 12px", textDecoration:"none" }}>👁 VIEW</Link>}
+                  {g.status !== "approved" && <Btn variant="success" onClick={()=>action(g.id,"approved")} disabled={spin}>✓ APPROVE</Btn>}
+                  {g.status !== "rejected" && <Btn variant="ghost"   onClick={()=>action(g.id,"rejected")} disabled={spin}>✗ REJECT</Btn>}
+                  <Btn variant="danger" onClick={()=>remove(g.id, g.band_name)} disabled={spin}>🗑</Btn>
                 </div>
               </div>
             </div>
@@ -923,6 +1039,7 @@ function AdminPanel({ allGigs, onRefresh, bands=[] }) {
     </div>
   );
 }
+
 
 // ════════════════════════════════════════════════════════════════════
 //  FILTERS BAR
@@ -1316,6 +1433,151 @@ function StatsPanel({ gigs }) {
 }
 
 // ════════════════════════════════════════════════════════════════════
+//  ADMIN DASHBOARD
+// ════════════════════════════════════════════════════════════════════
+function AdminDashboard({ bands, allGigs, venues, onNav }) {
+  const today     = new Date();
+  const todayStr  = today.toISOString().slice(0,10);
+  const weekStr   = new Date(today.getTime() + 7*24*60*60*1000).toISOString().slice(0,10);
+  const monthStart= `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-01`;
+  const monthEnd  = new Date(today.getFullYear(), today.getMonth()+1, 0).toISOString().slice(0,10);
+
+  const approvedGigs   = allGigs.filter(g => g.status === "approved");
+  const pendingGigs    = allGigs.filter(g => g.status === "pending");
+  const upcomingWeek   = approvedGigs.filter(g => g.date >= todayStr && g.date <= weekStr);
+  const thisMonth      = approvedGigs.filter(g => g.date >= monthStart && g.date <= monthEnd);
+  const incompleteBands  = bands.filter(b => getProfileCompleteness(b).score < 60);
+  const incompleteVenues = venues.filter(v => !v.description && !v.website);
+  const disabledBands    = bands.filter(b => b.disabled);
+
+  // Backup health from localStorage
+  const lastExport   = localStorage.getItem("msm_last_export_iso");
+  const backupDays   = lastExport ? Math.floor((Date.now() - new Date(lastExport).getTime()) / (1000*60*60*24)) : null;
+  const backupHealth = !lastExport ? { icon:"🔴", label:"NO BACKUP", color:C.red }
+    : backupDays < 7  ? { icon:"🟢", label:`${backupDays}d ago`, color:C.green }
+    : backupDays < 30 ? { icon:"🟠", label:`${backupDays}d ago`, color:C.amber }
+    : { icon:"🔴", label:`${backupDays}d ago`, color:C.red };
+
+  const StatCard = ({ icon, label, val, sub, color=C.red, onClick, alert=false }) => (
+    <div onClick={onClick} style={{
+      background: alert ? "rgba(244,162,97,0.08)" : C.surfaceHigh,
+      border:`1px solid ${alert ? C.amber : C.border}`,
+      borderTop:`3px solid ${alert ? C.amber : color}`,
+      borderRadius:8, padding:"16px 18px",
+      cursor: onClick ? "pointer" : "default",
+      transition:"background 0.2s",
+    }}
+      onMouseEnter={e=>{ if(onClick) e.currentTarget.style.background=C.surface; }}
+      onMouseLeave={e=>{ if(onClick) e.currentTarget.style.background=alert?"rgba(244,162,97,0.08)":C.surfaceHigh; }}
+    >
+      <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+        <span style={{ fontSize:20 }}>{icon}</span>
+        <div style={{ fontSize:9, color:C.muted, letterSpacing:2, fontFamily:F.display }}>{label}</div>
+      </div>
+      <div style={{ fontSize:28, fontFamily:F.display, color, lineHeight:1 }}>{val}</div>
+      {sub && <div style={{ fontSize:11, color:C.dim, marginTop:4 }}>{sub}</div>}
+      {onClick && <div style={{ fontSize:10, color:C.muted, marginTop:6, letterSpacing:1 }}>CLICK TO MANAGE →</div>}
+    </div>
+  );
+
+  return (
+    <div>
+      <SectionLabel>ADMIN DASHBOARD</SectionLabel>
+      <div style={{ fontSize:12, color:C.muted, marginBottom:24 }}>
+        {today.toLocaleDateString("en-GB", { weekday:"long", day:"numeric", month:"long", year:"numeric" })}
+      </div>
+
+      {/* Attention required */}
+      {(pendingGigs.length > 0 || incompleteBands.length > 0 || !lastExport || backupDays >= 7) && (
+        <div style={{ marginBottom:28, padding:16, background:"rgba(244,162,97,0.06)", border:`1px solid ${C.amber}`, borderRadius:8 }}>
+          <div style={{ fontFamily:F.display, fontSize:13, color:C.amber, letterSpacing:2, marginBottom:10 }}>⚠ REQUIRES ATTENTION</div>
+          <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+            {pendingGigs.length > 0 && (
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+                <span style={{ fontSize:13, color:"#ccc" }}>📋 {pendingGigs.length} gig{pendingGigs.length!==1?"s":""} pending approval</span>
+                <Btn variant="ghost" onClick={()=>onNav("admin")} style={{ fontSize:11, padding:"5px 12px" }}>REVIEW →</Btn>
+              </div>
+            )}
+            {incompleteBands.length > 0 && (
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+                <span style={{ fontSize:13, color:"#ccc" }}>🎸 {incompleteBands.length} band{incompleteBands.length!==1?"s":""} with incomplete profiles</span>
+                <Btn variant="ghost" onClick={()=>onNav("bands")} style={{ fontSize:11, padding:"5px 12px" }}>MANAGE →</Btn>
+              </div>
+            )}
+            {(!lastExport || backupDays >= 7) && (
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+                <span style={{ fontSize:13, color:"#ccc" }}>💾 {!lastExport ? "No backup on record" : `Last backup ${backupDays} days ago`}</span>
+                <Btn variant="ghost" onClick={()=>onNav("backups")} style={{ fontSize:11, padding:"5px 12px" }}>BACKUP →</Btn>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Platform stats */}
+      <div style={{ fontFamily:F.display, fontSize:11, color:C.muted, letterSpacing:3, marginBottom:12 }}>PLATFORM OVERVIEW</div>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(150px,1fr))", gap:12, marginBottom:28 }}>
+        <StatCard icon="🎸" label="TOTAL BANDS"    val={bands.length}    color={C.red}   onClick={()=>onNav("bands")}  sub={`${disabledBands.length} disabled`} />
+        <StatCard icon="📍" label="TOTAL VENUES"   val={venues.length}   color={C.amber} onClick={()=>onNav("venues")} sub={`${incompleteVenues.length} need info`} />
+        <StatCard icon="📅" label="TOTAL GIGS"     val={allGigs.length}  color={C.red}   sub={`${approvedGigs.length} approved`} />
+        <StatCard icon="⏳" label="PENDING"         val={pendingGigs.length} color={pendingGigs.length>0?C.amber:C.green} onClick={pendingGigs.length>0?()=>onNav("admin"):null} alert={pendingGigs.length>0} />
+      </div>
+
+      {/* This week / month */}
+      <div style={{ fontFamily:F.display, fontSize:11, color:C.muted, letterSpacing:3, marginBottom:12 }}>UPCOMING GIGS</div>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(150px,1fr))", gap:12, marginBottom:28 }}>
+        <StatCard icon="📆" label="NEXT 7 DAYS"  val={upcomingWeek.length}  color={C.green} sub="upcoming gigs" />
+        <StatCard icon="🗓" label="THIS MONTH"   val={thisMonth.length}     color={C.green} sub={today.toLocaleDateString("en-GB",{month:"long"})} />
+      </div>
+
+      {/* Profile health */}
+      <div style={{ fontFamily:F.display, fontSize:11, color:C.muted, letterSpacing:3, marginBottom:12 }}>PROFILE HEALTH</div>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(150px,1fr))", gap:12, marginBottom:28 }}>
+        <StatCard icon="⚠" label="INCOMPLETE BANDS"  val={incompleteBands.length}  color={incompleteBands.length>0?C.amber:C.green}  alert={incompleteBands.length>0}  onClick={incompleteBands.length>0?()=>onNav("bands"):null} sub="below 60%" />
+        <StatCard icon="⚠" label="INCOMPLETE VENUES" val={incompleteVenues.length} color={incompleteVenues.length>0?C.amber:C.green} alert={incompleteVenues.length>0} onClick={incompleteVenues.length>0?()=>onNav("venues"):null} sub="no desc or website" />
+        <StatCard icon="🚫" label="DISABLED BANDS"   val={disabledBands.length}    color={disabledBands.length>0?C.dim:C.green} onClick={disabledBands.length>0?()=>onNav("bands"):null} />
+      </div>
+
+      {/* Backup status */}
+      <div style={{ fontFamily:F.display, fontSize:11, color:C.muted, letterSpacing:3, marginBottom:12 }}>BACKUP STATUS</div>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(150px,1fr))", gap:12, marginBottom:28 }}>
+        <StatCard icon={backupHealth.icon} label="BACKUP HEALTH" val={backupHealth.label} color={backupHealth.color}
+          alert={!lastExport || backupDays >= 7} onClick={()=>onNav("backups")} sub="click to backup" />
+        <StatCard icon="💾" label="LAST BACKUP" val={lastExport ? new Date(lastExport).toLocaleDateString("en-GB") : "NEVER"}
+          color={lastExport ? C.green : C.red} alert={!lastExport} onClick={()=>onNav("backups")} />
+      </div>
+
+      {/* Upcoming gigs list */}
+      {upcomingWeek.length > 0 && (
+        <div>
+          <div style={{ fontFamily:F.display, fontSize:11, color:C.muted, letterSpacing:3, marginBottom:12 }}>NEXT 7 DAYS</div>
+          <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+            {upcomingWeek.slice(0,10).map(g => {
+              const color = GENRE_COLORS[g.genre] || "#888";
+              return (
+                <div key={g.id} style={{
+                  display:"flex", alignItems:"center", gap:14, padding:"10px 16px",
+                  background:C.surfaceHigh, border:`1px solid ${C.border}`,
+                  borderLeft:`3px solid ${color}`, borderRadius:6, flexWrap:"wrap",
+                }}>
+                  <div style={{ fontFamily:F.display, fontSize:14, color:C.red, minWidth:100 }}>{fmtDate(g.date)}</div>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:14, color:C.white }}>{g.band_name}</div>
+                    <div style={{ fontSize:11, color:C.muted }}>{g.venue} · {g.city}</div>
+                  </div>
+                  <Badge label={g.genre} color={color} />
+                  {g.slug && <Link to={`/gig/${g.slug}`} target="_blank" style={{ fontSize:10, color:C.muted, textDecoration:"none" }}>↗</Link>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════
 //  ADMIN BANDS
 // ════════════════════════════════════════════════════════════════════
 function AdminBands({ bands, onRefresh }) {
@@ -1453,6 +1715,24 @@ function AdminBands({ bands, onRefresh }) {
     }
   };
 
+  // ── Delete band ──
+  const handleDelete = async (band) => {
+    const gigCount = await supabase.from("gigs").select("id", { count:"exact" }).eq("band_profile_id", band.id);
+    const count    = gigCount.count || 0;
+    const msg = count > 0
+      ? `Delete "${band.band_name}"?\n\n⚠ WARNING: This will orphan ${count} linked gig${count!==1?"s":""}.\n\nConsider disabling instead of deleting.\n\nType DELETE to confirm.`
+      : `Delete "${band.band_name}"?\n\nThis cannot be undone. Type DELETE to confirm.`;
+    const confirm = prompt(msg);
+    if (confirm !== "DELETE") { if (confirm !== null) alert("Deletion cancelled — type DELETE exactly."); return; }
+    try {
+      await DB.deleteBand(band.id);
+      showMsg(`✓ Band deleted`);
+      if (onRefresh) onRefresh();
+    } catch(e) {
+      showMsg(e.message, "error");
+    }
+  };
+
   // ── Reset password ──
   const resetPassword = async (band) => {
     const newPass = prompt(`Set new password for ${band.band_name}:`);
@@ -1567,6 +1847,7 @@ function AdminBands({ bands, onRefresh }) {
                     style={{ fontSize:11, padding:"6px 12px" }}
                   >{b.disabled ? "ENABLE" : "DISABLE"}</Btn>
                   <Btn variant="ghost" onClick={()=>resetPassword(b)} style={{ fontSize:11, padding:"6px 12px" }}>🔑</Btn>
+                  <Btn variant="danger" onClick={()=>handleDelete(b)} style={{ fontSize:11, padding:"6px 12px" }}>🗑</Btn>
                 </div>
               </div>
             </div>
@@ -3232,16 +3513,38 @@ function AdminVenues({ venues, allGigs, onRefresh }) {
   const openEdit = (venue) => {
     setSelected(venue);
     setEditForm({
-      name:        venue.name        || "",
-      city:        venue.city        || "",
-      description: venue.description || "",
-      website:     venue.website     || "",
-      facebook:    venue.facebook    || "",
-      instagram:   venue.instagram   || "",
-      twitter:     venue.twitter     || "",
-      photo_url:   venue.photo_url   || "",
+      name:          venue.name          || "",
+      city:          venue.city          || "",
+      address:       venue.address       || "",
+      postcode:      venue.postcode      || "",
+      capacity:      venue.capacity      || "",
+      contact_email: venue.contact_email || "",
+      phone:         venue.phone         || "",
+      description:   venue.description   || "",
+      website:       venue.website       || "",
+      facebook:      venue.facebook      || "",
+      instagram:     venue.instagram     || "",
+      twitter:       venue.twitter       || "",
+      photo_url:     venue.photo_url     || "",
     });
     setView("edit");
+  };
+
+  const handleDeleteVenue = async (venue) => {
+    const count = gigCounts[venue.id] || 0;
+    const msg = count > 0
+      ? `Delete "${venue.name}"?\n\n⚠ WARNING: This will orphan ${count} linked gig${count!==1?"s":""}.\n\nType DELETE to confirm.`
+      : `Delete "${venue.name}"?\n\nThis cannot be undone. Type DELETE to confirm.`;
+    const conf = prompt(msg);
+    if (conf !== "DELETE") { if (conf !== null) alert("Deletion cancelled — type DELETE exactly."); return; }
+    try {
+      await DB.deleteVenue(venue.id);
+      showMsg("✓ Venue deleted");
+      if (onRefresh) onRefresh();
+    } catch(e) {
+      showMsg(e.message, "error");
+    }
+  };
   };
 
   const handleSave = async () => {
@@ -3327,6 +3630,7 @@ function AdminVenues({ venues, allGigs, onRefresh }) {
                     style={{ ...btnCss("ghost"), fontSize:11, padding:"6px 12px", textDecoration:"none", display:"inline-block" }}
                   >👁 VIEW</a>
                 )}
+                <Btn variant="danger" onClick={()=>handleDeleteVenue(v)} style={{ fontSize:11, padding:"6px 12px" }}>🗑</Btn>
               </div>
             </div>
           );
@@ -3361,9 +3665,14 @@ function AdminVenues({ venues, allGigs, onRefresh }) {
           <div style={{ gridColumn:"1/-1" }}>
             <Input label="VENUE NAME" value={editForm.name} onChange={setE("name")} required />
           </div>
+          <Input label="CITY / TOWN" value={editForm.city}     onChange={setE("city")}     required />
+          <Input label="POSTCODE"    value={editForm.postcode} onChange={setE("postcode")} placeholder="PO1 1AA" />
           <div style={{ gridColumn:"1/-1" }}>
-            <Input label="CITY / TOWN" value={editForm.city} onChange={setE("city")} required />
+            <Input label="ADDRESS" value={editForm.address} onChange={setE("address")} placeholder="Street address" />
           </div>
+          <Input label="CAPACITY"      type="number" value={editForm.capacity}      onChange={setE("capacity")}      placeholder="e.g. 200" />
+          <Input label="CONTACT EMAIL" type="email"  value={editForm.contact_email} onChange={setE("contact_email")} placeholder="info@venue.co.uk" />
+          <Input label="PHONE"         type="tel"    value={editForm.phone}         onChange={setE("phone")}         placeholder="+44..." />
           <div style={{ gridColumn:"1/-1" }}>
             <label style={{ display:"block", fontSize:13, color:C.white, letterSpacing:2, marginBottom:6, fontFamily:F.display }}>DESCRIPTION</label>
             <textarea value={editForm.description} onChange={setE("description")} rows={4}
@@ -3879,7 +4188,7 @@ function MainApp() {
     setVenues(freshVenues);
   }, [auth]);
 
-  const handleAuth = (result) => { setAuth(result); setTab("submit"); };
+  const handleAuth = (result) => { setAuth(result); setTab(result.profile?.role === "admin" ? "dashboard" : "submit"); };
   const handleSignOut = async () => { 
     try { await DB.signOut(); } catch(e) { console.warn("Sign out error", e); }
     setAuth(null); 
@@ -3914,11 +4223,12 @@ function MainApp() {
     { id:"submit",   label:"SUBMIT GIG" },
     ...(auth ? [{ id:"profile", label:"MY PROFILE" }] : []),
     ...(isAdmin ? [
-      { id:"admin",  label:`ADMIN (${allGigs.filter(g=>g.status==="pending").length})` },
-      { id:"bands",  label:`BANDS (${bands.length})` },
-      { id:"import",  label:"BULK IMPORT" },
-      { id:"venues",  label:`VENUES (${venues.length})` },
-      { id:"backups", label:"BACKUPS" },
+      { id:"dashboard", label:"DASHBOARD" },
+      { id:"admin",     label:`MODERATION (${allGigs.filter(g=>g.status==="pending").length})` },
+      { id:"bands",     label:`BANDS (${bands.length})` },
+      { id:"venues",    label:`VENUES (${venues.length})` },
+      { id:"import",    label:"BULK IMPORT" },
+      { id:"backups",   label:"BACKUPS" },
     ] : []),
   ];
 
@@ -3977,6 +4287,11 @@ function MainApp() {
           <StatsPanel gigs={gigs} />
         )}
 
+        {/* DASHBOARD */}
+        {tab==="dashboard" && isAdmin && (
+          <AdminDashboard bands={bands} allGigs={allGigs} venues={venues} onNav={setTab} />
+        )}
+
         {/* BACKUPS */}
         {tab==="backups" && isAdmin && (
           <AdminBackups bands={bands} allGigs={allGigs} venues={venues} />
@@ -3997,7 +4312,7 @@ function MainApp() {
           <AdminBands bands={bands} onRefresh={refreshAdmin} />
         )}
 
-        {/* ADMIN */}
+        {/* MODERATION */}
         {tab==="admin" && isAdmin && (
           <AdminPanel allGigs={allGigs} bands={bands} onRefresh={refreshAdmin} />
         )}
