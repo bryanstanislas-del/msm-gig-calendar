@@ -1,4 +1,3 @@
-
 // ════════════════════════════════════════════════════════════════════
 //  MUSIC SCENE MAGAZINE — GIG CALENDAR
 //  Full-featured: Auth · Admin · Filters · iCal · Supabase-ready
@@ -3022,6 +3021,213 @@ function AdminVenues({ venues, allGigs, onRefresh }) {
 }
 
 // ════════════════════════════════════════════════════════════════════
+//  ADMIN BACKUPS
+// ════════════════════════════════════════════════════════════════════
+function AdminBackups({ bands, allGigs, venues }) {
+  const [lastExport, setLastExport] = useState(
+    localStorage.getItem("msm_last_export") || null
+  );
+  const [exporting, setExporting] = useState("");
+
+  const timestamp = () => new Date().toISOString().replace(/[:.]/g,"-").slice(0,19);
+  const now       = () => new Date().toISOString();
+
+  const markExported = () => {
+    const t = new Date().toLocaleString("en-GB");
+    localStorage.setItem("msm_last_export", t);
+    setLastExport(t);
+  };
+
+  // ── Download helpers ──
+  const downloadJSON = (data, filename) => {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type:"application/json" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadCSV = (rows, filename) => {
+    if (!rows.length) return;
+    const keys    = Object.keys(rows[0]);
+    const header  = keys.join(",");
+    const escape  = v => {
+      if (v == null) return "";
+      const s = String(v).replace(/"/g,'""');
+      return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s}"` : s;
+    };
+    const lines   = rows.map(r => keys.map(k => escape(r[k])).join(","));
+    const csv     = [header, ...lines].join("\n");
+    const blob    = new Blob([csv], { type:"text/csv" });
+    const url     = URL.createObjectURL(blob);
+    const a       = document.createElement("a");
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // ── Export functions ──
+  const exportBandsJSON = () => {
+    setExporting("bands-json");
+    downloadJSON(bands, `msm-bands-${timestamp()}.json`);
+    markExported();
+    setExporting("");
+  };
+
+  const exportBandsCSV = () => {
+    setExporting("bands-csv");
+    downloadCSV(bands, `msm-bands-${timestamp()}.csv`);
+    markExported();
+    setExporting("");
+  };
+
+  const exportGigsJSON = () => {
+    setExporting("gigs-json");
+    downloadJSON(allGigs, `msm-gigs-${timestamp()}.json`);
+    markExported();
+    setExporting("");
+  };
+
+  const exportGigsCSV = () => {
+    setExporting("gigs-csv");
+    downloadCSV(allGigs, `msm-gigs-${timestamp()}.csv`);
+    markExported();
+    setExporting("");
+  };
+
+  const exportVenuesJSON = () => {
+    setExporting("venues-json");
+    downloadJSON(venues, `msm-venues-${timestamp()}.json`);
+    markExported();
+    setExporting("");
+  };
+
+  const exportVenuesCSV = () => {
+    setExporting("venues-csv");
+    downloadCSV(venues, `msm-venues-${timestamp()}.csv`);
+    markExported();
+    setExporting("");
+  };
+
+  const exportEverything = async () => {
+    setExporting("all");
+    // Fetch full profiles (includes all fields)
+    const { data: profiles } = await supabase.from("profiles").select("*").eq("role","band");
+    const backup = {
+      exported_at: now(),
+      version:     "1.0",
+      source:      "Music Scene Magazine Gig Calendar",
+      meta: {
+        total_bands:  bands.length,
+        total_gigs:   allGigs.length,
+        total_venues: venues.length,
+        total_profiles: profiles?.length || 0,
+      },
+      bands,
+      gigs:    allGigs,
+      venues,
+      profiles: profiles || [],
+    };
+    downloadJSON(backup, `msm-full-backup-${timestamp()}.json`);
+    markExported();
+    setExporting("");
+  };
+
+  const ExportCard = ({ title, icon, count, unit, onJSON, onCSV, id }) => (
+    <div style={{
+      background:C.surface, border:`1px solid ${C.border}`,
+      borderTop:`3px solid ${C.red}`, borderRadius:8, padding:24,
+    }}>
+      <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:16 }}>
+        <span style={{ fontSize:28 }}>{icon}</span>
+        <div>
+          <div style={{ fontFamily:F.display, fontSize:18, color:C.white, letterSpacing:2 }}>{title}</div>
+          <div style={{ fontSize:12, color:C.muted, marginTop:2 }}>{count} {unit}</div>
+        </div>
+      </div>
+      <div style={{ display:"flex", gap:8 }}>
+        <Btn onClick={onJSON} disabled={exporting===`${id}-json`} style={{ flex:1, padding:"10px" }}>
+          {exporting===`${id}-json` ? "..." : "↓ JSON"}
+        </Btn>
+        <Btn variant="ghost" onClick={onCSV} disabled={exporting===`${id}-csv`} style={{ flex:1, padding:"10px" }}>
+          {exporting===`${id}-csv` ? "..." : "↓ CSV"}
+        </Btn>
+      </div>
+    </div>
+  );
+
+  return (
+    <div>
+      <SectionLabel>BACKUPS & EXPORTS</SectionLabel>
+
+      {/* Warning banner */}
+      <div style={{ marginBottom:24, padding:16, background:"rgba(244,162,97,0.08)", border:`1px solid ${C.amber}`, borderRadius:8 }}>
+        <div style={{ fontFamily:F.display, fontSize:13, color:C.amber, letterSpacing:2, marginBottom:6 }}>
+          ⚠ BEFORE ANY SQL MIGRATION OR DATABASE CHANGES
+        </div>
+        <div style={{ fontSize:13, color:"#ccc", lineHeight:1.7 }}>
+          Always export a full backup before running SQL migrations or making database changes.
+          You are on Supabase Free — there are no automated backups. This export is your only safety net.
+        </div>
+      </div>
+
+      {/* Stats strip */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(140px,1fr))", gap:12, marginBottom:28 }}>
+        {[
+          { label:"BANDS",        val: bands.length,   color:C.red   },
+          { label:"GIGS",         val: allGigs.length, color:C.red   },
+          { label:"VENUES",       val: venues.length,  color:C.red   },
+          { label:"LAST EXPORT",  val: lastExport ? lastExport.split(",")[0] : "NEVER", color: lastExport ? C.green : C.amber },
+        ].map(({ label, val, color }) => (
+          <div key={label} style={{ background:C.surfaceHigh, border:`1px solid ${C.border}`, borderRadius:6, padding:"12px 16px" }}>
+            <div style={{ fontSize:9, color:C.muted, letterSpacing:2, fontFamily:F.display }}>{label}</div>
+            <div style={{ fontSize:22, fontFamily:F.display, color, lineHeight:1.3, marginTop:2 }}>{val}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Export Everything — prominent */}
+      <div style={{ marginBottom:28, padding:24, background:"rgba(232,32,58,0.06)", border:`2px solid ${C.red}`, borderRadius:10 }}>
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:16 }}>
+          <div>
+            <div style={{ fontFamily:F.display, fontSize:22, color:C.white, letterSpacing:2 }}>FULL PLATFORM BACKUP</div>
+            <div style={{ fontSize:13, color:C.muted, marginTop:4 }}>
+              Single JSON file — bands, gigs, venues, profiles, metadata. Save to Google Drive or Dropbox.
+            </div>
+          </div>
+          <Btn onClick={exportEverything} disabled={exporting==="all"}
+            style={{ padding:"14px 32px", fontSize:14, whiteSpace:"nowrap" }}
+          >
+            {exporting==="all" ? "EXPORTING..." : "⬇ EXPORT EVERYTHING"}
+          </Btn>
+        </div>
+        {lastExport && (
+          <div style={{ marginTop:12, fontSize:11, color:C.green }}>✓ Last export: {lastExport}</div>
+        )}
+      </div>
+
+      {/* Individual exports */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(240px,1fr))", gap:16, marginBottom:28 }}>
+        <ExportCard title="BANDS"  icon="🎸" count={bands.length}   unit="band profiles" id="bands"  onJSON={exportBandsJSON}  onCSV={exportBandsCSV}  />
+        <ExportCard title="GIGS"   icon="📅" count={allGigs.length} unit="gigs total"    id="gigs"   onJSON={exportGigsJSON}   onCSV={exportGigsCSV}   />
+        <ExportCard title="VENUES" icon="📍" count={venues.length}  unit="venues"        id="venues" onJSON={exportVenuesJSON} onCSV={exportVenuesCSV} />
+      </div>
+
+      {/* Recovery instructions */}
+      <div style={{ padding:20, background:"rgba(255,255,255,0.02)", border:`1px solid ${C.border}`, borderRadius:8 }}>
+        <div style={{ fontFamily:F.display, fontSize:13, color:C.white, letterSpacing:2, marginBottom:12 }}>RECOVERY INSTRUCTIONS</div>
+        <div style={{ display:"flex", flexDirection:"column", gap:8, fontSize:12, color:C.muted, lineHeight:1.8 }}>
+          <div>📁 <strong style={{ color:"#ccc" }}>Store exports in:</strong> Google Drive → MSM Backups → [Year] → [Month]</div>
+          <div>📅 <strong style={{ color:"#ccc" }}>Recommended schedule:</strong> Full backup every Sunday + before any SQL migration</div>
+          <div>🔄 <strong style={{ color:"#ccc" }}>To restore:</strong> Contact support with your JSON backup — data can be reimported via SQL or the Supabase dashboard</div>
+          <div>🔑 <strong style={{ color:"#ccc" }}>Supabase project ID:</strong> fmlaaiolqwknowhtdeue — keep this safe</div>
+          <div>⚠ <strong style={{ color:C.amber }}>Free tier warning:</strong> Supabase Free has NO automated backups. These exports are your only protection.</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════
 //  GLOBAL CSS
 // ════════════════════════════════════════════════════════════════════
 const GLOBAL_CSS = `
@@ -3157,8 +3363,9 @@ function MainApp() {
     ...(isAdmin ? [
       { id:"admin",  label:`ADMIN (${allGigs.filter(g=>g.status==="pending").length})` },
       { id:"bands",  label:`BANDS (${bands.length})` },
-      { id:"import", label:"BULK IMPORT" },
-      { id:"venues", label:`VENUES (${venues.length})` },
+      { id:"import",  label:"BULK IMPORT" },
+      { id:"venues",  label:`VENUES (${venues.length})` },
+      { id:"backups", label:"BACKUPS" },
     ] : []),
   ];
 
@@ -3215,6 +3422,11 @@ function MainApp() {
         {/* STATS */}
         {tab==="stats" && (
           <StatsPanel gigs={gigs} />
+        )}
+
+        {/* BACKUPS */}
+        {tab==="backups" && isAdmin && (
+          <AdminBackups bands={bands} allGigs={allGigs} venues={venues} />
         )}
 
         {/* VENUES */}
