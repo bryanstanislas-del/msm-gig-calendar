@@ -54,37 +54,78 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 const USE_MOCK = SUPABASE_URL === "YOUR_SUPABASE_URL";
 
 // ── Constants ──────────────────────────────────────────────────────
-const GENRES = ["Indie Rock","Electronic","Folk","Shoegaze","Jazz","Metal","Hip-Hop","Pop","Classical","Punk","Country","Blues","Reggae","Soul","R&B","Acoustic","Alternative","Rock","Hard Rock","Dance","Americana","World Music","Comedy","Spoken Word","Other"];
-const MONTHS  = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-const DAYS    = ["SUN","MON","TUE","WED","THU","FRI","SAT"];
+// ── Genre system ───────────────────────────────────────────────────
+// Flat sorted list used for dropdowns and filtering
+const GENRES = [
+  "Acoustic","Afrobeat","Alternative","Americana","Bluegrass","Blues","Blues Rock",
+  "Britpop","Celtic","Classic Rock","Classical","Comedy","Country","Covers","Dance",
+  "Electronic","Experimental","Folk","Folk Rock","Funk","Funk Rock","Fusion",
+  "Garage Rock","Gospel","Grunge","Hard Rock","Hardcore","Hip-Hop","Indie Rock",
+  "Jazz","Jazz-Funk","Latin","Metal","Metalcore","New Wave","Original Music",
+  "Pop","Progressive Rock","Psychedelic","Punk","R&B","Reggae","Rock","Shoegaze",
+  "Singer-Songwriter","Ska","Ska Punk","Soul","Southern Rock","Spoken Word",
+  "Tribute","World Music","Other",
+].sort();
 
 const GENRE_COLORS = {
-  "Indie Rock":   "#e8203a",
-  "Electronic":   "#9b5de5",
-  "Folk":         "#f4a261",
-  "Shoegaze":     "#c77dff",
-  "Jazz":         "#43aa8b",
-  "Metal":        "#ff595e",
-  "Hip-Hop":      "#ff9f1c",
-  "Pop":          "#ff6b9d",
-  "Classical":    "#90e0ef",
-  "Punk":         "#ff4d00",
-  "Country":      "#c9a227",
-  "Blues":        "#1a78c2",
-  "Reggae":       "#2dc653",
-  "Soul":         "#e040fb",
-  "R&B":          "#ce93d8",
-  "Acoustic":     "#a5d6a7",
-  "Alternative":  "#ef5350",
-  "Rock":         "#ff7043",
-  "Hard Rock":    "#b71c1c",
-  "Dance":        "#00e5ff",
-  "Americana":    "#d4a373",
-  "World Music":  "#52b788",
-  "Comedy":       "#ffd600",
-  "Spoken Word":  "#90a4ae",
-  "Other":        "#888888",
+  "Acoustic":          "#a5d6a7",
+  "Alternative":       "#ef5350",
+  "Americana":         "#d4a373",
+  "Blues":             "#1a78c2",
+  "Blues Rock":        "#1565c0",
+  "Britpop":           "#7986cb",
+  "Celtic":            "#66bb6a",
+  "Classic Rock":      "#ff8a65",
+  "Classical":         "#90e0ef",
+  "Comedy":            "#ffd600",
+  "Country":           "#c9a227",
+  "Covers":            "#bdbdbd",
+  "Dance":             "#00e5ff",
+  "Electronic":        "#9b5de5",
+  "Experimental":      "#78909c",
+  "Folk":              "#f4a261",
+  "Folk Rock":         "#ffb74d",
+  "Funk":              "#ff6f00",
+  "Fusion":            "#26c6da",
+  "Garage Rock":       "#ef9a9a",
+  "Gospel":            "#fff176",
+  "Grunge":            "#8d6e63",
+  "Hard Rock":         "#b71c1c",
+  "Hip-Hop":           "#ff9f1c",
+  "Indie Rock":        "#e8203a",
+  "Jazz":              "#43aa8b",
+  "Jazz-Funk":         "#00897b",
+  "Latin":             "#f06292",
+  "Metal":             "#ff595e",
+  "Metalcore":         "#c62828",
+  "New Wave":          "#ab47bc",
+  "Original Music":    "#29b6f6",
+  "Pop":               "#ff6b9d",
+  "Progressive Rock":  "#5c6bc0",
+  "Psychedelic":       "#ce93d8",
+  "Punk":              "#ff4d00",
+  "R&B":               "#ce93d8",
+  "Reggae":            "#2dc653",
+  "Rock":              "#ff7043",
+  "Shoegaze":          "#c77dff",
+  "Singer-Songwriter": "#a1887f",
+  "Ska":               "#ffee58",
+  "Ska Punk":          "#d4e157",
+  "Soul":              "#e040fb",
+  "Southern Rock":     "#ffa726",
+  "Spoken Word":       "#90a4ae",
+  "Tribute":           "#b0bec5",
+  "World Music":       "#52b788",
+  "Afrobeat":          "#f4a261",
+  "Bluegrass":         "#a5c27c",
+  "Funk Rock":         "#ff8c42",
+  "Hardcore":          "#d32f2f",
+  "Ska Punk":          "#d4e157",
+  "Other":             "#888888",
 };
+
+const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const DAYS   = ["SUN","MON","TUE","WED","THU","FRI","SAT"];
 
 // ── Mock DB ────────────────────────────────────────────────────────
 let MOCK_GIGS = [
@@ -431,22 +472,39 @@ async function logActivity(action, entityType, entityName, entityId) {
 }
 
 // ── Profile completeness ───────────────────────────────────────────
+// Weights total 100. primary_genre falls back to legacy genre field.
+// Spotify is optional. Website OR any social link satisfies web/social.
 function getProfileCompleteness(profile) {
+  const p = profile;
   const fields = [
-    { key:"band_name",  label:"Band Name",  weight:20 },
-    { key:"city",       label:"City",       weight:10 },
-    { key:"genre",      label:"Genre",      weight:10 },
-    { key:"bio",        label:"Bio",        weight:15 },
-    { key:"website",    label:"Website",    weight:10 },
-    { key:"spotify",    label:"Spotify",    weight:15 },
-    { key:"instagram",  label:"Instagram",  weight:10 },
-    { key:"facebook",   label:"Facebook",   weight:5  },
-    { key:"photo_url",  label:"Photo",      weight:5  },
+    { key:"band_name",     label:"Band Name",
+      weight:15, check: p => !!(p?.band_name && p.band_name.trim()) },
+    { key:"primary_genre", label:"Primary Genre",
+      weight:10, check: p => !!(p?.primary_genre || p?.genre) },
+    { key:"city",          label:"City / Location",
+      weight:10, check: p => !!(p?.city && p.city.trim()) },
+    { key:"bio",           label:"Biography",
+      weight:20, check: p => !!(p?.bio && p.bio.trim()) },
+    { key:"photo_url",     label:"Profile Photo",
+      weight:15, check: p => !!(p?.photo_url && p.photo_url.trim()) },
+    { key:"web_social",    label:"Website or Social Media",
+      weight:15, check: p => !!(p?.website || p?.facebook || p?.instagram || p?.tiktok_url || p?.twitter) },
+    { key:"booking_email", label:"Contact / Booking Email",
+      weight:10, check: p => !!(p?.booking_email && p.booking_email.trim()) },
+    { key:"genre2_spotify",label:"Secondary Genre or Spotify",
+      weight:5,  check: p => !!(p?.secondary_genre || p?.spotify) },
   ];
-  const completed  = fields.filter(f => profile?.[f.key]);
-  const score      = completed.reduce((acc, f) => acc + f.weight, 0);
-  const missing    = fields.filter(f => !profile?.[f.key]).map(f => f.label);
-  return { score, missing, completed: completed.length, total: fields.length };
+
+  let score = 0;
+  const done    = [];
+  const missing = [];
+
+  for (const f of fields) {
+    if (f.check(p)) { score += f.weight; done.push(f.label); }
+    else              { missing.push(f.label); }
+  }
+
+  return { score, missing, done, completed: done.length, total: fields.length };
 }
 
 // ── iCal export ────────────────────────────────────────────────────
@@ -775,7 +833,7 @@ function SubmitGigForm({ user, profile, onSubmitted, onEditProfile }) {
     } catch(err) { setStatus("error"); setMsg(err.message); }
   };
 
-  const { score, missing } = getProfileCompleteness(profile);
+  const { score, missing, done } = getProfileCompleteness(profile);
 
   return (
     <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderTop:`3px solid ${C.red}`, borderRadius:8, padding:26 }}>
@@ -796,7 +854,10 @@ function SubmitGigForm({ user, profile, onSubmitted, onEditProfile }) {
         </div>
         {missing.length > 0 && (
           <div style={{ marginTop:8, fontSize:11, color:C.muted }}>
-            Missing: <span style={{ color:C.amber }}>{missing.join(", ")}</span>
+            <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginTop:4 }}>
+              {done.map(f    => <span key={f} style={{ fontSize:11, color:C.green }}>✓ {f}</span>)}
+              {missing.map(f => <span key={f} style={{ fontSize:11, color:C.red   }}>✗ {f}</span>)}
+            </div>
           </div>
         )}
         {score < 60 && (
@@ -1817,6 +1878,7 @@ function AdminBands({ bands, onRefresh }) {
       city:                band.city                || "",
       primary_genre:       band.primary_genre       || "",
       secondary_genre:     band.secondary_genre     || "",
+      tertiary_genre:      band.tertiary_genre      || "",
       bio:                 band.bio                 || "",
       website:             band.website             || "",
       spotify:             band.spotify             || "",
@@ -1939,9 +2001,10 @@ function AdminBands({ bands, onRefresh }) {
       <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
         {filtered.length === 0 && <div style={{ color:C.dim, fontSize:13 }}>No bands found.</div>}
         {filtered.map(b => {
-          const color     = GENRE_COLORS[b.primary_genre||b.genre] || "#888";
-          const { score } = getProfileCompleteness(b);
-          const scoreCol  = score===100 ? C.green : score>=60 ? C.amber : C.red;
+          const color                   = GENRE_COLORS[b.primary_genre||b.genre] || "#888";
+          const { score, done, missing } = getProfileCompleteness(b);
+          const scoreCol                = score===100 ? C.green : score>=60 ? C.amber : C.red;
+          const [showBreakdown, setShowBreakdown] = [false, ()=>{}]; // inline expand handled below
           return (
             <div key={b.id} style={{
               background: b.disabled ? "rgba(255,255,255,0.01)" : C.surfaceHigh,
@@ -1969,13 +2032,17 @@ function AdminBands({ bands, onRefresh }) {
                     {[b.city, b.primary_genre||b.genre].filter(Boolean).join(" · ")}
                     {b.band_slug && <span style={{ color:C.dim, marginLeft:8 }}>/{b.band_slug}</span>}
                   </div>
-                  {/* Completeness bar */}
+                  {/* Completeness bar + score */}
                   <div style={{ display:"flex", alignItems:"center", gap:6, marginTop:5 }}>
-                    <div style={{ width:60, background:"rgba(255,255,255,0.08)", borderRadius:3, height:3 }}>
-                      <div style={{ width:`${score}%`, height:"100%", background:scoreCol, borderRadius:3 }} />
+                    <div style={{ width:80, background:"rgba(255,255,255,0.08)", borderRadius:3, height:4 }}>
+                      <div style={{ width:`${score}%`, height:"100%", background:scoreCol, borderRadius:3, transition:"width 0.3s" }} />
                     </div>
-                    <span style={{ fontSize:10, color:scoreCol }}>{score}%</span>
-                    {score < 60 && <span style={{ fontSize:10, color:C.amber }}>⚠ Incomplete</span>}
+                    <span style={{ fontSize:11, color:scoreCol, fontFamily:F.display }}>{score}%</span>
+                  </div>
+                  {/* Completion breakdown */}
+                  <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginTop:6 }}>
+                    {done.map(f    => <span key={f} style={{ fontSize:10, color:C.green }}>✓ {f}</span>)}
+                    {missing.map(f => <span key={f} style={{ fontSize:10, color:C.red   }}>✗ {f}</span>)}
                   </div>
                 </div>
                 {/* Actions */}
@@ -2075,6 +2142,7 @@ function AdminBands({ bands, onRefresh }) {
           />
           <Select label="PRIMARY GENRE"            value={editForm.primary_genre}   onChange={setE("primary_genre")}   options={["", ...GENRES]} />
           <Select label="SECONDARY GENRE"          value={editForm.secondary_genre} onChange={setE("secondary_genre")} options={["", ...GENRES]} />
+          <Select label="TERTIARY GENRE"           value={editForm.tertiary_genre||""} onChange={setE("tertiary_genre")}  options={["", ...GENRES]} />
           <div style={{ gridColumn:"1/-1" }}>
             <label style={{ display:"block", fontSize:13, color:C.white, letterSpacing:2, marginBottom:6, fontFamily:F.display }}>BIO</label>
             <textarea value={editForm.bio} onChange={setE("bio")} rows={4}
@@ -2207,6 +2275,7 @@ function EditProfile({ user, profile, onSaved }) {
     genre:               profile?.genre               || "Indie Rock",
     primary_genre:       profile?.primary_genre       || "",
     secondary_genre:     profile?.secondary_genre     || "",
+    tertiary_genre:      profile?.tertiary_genre      || "",
     formation_year:      profile?.formation_year      || "",
     bio:                 profile?.bio                 || "",
     photo_url:           profile?.photo_url           || "",
@@ -2231,7 +2300,7 @@ function EditProfile({ user, profile, onSaved }) {
 
   const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }));
 
-  const { score, missing } = getProfileCompleteness(form);
+  const { score, missing, done } = getProfileCompleteness(form);
 
   const save = async () => {
     setStatus("loading");
@@ -2275,7 +2344,10 @@ function EditProfile({ user, profile, onSaved }) {
         </div>
         {missing.length > 0 && (
           <div style={{ marginTop:8, fontSize:12, color:C.muted }}>
-            Missing: <span style={{ color:C.amber }}>{missing.join(", ")}</span>
+            <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginTop:4 }}>
+              {done.map(f    => <span key={f} style={{ fontSize:11, color:C.green }}>✓ {f}</span>)}
+              {missing.map(f => <span key={f} style={{ fontSize:11, color:C.red   }}>✗ {f}</span>)}
+            </div>
           </div>
         )}
         {score === 100 && (
@@ -2309,6 +2381,7 @@ function EditProfile({ user, profile, onSaved }) {
           <Input label="FORMATION YEAR" value={form.formation_year} onChange={set("formation_year")} placeholder="e.g. 2018" />
           <Select label="PRIMARY GENRE" value={form.primary_genre} onChange={set("primary_genre")} options={["", ...GENRES]} />
           <Select label="SECONDARY GENRE (OPTIONAL)" value={form.secondary_genre} onChange={set("secondary_genre")} options={["", ...GENRES]} />
+          <Select label="TERTIARY GENRE (OPTIONAL)"  value={form.tertiary_genre||""} onChange={set("tertiary_genre")}  options={["", ...GENRES]} />
           <div style={{ gridColumn:"1/-1" }}>
             <label style={{ display:"block", fontSize:13, color:C.white, letterSpacing:2, marginBottom:6, fontFamily:F.display }}>BIO</label>
             <textarea value={form.bio} onChange={set("bio")} rows={5}
@@ -2989,6 +3062,7 @@ function BandProfilePage() {
             <div style={{ display:"flex", gap:12, flexWrap:"wrap", marginBottom:16, alignItems:"center" }}>
               {band.primary_genre && <Badge label={band.primary_genre} color={color} />}
               {band.secondary_genre && <Badge label={band.secondary_genre} color={C.muted} />}
+              {band.tertiary_genre  && <Badge label={band.tertiary_genre}  color={C.dim}   />}
               {band.city && <span style={{ fontSize:13, color:"#cccccc" }}>📍 {band.city}</span>}
               {band.formation_year && <span style={{ fontSize:13, color:"#aaaaaa" }}>Est. {band.formation_year}</span>}
             </div>
