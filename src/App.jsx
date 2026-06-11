@@ -1797,7 +1797,13 @@ function AdminBands({ bands, onRefresh }) {
   const [msg,        setMsg]        = useState({ text:"", type:"" });
 
   // ── Create band form state ──
-  const emptyCreate = { band_name:"", email:"", password:"" };
+  const emptyCreate = {
+    band_name:"", email:"", password:"",
+    city:"", bio:"", primary_genre:"", secondary_genre:"", tertiary_genre:"",
+    website:"", facebook:"", instagram:"", tiktok_url:"", twitter:"",
+    spotify:"", youtube_channel_url:"", booking_email:"", phone:"",
+    photo_url:"",
+  };
   const [createForm, setCreateForm] = useState(emptyCreate);
   const setC = k => e => setCreateForm(f=>({...f,[k]:e.target.value}));
 
@@ -1841,15 +1847,30 @@ function AdminBands({ bands, onRefresh }) {
         band_name: createForm.band_name
       });
 
-      // Upsert profile
+      // Upsert profile with all fields
       const { error: profileError } = await supabase.from("profiles").upsert({
-        id:            user.id,
-        band_name:     createForm.band_name,
-        role:          "band",
-        band_slug:     slugData,
-        band_status:   "active",
-        admin_created: true,
-        disabled:      false,
+        id:                  user.id,
+        band_name:           createForm.band_name,
+        role:                "band",
+        band_slug:           slugData,
+        band_status:         "active",
+        admin_created:       true,
+        disabled:            false,
+        city:                createForm.city           || null,
+        bio:                 createForm.bio            || null,
+        primary_genre:       createForm.primary_genre  || null,
+        secondary_genre:     createForm.secondary_genre|| null,
+        tertiary_genre:      createForm.tertiary_genre || null,
+        website:             createForm.website        || null,
+        facebook:            createForm.facebook       || null,
+        instagram:           createForm.instagram      || null,
+        tiktok_url:          createForm.tiktok_url     || null,
+        twitter:             createForm.twitter        || null,
+        spotify:             createForm.spotify        || null,
+        youtube_channel_url: createForm.youtube_channel_url || null,
+        booking_email:       createForm.booking_email  || null,
+        phone:               createForm.phone          || null,
+        photo_url:           createForm.photo_url      || null,
       });
       if (profileError) throw new Error(profileError.message);
 
@@ -1902,9 +1923,11 @@ function AdminBands({ bands, onRefresh }) {
         .update(editForm)
         .eq("id", selected.id);
       if (error) throw new Error(error.message);
-      showMsg("✓ Profile updated successfully");
-      setView("list");
+      await logActivity("band_edited", "band", editForm.band_name, selected.id);
+      showMsg("✓ Profile saved successfully", "success");
       if (onRefresh) onRefresh();
+      // Stay on edit page briefly so user sees confirmation
+      setTimeout(() => setView("list"), 2000);
     } catch(e) {
       showMsg(e.message, "error");
     }
@@ -2074,7 +2097,7 @@ function AdminBands({ bands, onRefresh }) {
 
   // ══ CREATE VIEW ══
   if (view === "create") return (
-    <div style={{ maxWidth:560 }}>
+    <div style={{ maxWidth:700 }}>
       <div style={{ display:"flex", alignItems:"center", gap:16, marginBottom:24 }}>
         <span onClick={()=>setView("list")} style={{ color:C.muted, cursor:"pointer", fontSize:13 }}>← Back</span>
         <SectionLabel>CREATE BAND ACCOUNT</SectionLabel>
@@ -2088,18 +2111,68 @@ function AdminBands({ bands, onRefresh }) {
 
       <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderTop:`3px solid ${C.red}`, borderRadius:8, padding:26 }}>
         <div style={{ fontSize:12, color:C.muted, marginBottom:20, lineHeight:1.7 }}>
-          Creates a Supabase auth account and band profile. The band can log in immediately using these credentials and update their own profile.
+          Creates a Supabase auth account and complete band profile in one step.
+          The band can log in immediately using these credentials.
         </div>
-        <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
-          <Input label="BAND / ARTIST NAME" value={createForm.band_name} onChange={setC("band_name")} required />
-          <Input label="EMAIL ADDRESS" type="email" value={createForm.email} onChange={setC("email")} required />
-          <Input label="TEMPORARY PASSWORD" type="text" value={createForm.password} onChange={setC("password")} required />
-          <div style={{ fontSize:11, color:C.dim }}>
+
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
+
+          {/* Account */}
+          <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2 }}>ACCOUNT</div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <Input label="BAND / ARTIST NAME *" value={createForm.band_name} onChange={setC("band_name")} required />
+          </div>
+          <Input label="EMAIL ADDRESS *"     type="email" value={createForm.email}    onChange={setC("email")}    required />
+          <Input label="TEMPORARY PASSWORD *" type="text"  value={createForm.password} onChange={setC("password")} required />
+          <div style={{ gridColumn:"1/-1", fontSize:11, color:C.dim }}>
             💡 Use a simple temporary password. Advise the band to change it after first login.
           </div>
+
+          {/* Band info */}
+          <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8 }}>BAND INFORMATION</div>
+          <Input label="BASE CITY" value={createForm.city} onChange={setC("city")} />
+          <Input label="CONTACT NUMBER" type="tel" value={createForm.phone} onChange={setC("phone")} />
+          <Select label="PRIMARY GENRE"            value={createForm.primary_genre}   onChange={setC("primary_genre")}   options={["", ...GENRES]} />
+          <Select label="SECONDARY GENRE"          value={createForm.secondary_genre} onChange={setC("secondary_genre")} options={["", ...GENRES]} />
+          <Select label="TERTIARY GENRE"           value={createForm.tertiary_genre}  onChange={setC("tertiary_genre")}  options={["", ...GENRES]} />
+          <div style={{ gridColumn:"1/-1" }}>
+            <label style={{ display:"block", fontSize:13, color:C.white, letterSpacing:2, marginBottom:6, fontFamily:F.display }}>BIO / ABOUT</label>
+            <textarea value={createForm.bio} onChange={setC("bio")} rows={4}
+              placeholder="Tell fans about this band..."
+              style={{ ...inputCss, resize:"vertical" }}
+            />
+          </div>
+
+          {/* Photo */}
+          <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8 }}>PROFILE PHOTO</div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <Input label="PHOTO URL" type="url" value={createForm.photo_url} onChange={setC("photo_url")} placeholder="https://..." />
+            {createForm.photo_url && (
+              <img src={createForm.photo_url} alt="Preview"
+                style={{ marginTop:8, width:70, height:70, borderRadius:"50%", objectFit:"cover", border:`2px solid ${C.red}` }}
+              />
+            )}
+          </div>
+
+          {/* Social */}
+          <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8 }}>SOCIAL & MUSIC</div>
+          <Input label="WEBSITE"   type="url" value={createForm.website}   onChange={setC("website")}   placeholder="https://..." />
+          <Input label="FACEBOOK"  type="url" value={createForm.facebook}  onChange={setC("facebook")}  placeholder="https://facebook.com/..." />
+          <Input label="INSTAGRAM" type="url" value={createForm.instagram} onChange={setC("instagram")} placeholder="https://instagram.com/..." />
+          <Input label="TIKTOK"    type="url" value={createForm.tiktok_url} onChange={setC("tiktok_url")} placeholder="https://tiktok.com/@..." />
+          <div style={{ gridColumn:"1/-1" }}>
+            <Input label="SPOTIFY ARTIST URL" type="url" value={createForm.spotify} onChange={setC("spotify")} placeholder="https://open.spotify.com/artist/..." />
+          </div>
+
+          {/* Contact */}
+          <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8 }}>CONTACT</div>
+          <Input label="BOOKING EMAIL" type="email" value={createForm.booking_email} onChange={setC("booking_email")} placeholder="booking@..." />
+          <Input label="YOUTUBE CHANNEL" type="url" value={createForm.youtube_channel_url} onChange={setC("youtube_channel_url")} placeholder="https://youtube.com/@..." />
+
         </div>
-        <Btn onClick={handleCreate} disabled={creating} style={{ width:"100%", marginTop:20, padding:"13px" }}>
-          {creating ? "CREATING..." : "CREATE BAND ACCOUNT →"}
+
+        <Btn onClick={handleCreate} disabled={creating} style={{ width:"100%", marginTop:24, padding:"14px" }}>
+          {creating ? "CREATING..." : "CREATE BAND →"}
         </Btn>
       </div>
     </div>
