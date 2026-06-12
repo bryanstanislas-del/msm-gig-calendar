@@ -471,7 +471,10 @@ async function logActivity(action, entityType, entityName, entityId) {
   } catch(e) { console.warn("Activity log failed:", e); }
 }
 
-// ── Profile completeness ───────────────────────────────────────────
+// ── Canonical base URL ─────────────────────────────────────────────
+// Uses Vercel deployment URL so shared links and OG tags work correctly.
+// When a custom domain is pointed at this Vercel app, update this value.
+const BASE_URL = "https://msm-gig-calendar.vercel.app";
 // Weights total 100. primary_genre falls back to legacy genre field.
 // Spotify is optional. Website OR any social link satisfies web/social.
 function getProfileCompleteness(profile) {
@@ -2406,7 +2409,7 @@ function EditProfile({ user, profile, onSaved }) {
   };
 
   const profileUrl = profile?.band_slug
-    ? `https://musicscenemagazine.co.uk/artist/${profile.band_slug}`
+    ? `${BASE_URL}/artist/${profile.band_slug}`
     : null;
 
   return (
@@ -2553,8 +2556,29 @@ function GigDetailPage() {
       if (!g) { setLoading(false); return; }
       setGig(g);
 
-      // Set SEO title
-      document.title = `${g.band_name} at ${g.venue}, ${g.city} | ${fmtDate(g.date)} | Music Scene Magazine`;
+      // Set SEO title + OG meta tags for social sharing
+      const pageTitle = `${g.band_name} at ${g.venue}, ${g.city} | ${fmtDate(g.date)} | Music Scene Magazine`;
+      const pageDesc  = `See ${g.band_name} live at ${g.venue}, ${g.city} on ${fmtDate(g.date)}. ${g.notes ? g.notes + " " : ""}Find venue details, band info and upcoming gigs on Music Scene Magazine.`;
+      const pageUrl   = `${BASE_URL}/gig/${g.slug}`;
+      const pageImg   = g.poster_url || "https://musicscenemagazine.co.uk/wp-content/uploads/msm-share.jpg";
+
+      document.title = pageTitle;
+
+      const setMeta = (prop, val, attr="property") => {
+        let el = document.querySelector(`meta[${attr}="${prop}"]`);
+        if (!el) { el = document.createElement("meta"); el.setAttribute(attr, prop); document.head.appendChild(el); }
+        el.setAttribute("content", val);
+      };
+      setMeta("og:title",       pageTitle);
+      setMeta("og:description", pageDesc);
+      setMeta("og:url",         pageUrl);
+      setMeta("og:image",       pageImg);
+      setMeta("og:type",        "website");
+      setMeta("og:site_name",   "Music Scene Magazine");
+      setMeta("twitter:card",        "summary_large_image", "name");
+      setMeta("twitter:title",       pageTitle,             "name");
+      setMeta("twitter:description", pageDesc,              "name");
+      setMeta("twitter:image",       pageImg,               "name");
 
       // Load band, venue, prev/next in parallel
       const [bandData, venueData, pn] = await Promise.all([
@@ -2580,7 +2604,17 @@ function GigDetailPage() {
       setLoading(false);
     }
     load();
-    return () => { document.title = "Music Scene Magazine"; };
+    return () => {
+      document.title = "Music Scene Magazine";
+      ["og:title","og:description","og:url","og:image","og:type","og:site_name"].forEach(prop => {
+        const el = document.querySelector(`meta[property="${prop}"]`);
+        if (el) el.remove();
+      });
+      ["twitter:card","twitter:title","twitter:description","twitter:image"].forEach(name => {
+        const el = document.querySelector(`meta[name="${name}"]`);
+        if (el) el.remove();
+      });
+    };
   }, [slug]);
 
   if (loading) return (
@@ -2599,9 +2633,12 @@ function GigDetailPage() {
   );
 
   const color   = GENRE_COLORS[gig.genre] || C.red;
-  const gigUrl  = `https://musicscenemagazine.co.uk/gig/${gig.slug}`;
-  const mapsUrl = `https://www.google.com/maps/search/${encodeURIComponent(`${gig.venue} ${gig.city}`)}`;
-  const gcalUrl = (() => {
+  const gigUrl   = `${BASE_URL}/gig/${gig.slug}`;
+  const ogUrl    = `${BASE_URL}/api/og?type=gig&slug=${encodeURIComponent(gig.slug)}`;
+  const fbShare  = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(ogUrl)}`;
+  const xShare   = `https://twitter.com/intent/tweet?text=${encodeURIComponent(`${gig.band_name} live at ${gig.venue}, ${gig.city} — ${fmtDate(gig.date)}`)}&url=${encodeURIComponent(ogUrl)}`;
+  const mapsUrl  = `https://www.google.com/maps/search/${encodeURIComponent(`${gig.venue} ${gig.city}`)}`;
+  const gcalUrl  = (() => {
     const d = gig.date.replace(/-/g,"");
     const [h,m] = (gig.time||"20:00").split(":");
     const start = `${d}T${h}${m}00`;
