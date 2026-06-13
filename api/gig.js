@@ -8,7 +8,7 @@ const { createClient } = require("@supabase/supabase-js");
 const SUPABASE_URL   = process.env.SUPABASE_URL   || "https://fmlaaiolqwknowhtdeue.supabase.co";
 const SUPABASE_ANON  = process.env.SUPABASE_ANON_KEY || "";
 const BASE_URL       = "https://msm-gig-calendar.vercel.app";
-const FALLBACK_IMAGE = "https://musicscenemagazine.co.uk/wp-content/uploads/msm-share.jpg";
+const FALLBACK_IMAGE = "https://musicscenemagazine.co.uk/wp-content/uploads/2026/06/msm-share.jpg";
 
 const MONTHS = ["January","February","March","April","May","June",
   "July","August","September","October","November","December"];
