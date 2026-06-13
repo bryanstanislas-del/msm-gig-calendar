@@ -1,6 +1,9 @@
 {
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/$1" },
-    { "source": "/(.*)",     "destination": "/index.html" }
+    { "source": "/api/(.*)",    "destination": "/api/$1" },
+    { "source": "/gig/:slug",   "destination": "/api/gig" },
+    { "source": "/artist/:slug","destination": "/api/artist" },
+    { "source": "/venue/:slug", "destination": "/api/venue" },
+    { "source": "/(.*)",        "destination": "/index.html" }
   ]
 }
