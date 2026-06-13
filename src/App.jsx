@@ -2643,7 +2643,7 @@ function GigDetailPage() {
   const color   = GENRE_COLORS[gig.genre] || C.red;
   const gigUrl   = `${BASE_URL}/gig/${gig.slug}`;
   const ogUrl    = `${BASE_URL}/api/og?type=gig&slug=${encodeURIComponent(gig.slug)}`;
-  const fbShare  = `https://www.facebook.com/dialog/share?app_id=966242223397117&display=popup&href=${encodeURIComponent(gigUrl)}&redirect_uri=${encodeURIComponent(gigUrl)}`;
+  const fbShare  = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(gigUrl)}`;
   const xShare   = `https://twitter.com/intent/tweet?text=${encodeURIComponent(`${gig.band_name} live at ${gig.venue}, ${gig.city} — ${fmtDate(gig.date)}`)}&url=${encodeURIComponent(ogUrl)}`;
   const mapsUrl  = `https://www.google.com/maps/search/${encodeURIComponent(`${gig.venue} ${gig.city}`)}`;
   const gcalUrl  = (() => {
