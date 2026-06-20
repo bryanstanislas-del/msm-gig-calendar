@@ -2690,9 +2690,6 @@ function GigDetailPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const fbShare  = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(gigUrl)}`;
-  const xShare   = `https://twitter.com/intent/tweet?text=${encodeURIComponent(`${gig.band_name} live at ${gig.venue}, ${gig.city} — ${fmtDate(gig.date)}`)}&url=${encodeURIComponent(gigUrl)}`;
-
   // Day of week helper
   const dayName = (dateStr) => new Date(dateStr).toLocaleDateString("en-GB", { weekday:"long" });
 
