@@ -216,15 +216,7 @@ const DB = {
       .eq("id", userId)
       .select();
     if (error) throw new Error(error.message);
-    // If RLS blocks SELECT after UPDATE, data will be null/empty.
-    // Fall back to a separate SELECT to confirm the save succeeded.
-    if (data && data[0]) return data[0];
-    const { data: refetch, error: refetchErr } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("id", userId);
-    if (refetchErr) throw new Error(refetchErr.message);
-    return refetch?.[0] || updates;
+    return data[0];
   },
 
   async getGigsByBand(bandName, bandProfileId) {
@@ -243,13 +235,25 @@ const DB = {
 
   async getBands(includeDisabled = false) {
     if (USE_MOCK) return [
-      { id:"band1", band_name:"The Velvet Wolves", city:"London", genre:"Indie Rock", website:"https://example.com", instagram:"@velvetwolves", facebook:"", twitter:"", spotify:"", phone:"07700900123", bio:"Indie rock four-piece from London.", photo_url:"", role:"band" },
+      { id:"band1", band_name:"The Velvet Wolves", city:"London", genre:"Indie Rock", website:"https://example.com", instagram:"@velvetwolves", facebook:"", twitter:"", spotify:"", phone:"07700900123", bio:"Indie rock four-piece from London.", photo_url:"", role:"band", profile_type:"band" },
     ];
-    let query = supabase.from("profiles").select("*").eq("role","band").order("band_name");
+    // FIX 1: Filter on profile_type='band' not role='band'
+    // role is an auth/permissions field; profile_type is the entity type discriminator
+    let query = supabase.from("profiles").select("*").eq("profile_type","band").order("band_name");
     if (!includeDisabled) query = query.or("disabled.is.null,disabled.eq.false");
     const { data, error } = await query;
     if (error) throw new Error(error.message);
     return data;
+  },
+
+  // FIX 3: New method to fetch festival profiles
+  async getFestivals(includeDisabled = false) {
+    if (USE_MOCK) return [];
+    let query = supabase.from("profiles").select("*").eq("profile_type","festival").order("band_name");
+    if (!includeDisabled) query = query.or("disabled.is.null,disabled.eq.false");
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
+    return data || [];
   },
 
   async getApprovedGigs() {
@@ -483,15 +487,16 @@ async function logActivity(action, entityType, entityName, entityId) {
 // Uses Vercel deployment URL so shared links and OG tags work correctly.
 // When a custom domain is pointed at this Vercel app, update this value.
 const BASE_URL = "https://msm-gig-calendar.vercel.app";
-// Weights total 100. primary_genre falls back to legacy genre field.
-// Spotify is optional. Website OR any social link satisfies web/social.
+// FIX 4: Type-aware completion scoring.
+// Band/solo_artist fields include genre and Spotify (music-specific).
+// Festival, venue, promoter, organisation scored on universal fields only.
+// Weights are recalculated to always total 100 for each type's field set.
 function getProfileCompleteness(profile) {
-  const p = profile;
-  const fields = [
-    { key:"band_name",     label:"Band Name",
+  const type = profile?.profile_type || "band";
+
+  const universalFields = [
+    { key:"band_name",     label:"Name",
       weight:15, check: p => !!(p?.band_name && p.band_name.trim()) },
-    { key:"primary_genre", label:"Primary Genre",
-      weight:10, check: p => !!(p?.primary_genre || p?.genre) },
     { key:"city",          label:"City / Location",
       weight:10, check: p => !!(p?.city && p.city.trim()) },
     { key:"bio",           label:"Biography",
@@ -502,20 +507,36 @@ function getProfileCompleteness(profile) {
       weight:15, check: p => !!(p?.website || p?.facebook || p?.instagram || p?.tiktok_url || p?.twitter) },
     { key:"booking_email", label:"Contact / Booking Email",
       weight:10, check: p => !!(p?.booking_email && p.booking_email.trim()) },
+  ];
+
+  const bandOnlyFields = [
+    { key:"primary_genre", label:"Primary Genre",
+      weight:10, check: p => !!(p?.primary_genre || p?.genre) },
     { key:"genre2_spotify",label:"Secondary Genre or Spotify",
       weight:5,  check: p => !!(p?.secondary_genre || p?.spotify) },
   ];
+
+  const fields = (type === "band" || type === "solo_artist")
+    ? [...universalFields, ...bandOnlyFields]
+    : universalFields;
+
+  // Recalculate weights so they always sum to 100 for any field set
+  const totalWeight = fields.reduce((sum, f) => sum + f.weight, 0);
+  const scaledFields = fields.map(f => ({
+    ...f,
+    weight: Math.round((f.weight / totalWeight) * 100),
+  }));
 
   let score = 0;
   const done    = [];
   const missing = [];
 
-  for (const f of fields) {
-    if (f.check(p)) { score += f.weight; done.push(f.label); }
-    else              { missing.push(f.label); }
+  for (const f of scaledFields) {
+    if (f.check(profile)) { score += f.weight; done.push(f.label); }
+    else                   { missing.push(f.label); }
   }
 
-  return { score, missing, done, completed: done.length, total: fields.length };
+  return { score: Math.min(100, score), missing, done, completed: done.length, total: fields.length };
 }
 
 // ── iCal export ────────────────────────────────────────────────────
@@ -1364,7 +1385,13 @@ function GigModal({ gig, onClose, bands=[], venues=[] }) {
         {bandProfile?.band_slug && (
           <Link to={`/artist/${bandProfile.band_slug}`} onClick={onClose}
             style={{ fontSize:11, color:C.muted, textDecoration:"none", letterSpacing:1, display:"block", marginTop:4 }}
-          >VIEW ARTIST PAGE →</Link>
+          >{/* FIX 5: label reflects actual profile type */}
+            {bandProfile.profile_type === "festival"     ? "VIEW FESTIVAL PAGE →"
+            : bandProfile.profile_type === "venue"       ? "VIEW VENUE PAGE →"
+            : bandProfile.profile_type === "solo_artist" ? "VIEW ARTIST PAGE →"
+            : bandProfile.profile_type === "promoter"    ? "VIEW PROMOTER PAGE →"
+            : "VIEW ARTIST PAGE →"}
+          </Link>
         )}
         <VenueLink gig={gig} venues={venues} />
         <div style={{ display:"flex", gap:24, marginBottom:20 }}>
@@ -1529,7 +1556,7 @@ function StatsPanel({ gigs }) {
 // ════════════════════════════════════════════════════════════════════
 //  ADMIN DASHBOARD
 // ════════════════════════════════════════════════════════════════════
-function AdminDashboard({ bands, allGigs, venues, onNav, onEditGig }) {
+function AdminDashboard({ bands, festivals=[], allGigs, venues, onNav, onEditGig }) {
   const today      = new Date();
   const todayStr   = today.toISOString().slice(0,10);
   const weekStr    = new Date(today.getTime() + 7*24*60*60*1000).toISOString().slice(0,10);
@@ -1644,7 +1671,9 @@ function AdminDashboard({ bands, allGigs, venues, onNav, onEditGig }) {
       {/* ── PLATFORM OVERVIEW ── */}
       <div style={{ fontFamily:F.display, fontSize:11, color:C.muted, letterSpacing:3, marginBottom:12 }}>PLATFORM OVERVIEW</div>
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(150px,1fr))", gap:12, marginBottom:24 }}>
-        <StatCard icon="🎸" label="TOTAL BANDS"  val={bands.length}   color={C.red}   onClick={()=>onNav("bands")}  sub={`${disabledBands.length} disabled`} />
+        {/* FIX 2: Count uses profile_type to separate bands from festivals */}
+        <StatCard icon="🎸" label="TOTAL BANDS"     val={bands.filter(b=>!b.disabled).length}   color={C.red}   onClick={()=>onNav("bands")}  sub={`${disabledBands.length} disabled`} />
+        <StatCard icon="🎪" label="TOTAL FESTIVALS"  val={festivals ? festivals.filter(f=>!f.disabled).length : 0} color="#9b5de5" sub="festival profiles" />
         <StatCard icon="📍" label="TOTAL VENUES" val={venues.length}  color={C.amber} onClick={()=>onNav("venues")} sub={`${incompleteVenues.length} need info`} />
         <StatCard icon="📅" label="TOTAL GIGS"   val={allGigs.length} color={C.red}   sub={`${approvedGigs.length} approved`} />
         <StatCard icon="⏳" label="PENDING"       val={pendingGigs.length}
@@ -2643,7 +2672,7 @@ function GigDetailPage() {
   const color   = GENRE_COLORS[gig.genre] || C.red;
   const gigUrl   = `${BASE_URL}/gig/${gig.slug}`;
   const ogUrl    = `${BASE_URL}/api/og?type=gig&slug=${encodeURIComponent(gig.slug)}`;
-  const fbShare  = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(gigUrl)}`;
+  const fbShare  = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(ogUrl)}`;
   const xShare   = `https://twitter.com/intent/tweet?text=${encodeURIComponent(`${gig.band_name} live at ${gig.venue}, ${gig.city} — ${fmtDate(gig.date)}`)}&url=${encodeURIComponent(ogUrl)}`;
   const mapsUrl  = `https://www.google.com/maps/search/${encodeURIComponent(`${gig.venue} ${gig.city}`)}`;
   const gcalUrl  = (() => {
@@ -2660,6 +2689,9 @@ function GigDetailPage() {
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
+
+  const fbShare  = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(gigUrl)}`;
+  const xShare   = `https://twitter.com/intent/tweet?text=${encodeURIComponent(`${gig.band_name} live at ${gig.venue}, ${gig.city} — ${fmtDate(gig.date)}`)}&url=${encodeURIComponent(gigUrl)}`;
 
   // Day of week helper
   const dayName = (dateStr) => new Date(dateStr).toLocaleDateString("en-GB", { weekday:"long" });
@@ -4247,7 +4279,8 @@ function AdminBackups({ bands, allGigs, venues, currentUser }) {
 
   const exportEverything = async () => {
     setExporting("all");
-    const { data: profiles } = await supabase.from("profiles").select("*").eq("role","band");
+    // FIX 1: Use profile_type filter (not role) for accurate backup counts
+    const { data: profiles } = await supabase.from("profiles").select("*").eq("profile_type","band");
     const bandsWithRel  = allGigs.filter(g=>g.band_profile_id).length;
     const venuesWithRel = allGigs.filter(g=>g.venue_id).length;
     const backup = {
@@ -4530,7 +4563,8 @@ function MainApp() {
   const [auth,    setAuth]    = useState(null); // { user, profile, token }
   const [gigs,    setGigs]    = useState([]);
   const [allGigs, setAllGigs] = useState([]);   // admin only
-  const [bands,   setBands]   = useState([]);    // admin only
+  const [bands,     setBands]     = useState([]);    // admin only
+  const [festivals, setFestivals] = useState([]);    // FIX 3: festival profiles
   const [venues,  setVenues]  = useState([]);    // admin only
   const [venueFilterMode, setVenueFilterMode] = useState("all"); // all | incomplete
   const [loading, setLoading] = useState(true);
@@ -4545,6 +4579,7 @@ function MainApp() {
   useEffect(() => {
     DB.getApprovedGigs().then(data=>{ setGigs(data); setLoading(false); });
     DB.getBands().then(setBands);
+    DB.getFestivals().then(setFestivals); // FIX 3: load festival profiles
     DB.getVenues().then(setVenues);
   }, []);
 
@@ -4553,6 +4588,7 @@ function MainApp() {
     if (isAdmin) {
       DB.getAllGigs().then(setAllGigs);
       DB.getBands(true).then(setBands);
+      DB.getFestivals(true).then(setFestivals); // FIX 3: load all festival profiles for admin
       DB.getVenues().then(setVenues);
     }
   }, [isAdmin, auth]);
@@ -4564,6 +4600,8 @@ function MainApp() {
     setGigs(approvedFresh);
     const freshBands = await DB.getBands(true);
     setBands(freshBands);
+    const freshFestivals = await DB.getFestivals(true); // FIX 3
+    setFestivals(freshFestivals);
     const freshVenues = await DB.getVenues();
     setVenues(freshVenues);
   }, [auth]);
@@ -4605,7 +4643,7 @@ function MainApp() {
     ...(isAdmin ? [
       { id:"dashboard", label:"DASHBOARD" },
       { id:"admin",     label:`MODERATION (${allGigs.filter(g=>g.status==="pending").length})` },
-      { id:"bands",     label:`BANDS (${bands.length})` },
+      { id:"bands",     label:`BANDS (${bands.filter(b=>!b.disabled).length})` },
       { id:"venues",    label:`VENUES (${venues.length})` },
       { id:"import",    label:"BULK IMPORT" },
       { id:"backups",   label:"BACKUPS" },
@@ -4669,7 +4707,7 @@ function MainApp() {
 
         {/* DASHBOARD */}
         {tab==="dashboard" && isAdmin && (
-          <AdminDashboard bands={bands} allGigs={allGigs} venues={venues}
+          <AdminDashboard bands={bands} festivals={festivals} allGigs={allGigs} venues={venues}
             onNav={(t) => { if(t==="venues-incomplete"){ setTab("venues"); setVenueFilterMode("incomplete"); } else setTab(t); }}
             onEditGig={(g) => { setTab("admin"); setTimeout(()=>window._editGig&&window._editGig(g),100); }}
           />
