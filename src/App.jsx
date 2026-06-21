@@ -333,8 +333,12 @@ const DB = {
     return data;
   },
 
-  // entity_id null -> new venue/festival/promoter request; this RPC also
-  // re-checks for a duplicate at approval time.
+  // KNOWN BUG (do not call): the approve_new_entity_request() RPC sets
+  // entity_id on the claim_requests row without clearing proposed_name/
+  // proposed_city, which violates claim_requests_entity_or_proposed_chk
+  // and aborts the whole approval. approve_claim_request() correctly
+  // handles the entity_id-IS-NULL case instead -- use that. Kept here only
+  // as a wrapper in case the backend function is fixed in a future phase.
   async approveNewEntityRequest(claimId, notes) {
     if (USE_MOCK) return { status:"approved" };
     const { data, error } = await supabase.rpc("approve_new_entity_request", { p_claim_id: claimId, p_review_notes: notes || null });
@@ -4468,17 +4472,19 @@ function AdminClaims({ claims, onRefresh }) {
   };
   const filtered = claims.filter(c => filter==="all" ? true : c.status===filter);
 
-  // entity_id set -> claiming an existing record (approve_claim_request).
-  // entity_id null -> brand-new venue/festival/promoter (approve_new_entity_request,
-  // which re-checks for duplicates at approval time).
+  // BUGFIX (post-Phase-4): approve_new_entity_request() has a live defect --
+  // it sets entity_id on the claim_requests row without clearing
+  // proposed_name/proposed_city, which violates the table's
+  // claim_requests_entity_or_proposed_chk check constraint and aborts the
+  // whole approval. approve_claim_request() has since been extended to
+  // fully handle the entity_id-IS-NULL case (venue/festival/promoter)
+  // internally, and its own final UPDATE never touches entity_id, so it
+  // never hits that constraint. Routing every approval through it avoids
+  // the bug entirely with no database change required.
   const approve = async (c) => {
     setBusyId(c.id);
     try {
-      if (c.entity_id) {
-        await DB.approveClaimRequest(c.id, notes[c.id] || "");
-      } else {
-        await DB.approveNewEntityRequest(c.id, notes[c.id] || "");
-      }
+      await DB.approveClaimRequest(c.id, notes[c.id] || "");
       showMsg("✓ Approved");
       if (onRefresh) await onRefresh();
     } catch(e) { showMsg(e.message, "error"); }
