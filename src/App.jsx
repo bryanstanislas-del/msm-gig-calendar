@@ -151,29 +151,61 @@ const supabase = USE_MOCK ? null : createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
 
 // ── DB abstraction (mock or real) ──────────────────────────────────
 const DB = {
-  async signUp(email, password, profile) {
+  // PHASE 4 FIX: signUp now passes profile_type in the auth metadata so
+  // handle_new_user() knows which kind of account is being created.
+  // - band / solo_artist: handle_new_user() auto-creates the profiles row
+  //   (id auto-generated, user_id = auth user id). We then fill in the rest
+  //   of the registration fields with an UPDATE keyed on user_id (NOT id --
+  //   the old code upserted with id:user.id, which doesn't match the
+  //   trigger-created row's generated id and silently created a second,
+  //   orphaned, unlinked profile row on every signup).
+  // - venue / festival / promoter: handle_new_user() deliberately skips
+  //   profile creation for these types. Ownership is established later via
+  //   the claim_requests approval workflow (see submitNewEntityRequest).
+  async signUp(email, password, profile, profileType = "band") {
     if (USE_MOCK) {
       const id = `user_${Date.now()}`;
       MOCK_USERS[email] = { id, email, password, role:"band", band_name: profile.band_name };
       MOCK_USER    = { id, email };
-      MOCK_PROFILE = { id, role:"band", ...profile };
+      MOCK_PROFILE = { id, role:"band", profile_type: profileType, ...profile };
       return { user: MOCK_USER, profile: MOCK_PROFILE };
     }
     const { data, error } = await supabase.auth.signUp({
       email, password,
-      options: { data: { band_name: profile.band_name } }
+      options: { data: { band_name: profile.band_name, profile_type: profileType } }
     });
     if (error) throw new Error(error.message);
     const user = data.user;
     if (!user) throw new Error("Account created! Please sign in.");
+
+    if (["venue", "festival", "promoter"].includes(profileType)) {
+      // No profiles row exists yet for these types -- caller is responsible
+      // for submitting a claim_requests entry (see submitNewEntityRequest).
+      return { user, profile: null };
+    }
+
     try {
-      // Generate slug from band name
       const { data: slugData } = await supabase.rpc("generate_band_slug", { band_name: profile.band_name });
-      await supabase.from("profiles").upsert({ id: user.id, ...profile, band_slug: slugData, band_status: "active" });
+      await supabase.from("profiles")
+        .update({ ...profile, band_slug: slugData, band_status: "active" })
+        .eq("user_id", user.id);
     } catch(e) { console.warn("Profile update failed", e); }
-    return { user, profile: { role:"band", ...profile } };
+
+    let fullProfile = { role:"band", profile_type: profileType, ...profile };
+    try {
+      const { data: profiles } = await supabase.from("profiles").select("*").eq("user_id", user.id);
+      if (profiles && profiles.length > 0) fullProfile = profiles[0];
+    } catch(e) { console.warn("Profile fetch failed", e); }
+
+    return { user, profile: fullProfile };
   },
 
+  // PHASE 4 FIX: was matching on profiles.id, which only ever equals the
+  // auth user id for legacy pre-migration rows. Real signups (via the
+  // handle_new_user() trigger) get an auto-generated id and a separate
+  // user_id column -- match on that instead. Also falls back to the venues
+  // table so venue accounts (which never get a profiles row) can sign in
+  // and see their venue once a claim/registration has been approved.
   async signIn(email, password) {
     if (USE_MOCK) {
       const u = MOCK_USERS[email];
@@ -185,10 +217,17 @@ const DB = {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw new Error(error.message);
     const user = data.user;
-    let profile = { role:"band", band_name:"" };
+    let profile = { role:"band", band_name:"", profile_type:null, pending:true };
     try {
-      const { data: profiles } = await supabase.from("profiles").select("*").eq("id", user.id);
-      if (profiles && profiles.length > 0) profile = profiles[0];
+      const { data: profiles } = await supabase.from("profiles").select("*").eq("user_id", user.id);
+      if (profiles && profiles.length > 0) {
+        profile = profiles[0];
+      } else {
+        const { data: venues } = await supabase.from("venues").select("*").eq("user_id", user.id);
+        if (venues && venues.length > 0) {
+          profile = { ...venues[0], profile_type: "venue", band_name: venues[0].name, role: "band" };
+        }
+      }
     } catch(e) { console.warn("Profile fetch failed", e); }
     return { user, profile, token: data.session?.access_token };
   },
@@ -208,15 +247,106 @@ const DB = {
     return data[0];
   },
 
+  // PHASE 4 FIX: was matching on profiles.id (only equal to the auth user id
+  // for legacy pre-migration rows). The only caller passes the logged-in
+  // user's auth id, so match on user_id instead -- otherwise this silently
+  // updates 0 rows for every post-migration band/solo_artist account.
   async updateProfile(userId, updates) {
     if (USE_MOCK) return updates;
     const { data, error } = await supabase
       .from("profiles")
       .update(updates)
-      .eq("id", userId)
+      .eq("user_id", userId)
       .select();
     if (error) throw new Error(error.message);
     return data[0];
+  },
+
+  // ── PHASE 4: Newsletter opt-in ─────────────────────────────────────
+  async recordNewsletterOptIn(email, source, profileId) {
+    if (USE_MOCK) return { email, newsletter_opt_in: true };
+    const { data, error } = await supabase.rpc("record_newsletter_opt_in", {
+      p_email: email, p_source: source, p_profile_id: profileId || null,
+    });
+    if (error) throw new Error(error.message);
+    return data;
+  },
+
+  // ── PHASE 4: Entity search (used for claim + duplicate-prevention) ──
+  async searchEntities(entityType, query) {
+    if (USE_MOCK) return [];
+    const { data, error } = await supabase.rpc("search_entities", {
+      p_entity_type: entityType, p_query: query, p_limit: 8,
+    });
+    if (error) throw new Error(error.message);
+    return data || [];
+  },
+
+  // ── PHASE 4: Claim requests workflow ────────────────────────────────
+  // New-entity request: venue/festival/promoter only (handle_new_user()
+  // skips profile creation for these types; nothing exists yet to own).
+  async submitNewEntityRequest({ entityType, requestedBy, requesterEmail, proposedName, proposedCity, message }) {
+    if (USE_MOCK) return { id: `claim_${Date.now()}` };
+    const { data, error } = await supabase.from("claim_requests").insert({
+      entity_type:        entityType,
+      entity_id:           null,
+      requested_by:         requestedBy,
+      requester_email:       requesterEmail,
+      requester_message:      message || null,
+      proposed_name:            proposedName,
+      proposed_city:             proposedCity,
+    }).select();
+    if (error) throw new Error(error.message);
+    return data[0];
+  },
+
+  // Claim of an existing entity (band/solo_artist/venue/festival/promoter).
+  // This is deliberately a standalone authenticated write -- not bundled
+  // into signUp() -- so it never triggers handle_new_user()'s auto-create
+  // path. See report Outstanding Issues for why claiming an existing band
+  // specifically still has a residual edge case.
+  async submitClaimRequest({ entityType, entityId, requestedBy, requesterEmail, message }) {
+    if (USE_MOCK) return { id: `claim_${Date.now()}` };
+    const { data, error } = await supabase.from("claim_requests").insert({
+      entity_type:       entityType,
+      entity_id:          entityId,
+      requested_by:         requestedBy,
+      requester_email:        requesterEmail,
+      requester_message:        message || null,
+    }).select();
+    if (error) throw new Error(error.message);
+    return data[0];
+  },
+
+  async getClaimRequests() {
+    if (USE_MOCK) return [];
+    const { data, error } = await supabase.from("claim_requests").select("*").order("created_at", { ascending:false });
+    if (error) throw new Error(error.message);
+    return data || [];
+  },
+
+  // entity_id set -> claiming an existing venue/profile row.
+  async approveClaimRequest(claimId, notes) {
+    if (USE_MOCK) return { status:"approved" };
+    const { data, error } = await supabase.rpc("approve_claim_request", { p_claim_id: claimId, p_review_notes: notes || null });
+    if (error) throw new Error(error.message);
+    return data;
+  },
+
+  // entity_id null -> new venue/festival/promoter request; this RPC also
+  // re-checks for a duplicate at approval time.
+  async approveNewEntityRequest(claimId, notes) {
+    if (USE_MOCK) return { status:"approved" };
+    const { data, error } = await supabase.rpc("approve_new_entity_request", { p_claim_id: claimId, p_review_notes: notes || null });
+    if (error) throw new Error(error.message);
+    return data;
+  },
+
+  async rejectClaimRequest(claimId, notes) {
+    if (USE_MOCK) return { status:"rejected" };
+    const { data, error } = await supabase.rpc("reject_claim_request", { p_claim_id: claimId, p_review_notes: notes || null });
+    if (error) throw new Error(error.message);
+    return data;
   },
 
   async getGigsByBand(bandName, bandProfileId) {
@@ -682,14 +812,43 @@ function AuthPanel({ onAuth, onBack }) {
   const [email, setEmail] = useState("");
   const [pass,  setPass]  = useState("");
 
-  // Register fields
+  // Register fields (band / solo_artist)
   const emptyReg = { band_name:"", city:"", website:"", instagram:"", facebook:"", twitter:"", spotify:"", genre:"Indie Rock", phone:"", bio:"", photo_url:"" };
   const [reg, setReg] = useState(emptyReg);
   const [regEmail, setRegEmail] = useState("");
   const [regPass,  setRegPass]  = useState("");
   const [regPass2, setRegPass2] = useState("");
 
+  // PHASE 4: account type selector + new-entity (venue/festival/promoter) fields
+  const [regType, setRegType] = useState("band");
+  const [entityName, setEntityName] = useState("");
+  const [entityCity, setEntityCity] = useState("");
+  const [entityMessage, setEntityMessage] = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [searchDone, setSearchDone] = useState(false);
+  const [entitySubmitted, setEntitySubmitted] = useState(false);
+
+  // PHASE 4: newsletter opt-in -- unticked by default, applies to all registration paths
+  const [newsletterOptIn, setNewsletterOptIn] = useState(false);
+
+  const isNewEntityType = ["venue", "festival", "promoter"].includes(regType);
+
   const setR = k => e => setReg(r=>({...r,[k]:e.target.value}));
+
+  const resetRegisterExtras = () => {
+    setSearchResults([]); setSearchDone(false); setEntitySubmitted(false);
+  };
+
+  const runEntitySearch = async () => {
+    if (entityName.trim().length < 2) { setErr("Enter at least 2 characters to search"); return; }
+    setErr(""); setSearching(true);
+    try {
+      const results = await DB.searchEntities(regType, entityName.trim());
+      setSearchResults(results || []);
+    } catch(e) { setErr(e.message); }
+    setSearching(false); setSearchDone(true);
+  };
 
   const submit = async () => {
     setErr(""); setLoading(true);
@@ -697,12 +856,33 @@ function AuthPanel({ onAuth, onBack }) {
       if (mode === "login") {
         const result = await DB.signIn(email, pass);
         onAuth(result);
+      } else if (isNewEntityType) {
+        if (!entityName.trim()) { setErr(`${regType} name is required`); setLoading(false); return; }
+        if (!entityCity.trim()) { setErr("City is required"); setLoading(false); return; }
+        if (!regEmail.trim())   { setErr("Email is required"); setLoading(false); return; }
+        if (regPass.length < 6) { setErr("Password must be at least 6 characters"); setLoading(false); return; }
+        if (regPass !== regPass2) { setErr("Passwords don't match"); setLoading(false); return; }
+
+        const { user } = await DB.signUp(regEmail, regPass, { band_name: entityName }, regType);
+        await DB.submitNewEntityRequest({
+          entityType:   regType,
+          requestedBy:   user.id,
+          requesterEmail: regEmail,
+          proposedName:    entityName,
+          proposedCity:     entityCity,
+          message:           entityMessage,
+        });
+        if (newsletterOptIn) {
+          try { await DB.recordNewsletterOptIn(regEmail, "registration", null); }
+          catch(e) { console.warn("Newsletter opt-in failed:", e); }
+        }
+        setEntitySubmitted(true);
       } else {
         if (!reg.band_name.trim()) { setErr("Band name is required"); setLoading(false); return; }
         if (!regEmail.trim())      { setErr("Email is required"); setLoading(false); return; }
         if (regPass.length < 6)    { setErr("Password must be at least 6 characters"); setLoading(false); return; }
         if (regPass !== regPass2)  { setErr("Passwords don't match"); setLoading(false); return; }
-        const result = await DB.signUp(regEmail, regPass, reg);
+        const result = await DB.signUp(regEmail, regPass, reg, regType);
         // Send registration notification to MSM
         try {
           await fetch("/api/notify", {
@@ -723,6 +903,10 @@ function AuthPanel({ onAuth, onBack }) {
             }),
           });
         } catch(e) { console.warn("Registration notification failed:", e); }
+        if (newsletterOptIn) {
+          try { await DB.recordNewsletterOptIn(regEmail, "registration", result.profile?.id || null); }
+          catch(e) { console.warn("Newsletter opt-in failed:", e); }
+        }
         onAuth(result);
       }
     } catch(e) { setErr(e.message); }
@@ -742,8 +926,8 @@ function AuthPanel({ onAuth, onBack }) {
         <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderTop:`3px solid ${C.red}`, borderRadius:8, padding:28 }}>
           {/* Tabs */}
           <div style={{ display:"flex", gap:6, marginBottom:24 }}>
-            {[["login","SIGN IN"],["register","REGISTER BAND"]].map(([m,l]) => (
-              <button key={m} onClick={()=>{ setMode(m); setErr(""); }}
+            {[["login","SIGN IN"],["register","REGISTER"]].map(([m,l]) => (
+              <button key={m} onClick={()=>{ setMode(m); setErr(""); resetRegisterExtras(); }}
                 style={{ flex:1, padding:"9px", border:"none", borderRadius:5, cursor:"pointer",
                   fontFamily:F.display, letterSpacing:2, fontSize:13,
                   background: mode===m ? C.red : "rgba(255,255,255,0.05)",
@@ -763,56 +947,152 @@ function AuthPanel({ onAuth, onBack }) {
           {/* ── REGISTER ── */}
           {mode === "register" && (
             <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
-              <div style={{ fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginBottom:4 }}>ACCOUNT DETAILS</div>
-              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
-                <div style={{ gridColumn:"1/-1" }}>
-                  <Input label="BAND / ARTIST NAME" value={reg.band_name} onChange={setR("band_name")} required />
-                </div>
-                <Input label="EMAIL ADDRESS" type="email" value={regEmail} onChange={e=>setRegEmail(e.target.value)} required />
-                <Select label="MAIN GENRE" value={reg.genre} onChange={setR("genre")} options={GENRES} />
-                <Input label="PASSWORD" type="password" value={regPass} onChange={e=>setRegPass(e.target.value)} required />
-                <Input label="CONFIRM PASSWORD" type="password" value={regPass2} onChange={e=>setRegPass2(e.target.value)} required />
-              </div>
+              <div style={{ fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginBottom:4 }}>ACCOUNT TYPE</div>
+              <Select
+                label="I AM REGISTERING AS A..."
+                value={regType}
+                onChange={e=>{ setRegType(e.target.value); resetRegisterExtras(); setErr(""); }}
+                options={[
+                  { value:"band",         label:"Band / Artist" },
+                  { value:"solo_artist",  label:"Solo Artist" },
+                  { value:"venue",        label:"Venue" },
+                  { value:"festival",     label:"Festival" },
+                  { value:"promoter",     label:"Promoter" },
+                ]}
+              />
 
-              <div style={{ fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8, marginBottom:4 }}>BAND DETAILS</div>
-              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
-                <Input label="BASE CITY" value={reg.city} onChange={setR("city")} />
-                <Input label="CONTACT NUMBER" type="tel" value={reg.phone} onChange={setR("phone")} />
-                <div style={{ gridColumn:"1/-1" }}>
-                  <Input label="WEBSITE URL" type="url" value={reg.website} onChange={setR("website")} placeholder="https://" />
+              {entitySubmitted ? (
+                <div style={{ padding:16, background:"rgba(46,196,140,0.08)", border:`1px solid ${C.green}`, borderRadius:6 }}>
+                  <div style={{ color:C.green, fontSize:14, fontFamily:F.display, letterSpacing:1, marginBottom:6 }}>✓ REQUEST SUBMITTED</div>
+                  <div style={{ fontSize:13, color:"#ccc", lineHeight:1.6 }}>
+                    Your account has been created and your {regType} registration request is pending review by our team.
+                    You'll be able to sign in once it's approved.
+                  </div>
                 </div>
-                <div style={{ gridColumn:"1/-1" }}>
-                  <label style={{ display:"block", fontSize:9, color:C.muted, letterSpacing:2, marginBottom:5 }}>BIO</label>
-                  <textarea
-                    value={reg.bio} onChange={setR("bio")}
-                    placeholder="Tell us about your band..."
-                    rows={3}
-                    style={{ ...inputCss, resize:"vertical" }}
-                  />
+              ) : isNewEntityType ? (
+                <>
+                  <div style={{ fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8, marginBottom:4 }}>
+                    {regType.toUpperCase()} DETAILS
+                  </div>
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+                    <div style={{ gridColumn:"1/-1" }}>
+                      <Input label={`${regType.toUpperCase()} NAME`} value={entityName}
+                        onChange={e=>{ setEntityName(e.target.value); setSearchDone(false); }} required />
+                    </div>
+                    <Input label="CITY" value={entityCity} onChange={e=>setEntityCity(e.target.value)} required />
+                  </div>
+
+                  <Btn variant="ghost" onClick={runEntitySearch} disabled={searching || !entityName.trim()}
+                    style={{ fontSize:12, alignSelf:"flex-start", padding:"8px 16px" }}>
+                    {searching ? "SEARCHING..." : "CHECK IF IT ALREADY EXISTS"}
+                  </Btn>
+
+                  {searchDone && searchResults.length > 0 && (
+                    <div style={{ padding:12, background:"rgba(244,162,97,0.08)", border:`1px solid ${C.amber}`, borderRadius:6 }}>
+                      <div style={{ fontSize:12, color:C.amber, marginBottom:8, lineHeight:1.6 }}>
+                        We found {searchResults.length} possible match{searchResults.length!==1?"es":""}. If one of these is yours,
+                        sign in (or close this form) and use the "Claim this listing" button on its page instead of registering a new one:
+                      </div>
+                      <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                        {searchResults.map(r => (
+                          <div key={r.id} style={{ fontSize:13, color:"#fff" }}>
+                            • {r.name}{r.city ? ` — ${r.city}` : ""}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {searchDone && searchResults.length === 0 && (
+                    <div style={{ fontSize:12, color:C.green }}>No existing match found — you can register it below.</div>
+                  )}
+
+                  <div style={{ gridColumn:"1/-1" }}>
+                    <label style={{ display:"block", fontSize:9, color:C.muted, letterSpacing:2, marginBottom:5 }}>MESSAGE FOR OUR TEAM (OPTIONAL)</label>
+                    <textarea
+                      value={entityMessage} onChange={e=>setEntityMessage(e.target.value)}
+                      placeholder="Anything that helps us verify and review this request"
+                      rows={2}
+                      style={{ ...inputCss, resize:"vertical" }}
+                    />
+                  </div>
+
+                  <div style={{ fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8, marginBottom:4 }}>ACCOUNT DETAILS</div>
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+                    <div style={{ gridColumn:"1/-1" }}>
+                      <Input label="EMAIL ADDRESS" type="email" value={regEmail} onChange={e=>setRegEmail(e.target.value)} required />
+                    </div>
+                    <Input label="PASSWORD" type="password" value={regPass} onChange={e=>setRegPass(e.target.value)} required />
+                    <Input label="CONFIRM PASSWORD" type="password" value={regPass2} onChange={e=>setRegPass2(e.target.value)} required />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div style={{ fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8, marginBottom:4 }}>ACCOUNT DETAILS</div>
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+                    <div style={{ gridColumn:"1/-1" }}>
+                      <Input label="BAND / ARTIST NAME" value={reg.band_name} onChange={setR("band_name")} required />
+                    </div>
+                    <Input label="EMAIL ADDRESS" type="email" value={regEmail} onChange={e=>setRegEmail(e.target.value)} required />
+                    <Select label="MAIN GENRE" value={reg.genre} onChange={setR("genre")} options={GENRES} />
+                    <Input label="PASSWORD" type="password" value={regPass} onChange={e=>setRegPass(e.target.value)} required />
+                    <Input label="CONFIRM PASSWORD" type="password" value={regPass2} onChange={e=>setRegPass2(e.target.value)} required />
+                  </div>
+
+                  <div style={{ fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8, marginBottom:4 }}>BAND DETAILS</div>
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+                    <Input label="BASE CITY" value={reg.city} onChange={setR("city")} />
+                    <Input label="CONTACT NUMBER" type="tel" value={reg.phone} onChange={setR("phone")} />
+                    <div style={{ gridColumn:"1/-1" }}>
+                      <Input label="WEBSITE URL" type="url" value={reg.website} onChange={setR("website")} placeholder="https://" />
+                    </div>
+                    <div style={{ gridColumn:"1/-1" }}>
+                      <label style={{ display:"block", fontSize:9, color:C.muted, letterSpacing:2, marginBottom:5 }}>BIO</label>
+                      <textarea
+                        value={reg.bio} onChange={setR("bio")}
+                        placeholder="Tell us about your band..."
+                        rows={3}
+                        style={{ ...inputCss, resize:"vertical" }}
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8, marginBottom:4 }}>SOCIAL MEDIA</div>
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12 }}>
+                    <Input label="INSTAGRAM" value={reg.instagram} onChange={setR("instagram")} placeholder="@handle" />
+                    <Input label="FACEBOOK" value={reg.facebook} onChange={setR("facebook")} placeholder="@handle" />
+                    <Input label="X / TWITTER" value={reg.twitter} onChange={setR("twitter")} placeholder="@handle" />
+                  </div>
+                  <div style={{ marginTop:12 }}>
+                    <Input label="SPOTIFY ARTIST URL" type="url" value={reg.spotify} onChange={setR("spotify")} placeholder="https://open.spotify.com/artist/..." />
+                  </div>
+
+                  <div style={{ fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8, marginBottom:4 }}>PROFILE PHOTO</div>
+                  <Input label="PHOTO URL (link to an image)" type="url" value={reg.photo_url} onChange={setR("photo_url")} placeholder="https://..." />
+                  <div style={{ fontSize:11, color:C.dim }}>Tip: Upload your photo to Instagram or your website and paste the image link here.</div>
+                </>
+              )}
+
+              {/* PHASE 4: newsletter opt-in -- shown for every registration path, unticked by default */}
+              {!entitySubmitted && (
+                <div style={{ display:"flex", alignItems:"flex-start", gap:8, marginTop:6, paddingTop:10, borderTop:`1px solid ${C.border}` }}>
+                  <input type="checkbox" id="msm-newsletter-optin" checked={newsletterOptIn}
+                    onChange={e=>setNewsletterOptIn(e.target.checked)}
+                    style={{ marginTop:3, cursor:"pointer" }} />
+                  <label htmlFor="msm-newsletter-optin" style={{ fontSize:12, color:C.muted, lineHeight:1.5, cursor:"pointer" }}>
+                    Add my email to the MSM newsletter so I can hear about gigs, features and opportunities.
+                  </label>
                 </div>
-              </div>
-
-              <div style={{ fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8, marginBottom:4 }}>SOCIAL MEDIA</div>
-              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12 }}>
-                <Input label="INSTAGRAM" value={reg.instagram} onChange={setR("instagram")} placeholder="@handle" />
-                <Input label="FACEBOOK" value={reg.facebook} onChange={setR("facebook")} placeholder="@handle" />
-                <Input label="X / TWITTER" value={reg.twitter} onChange={setR("twitter")} placeholder="@handle" />
-              </div>
-              <div style={{ marginTop:12 }}>
-                <Input label="SPOTIFY ARTIST URL" type="url" value={reg.spotify} onChange={setR("spotify")} placeholder="https://open.spotify.com/artist/..." />
-              </div>
-
-              <div style={{ fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8, marginBottom:4 }}>PROFILE PHOTO</div>
-              <Input label="PHOTO URL (link to an image)" type="url" value={reg.photo_url} onChange={setR("photo_url")} placeholder="https://..." />
-              <div style={{ fontSize:11, color:C.dim }}>Tip: Upload your photo to Instagram or your website and paste the image link here.</div>
+              )}
             </div>
           )}
 
           {err && <div style={{ color:C.red, fontSize:12, marginTop:12 }}>{err}</div>}
 
-          <Btn onClick={submit} disabled={loading} style={{ width:"100%", marginTop:20, padding:"13px" }}>
-            {loading ? "PLEASE WAIT..." : mode==="login" ? "SIGN IN →" : "CREATE ACCOUNT →"}
-          </Btn>
+          {!entitySubmitted && (
+            <Btn onClick={submit} disabled={loading} style={{ width:"100%", marginTop:20, padding:"13px" }}>
+              {loading ? "PLEASE WAIT..." : mode==="login" ? "SIGN IN →" : isNewEntityType ? "SUBMIT REQUEST →" : "CREATE ACCOUNT →"}
+            </Btn>
+          )}
         </div>
 
         {onBack && (
@@ -1383,9 +1663,14 @@ function GigModal({ gig, onClose, bands=[], venues=[] }) {
           }}>VIEW FULL GIG PAGE →</Link>
         )}
         {bandProfile?.band_slug && (
-          <Link to={`/artist/${bandProfile.band_slug}`} onClick={onClose}
+          <Link to={
+            bandProfile.profile_type === "festival" ? `/festival/${bandProfile.band_slug}`
+            : bandProfile.profile_type === "promoter" ? `/promoter/${bandProfile.band_slug}`
+            : bandProfile.profile_type === "venue" ? `/venue/${bandProfile.band_slug}`
+            : `/artist/${bandProfile.band_slug}`
+          } onClick={onClose}
             style={{ fontSize:11, color:C.muted, textDecoration:"none", letterSpacing:1, display:"block", marginTop:4 }}
-          >{/* FIX 5: label reflects actual profile type */}
+          >{/* FIX 5 / PHASE 4: label and target both reflect actual profile type */}
             {bandProfile.profile_type === "festival"     ? "VIEW FESTIVAL PAGE →"
             : bandProfile.profile_type === "venue"       ? "VIEW VENUE PAGE →"
             : bandProfile.profile_type === "solo_artist" ? "VIEW ARTIST PAGE →"
@@ -2429,7 +2714,10 @@ function EditProfile({ user, profile, onSaved }) {
   const save = async () => {
     setStatus("loading");
     try {
-      const updated = await DB.updateProfile(user.id, { ...form, claimed: true });
+      // PHASE 4 FIX: previously forced claimed:true on every save. Claimed
+      // status now comes exclusively from the claim_requests approval
+      // workflow (approve_claim_request / approve_new_entity_request).
+      const updated = await DB.updateProfile(user.id, { ...form });
       setStatus("success");
       setMsg("Profile updated successfully!");
       if (updated) {
@@ -2942,6 +3230,78 @@ function GigDetailPage() {
 }
 
 // ════════════════════════════════════════════════════════════════════
+//  PHASE 4: CLAIM EXISTING ENTITY (shared by all public profile pages)
+// ════════════════════════════════════════════════════════════════════
+// Public profile pages (Venue/Band/Festival/Promoter) are rendered as
+// standalone routes with no access to MainApp's auth state, so this
+// checks auth independently via supabase.auth.getUser() -- the same
+// pattern already used elsewhere in this file (logActivity, markVerified).
+// Submitting a claim is a plain authenticated INSERT into claim_requests;
+// it deliberately does NOT call signUp(), so it never triggers the
+// handle_new_user() auto-create path and cannot create a duplicate profile.
+function ClaimEntityBox({ entityType, entityId, eligible }) {
+  const [authUser, setAuthUser] = useState(undefined); // undefined = checking, null = signed out
+  const [message, setMessage]   = useState("");
+  const [status, setStatus]     = useState("idle");
+  const [msg, setMsg]           = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      if (USE_MOCK) { if (!cancelled) setAuthUser(null); return; }
+      try {
+        const { data } = await supabase.auth.getUser();
+        if (!cancelled) setAuthUser(data?.user || null);
+      } catch(e) { if (!cancelled) setAuthUser(null); }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, []);
+
+  if (!eligible || authUser === undefined) return null;
+
+  const submitClaim = async () => {
+    setStatus("loading");
+    try {
+      await DB.submitClaimRequest({
+        entityType, entityId,
+        requestedBy: authUser.id,
+        requesterEmail: authUser.email,
+        message,
+      });
+      setStatus("success");
+      setMsg("Claim submitted! Our team will review it shortly.");
+    } catch(e) { setStatus("error"); setMsg(e.message); }
+  };
+
+  return (
+    <div style={{ marginTop:24, padding:16, background:"rgba(244,162,97,0.08)", border:`1px solid ${C.amber}`, borderRadius:8 }}>
+      <div style={{ fontFamily:F.display, fontSize:13, color:C.amber, letterSpacing:2, marginBottom:8 }}>IS THIS YOURS?</div>
+      {!authUser && status !== "success" && (
+        <div style={{ fontSize:13, color:"#ccc", lineHeight:1.6 }}>
+          This listing hasn't been claimed yet. Sign in or register on the calendar to claim it.
+        </div>
+      )}
+      {authUser && status !== "success" && (
+        <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+          <textarea
+            value={message} onChange={e=>setMessage(e.target.value)}
+            placeholder="Optional note for our team (e.g. how to verify you're the owner)"
+            rows={2}
+            style={{ ...inputCss, resize:"vertical" }}
+          />
+          <Btn onClick={submitClaim} disabled={status==="loading"} style={{ fontSize:12, alignSelf:"flex-start", padding:"8px 16px" }}>
+            {status==="loading" ? "SUBMITTING..." : "CLAIM THIS LISTING"}
+          </Btn>
+          {status==="error" && <div style={{ color:C.red, fontSize:12 }}>{msg}</div>}
+        </div>
+      )}
+      {status==="success" && <div style={{ color:C.green, fontSize:13 }}>✓ {msg}</div>}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════
 //  PUBLIC VENUE PROFILE PAGE
 // ════════════════════════════════════════════════════════════════════
 function VenueProfilePage() {
@@ -3052,6 +3412,9 @@ function VenueProfilePage() {
             <div style={{ fontSize:16, color:"#dddddd", lineHeight:1.8, maxWidth:700 }}>{venue.description}</div>
           </div>
         )}
+
+        {/* PHASE 4: claim this venue if it's an unclaimed admin-created listing */}
+        <ClaimEntityBox entityType="venue" entityId={venue.id} eligible={venue.admin_created && !venue.claimed} />
 
         {/* Upcoming Gigs */}
         <div style={{ marginBottom:48 }}>
@@ -3269,6 +3632,9 @@ function BandProfilePage() {
           </div>
         )}
 
+        {/* PHASE 4: claim this listing if it's an unclaimed admin-created profile */}
+        <ClaimEntityBox entityType={band.profile_type || "band"} entityId={band.id} eligible={band.admin_created && !band.claimed} />
+
         {/* Contact */}
         {(band.booking_email || band.management_contact || band.press_contact) && (
           <div style={{ marginBottom:48 }}>
@@ -3365,6 +3731,203 @@ function BandProfilePage() {
           <div style={{ fontSize:13, color:C.dim, letterSpacing:1 }}>🔔 FOLLOW THIS BAND — Coming Soon</div>
           <div style={{ fontSize:11, color:C.dim, marginTop:4 }}>Get notified when {band.band_name} adds new gigs</div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  PHASE 4: PUBLIC FESTIVAL PROFILE PAGE
+// ════════════════════════════════════════════════════════════════════
+// Deliberately minimal -- name/city/bio/photo/socials + claim box. Festivals
+// and promoters live in the same `profiles` table as bands (profile_type
+// discriminates), so this reuses the existing, untouched DB.getBandBySlug.
+function FestivalProfilePage() {
+  const { slug }    = useParams();
+  const navigate    = useNavigate();
+  const [entity,    setEntity]  = useState(null);
+  const [loading,   setLoading] = useState(true);
+
+  useEffect(() => {
+    async function load() {
+      setLoading(true);
+      const b = await DB.getBandBySlug(slug);
+      setEntity(b && b.profile_type === "festival" ? b : null);
+      setLoading(false);
+    }
+    load();
+  }, [slug]);
+
+  if (loading) return (
+    <div style={{ minHeight:"100vh", background:C.bg, display:"flex", alignItems:"center", justifyContent:"center" }}>
+      <style>{GLOBAL_CSS}</style>
+      <div style={{ color:C.muted, fontSize:16, fontFamily:F.display, letterSpacing:2 }}>LOADING...</div>
+    </div>
+  );
+
+  if (!entity) return (
+    <div style={{ minHeight:"100vh", background:C.bg, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:20 }}>
+      <style>{GLOBAL_CSS}</style>
+      <div style={{ color:C.white, fontFamily:F.display, fontSize:32, letterSpacing:2 }}>FESTIVAL NOT FOUND</div>
+      <span onClick={()=>navigate("/")} style={{ color:C.red, cursor:"pointer", fontSize:14 }}>← Back to Calendar</span>
+    </div>
+  );
+
+  const color = "#9b5de5";
+  const socialLinks = [
+    { url: entity.instagram, icon:"📷", label:"Instagram" },
+    { url: entity.facebook,  icon:"👍", label:"Facebook"  },
+    { url: entity.twitter,   icon:"🐦", label:"X/Twitter" },
+  ].filter(s => s.url);
+
+  return (
+    <div style={{ minHeight:"100vh", background:C.bg, color:C.white, fontFamily:F.body }}>
+      <style>{GLOBAL_CSS}</style>
+
+      <header style={{ background:"#0a0a0a", borderBottom:`1px solid ${C.border}`, padding:"0 28px", display:"flex", alignItems:"center", justifyContent:"space-between", height:70 }}>
+        <span onClick={()=>navigate("/")} style={{ cursor:"pointer", display:"flex", alignItems:"center", gap:12 }}>
+          <MSMLogo height={50} showWordmark={true} />
+        </span>
+        <span onClick={()=>navigate("/")} style={{ fontSize:12, color:C.muted, cursor:"pointer", letterSpacing:1 }}>
+          ← BACK TO CALENDAR
+        </span>
+      </header>
+
+      <div style={{
+        background: entity.photo_url
+          ? `linear-gradient(180deg, rgba(0,0,0,0.6) 0%, #0d0d0d 100%), url(${entity.photo_url}) center/cover`
+          : `linear-gradient(180deg, ${color}22 0%, #0d0d0d 100%)`,
+        borderBottom:`1px solid ${color}44`,
+        padding:"48px 32px 40px",
+      }}>
+        <div style={{ maxWidth:900, margin:"0 auto" }}>
+          <div style={{ fontSize:11, color:C.muted, letterSpacing:3, fontFamily:F.display, marginBottom:8 }}>FESTIVAL</div>
+          <div style={{ fontFamily:F.display, fontSize:48, letterSpacing:2, color:C.white, lineHeight:1, marginBottom:10 }}>
+            {entity.band_name}
+          </div>
+          {entity.city && <div style={{ fontSize:15, color:"#cccccc", marginBottom:20 }}>📍 {entity.city}</div>}
+          {socialLinks.length > 0 && (
+            <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom:16 }}>
+              {socialLinks.map(s => (
+                <a key={s.label} href={s.url} target="_blank" rel="noreferrer"
+                  style={{ fontSize:11, color:C.muted, textDecoration:"none", border:`1px solid ${C.border}`, borderRadius:5, padding:"5px 10px", display:"flex", alignItems:"center", gap:5 }}
+                >{s.icon} {s.label}</a>
+              ))}
+            </div>
+          )}
+          {entity.website && (
+            <a href={entity.website} target="_blank" rel="noreferrer"
+              style={{ fontSize:12, fontFamily:F.display, letterSpacing:2, background:"rgba(255,255,255,0.08)", color:C.white, textDecoration:"none", borderRadius:5, padding:"8px 16px", border:`1px solid ${C.border}`, display:"inline-block" }}
+            >VISIT WEBSITE</a>
+          )}
+        </div>
+      </div>
+
+      <div style={{ maxWidth:900, margin:"0 auto", padding:"40px 32px" }}>
+        {entity.bio && (
+          <div style={{ marginBottom:48 }}>
+            <SectionLabel>ABOUT</SectionLabel>
+            <div style={{ fontSize:16, color:"#dddddd", lineHeight:1.8, maxWidth:700 }}>{entity.bio}</div>
+          </div>
+        )}
+        <ClaimEntityBox entityType="festival" entityId={entity.id} eligible={entity.admin_created && !entity.claimed} />
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  PHASE 4: PUBLIC PROMOTER PROFILE PAGE
+// ════════════════════════════════════════════════════════════════════
+function PromoterProfilePage() {
+  const { slug }    = useParams();
+  const navigate    = useNavigate();
+  const [entity,    setEntity]  = useState(null);
+  const [loading,   setLoading] = useState(true);
+
+  useEffect(() => {
+    async function load() {
+      setLoading(true);
+      const b = await DB.getBandBySlug(slug);
+      setEntity(b && b.profile_type === "promoter" ? b : null);
+      setLoading(false);
+    }
+    load();
+  }, [slug]);
+
+  if (loading) return (
+    <div style={{ minHeight:"100vh", background:C.bg, display:"flex", alignItems:"center", justifyContent:"center" }}>
+      <style>{GLOBAL_CSS}</style>
+      <div style={{ color:C.muted, fontSize:16, fontFamily:F.display, letterSpacing:2 }}>LOADING...</div>
+    </div>
+  );
+
+  if (!entity) return (
+    <div style={{ minHeight:"100vh", background:C.bg, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:20 }}>
+      <style>{GLOBAL_CSS}</style>
+      <div style={{ color:C.white, fontFamily:F.display, fontSize:32, letterSpacing:2 }}>PROMOTER NOT FOUND</div>
+      <span onClick={()=>navigate("/")} style={{ color:C.red, cursor:"pointer", fontSize:14 }}>← Back to Calendar</span>
+    </div>
+  );
+
+  const color = "#2a9d8f";
+  const socialLinks = [
+    { url: entity.instagram, icon:"📷", label:"Instagram" },
+    { url: entity.facebook,  icon:"👍", label:"Facebook"  },
+    { url: entity.twitter,   icon:"🐦", label:"X/Twitter" },
+  ].filter(s => s.url);
+
+  return (
+    <div style={{ minHeight:"100vh", background:C.bg, color:C.white, fontFamily:F.body }}>
+      <style>{GLOBAL_CSS}</style>
+
+      <header style={{ background:"#0a0a0a", borderBottom:`1px solid ${C.border}`, padding:"0 28px", display:"flex", alignItems:"center", justifyContent:"space-between", height:70 }}>
+        <span onClick={()=>navigate("/")} style={{ cursor:"pointer", display:"flex", alignItems:"center", gap:12 }}>
+          <MSMLogo height={50} showWordmark={true} />
+        </span>
+        <span onClick={()=>navigate("/")} style={{ fontSize:12, color:C.muted, cursor:"pointer", letterSpacing:1 }}>
+          ← BACK TO CALENDAR
+        </span>
+      </header>
+
+      <div style={{
+        background: entity.photo_url
+          ? `linear-gradient(180deg, rgba(0,0,0,0.6) 0%, #0d0d0d 100%), url(${entity.photo_url}) center/cover`
+          : `linear-gradient(180deg, ${color}22 0%, #0d0d0d 100%)`,
+        borderBottom:`1px solid ${color}44`,
+        padding:"48px 32px 40px",
+      }}>
+        <div style={{ maxWidth:900, margin:"0 auto" }}>
+          <div style={{ fontSize:11, color:C.muted, letterSpacing:3, fontFamily:F.display, marginBottom:8 }}>PROMOTER</div>
+          <div style={{ fontFamily:F.display, fontSize:48, letterSpacing:2, color:C.white, lineHeight:1, marginBottom:10 }}>
+            {entity.band_name}
+          </div>
+          {entity.city && <div style={{ fontSize:15, color:"#cccccc", marginBottom:20 }}>📍 {entity.city}</div>}
+          {socialLinks.length > 0 && (
+            <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom:16 }}>
+              {socialLinks.map(s => (
+                <a key={s.label} href={s.url} target="_blank" rel="noreferrer"
+                  style={{ fontSize:11, color:C.muted, textDecoration:"none", border:`1px solid ${C.border}`, borderRadius:5, padding:"5px 10px", display:"flex", alignItems:"center", gap:5 }}
+                >{s.icon} {s.label}</a>
+              ))}
+            </div>
+          )}
+          {entity.website && (
+            <a href={entity.website} target="_blank" rel="noreferrer"
+              style={{ fontSize:12, fontFamily:F.display, letterSpacing:2, background:"rgba(255,255,255,0.08)", color:C.white, textDecoration:"none", borderRadius:5, padding:"8px 16px", border:`1px solid ${C.border}`, display:"inline-block" }}
+            >VISIT WEBSITE</a>
+          )}
+        </div>
+      </div>
+
+      <div style={{ maxWidth:900, margin:"0 auto", padding:"40px 32px" }}>
+        {entity.bio && (
+          <div style={{ marginBottom:48 }}>
+            <SectionLabel>ABOUT</SectionLabel>
+            <div style={{ fontSize:16, color:"#dddddd", lineHeight:1.8, maxWidth:700 }}>{entity.bio}</div>
+          </div>
+        )}
+        <ClaimEntityBox entityType="promoter" entityId={entity.id} eligible={entity.admin_created && !entity.claimed} />
       </div>
     </div>
   );
@@ -3877,6 +4440,134 @@ function BulkImport({ bands, onImported }) {
           {result.success > 0 && <div style={{ color:C.green, fontSize:14 }}>✓ {result.success} gig{result.success!==1?"s":""} imported successfully!</div>}
           {result.errors  > 0 && <div style={{ color:C.amber, fontSize:14, marginTop:4 }}>⚠ {result.errors} gig{result.errors!==1?"s":""} failed to import.</div>}
           {result.firstError && <div style={{ color:C.red, fontSize:12, marginTop:8, fontFamily:"monospace" }}>{result.firstError}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  PHASE 4: ADMIN CLAIM & NEW-ENTITY REQUEST REVIEW
+// ════════════════════════════════════════════════════════════════════
+function AdminClaims({ claims, onRefresh }) {
+  const [filter, setFilter] = useState("pending");
+  const [notes, setNotes]   = useState({}); // claim id -> review notes text
+  const [busyId, setBusyId] = useState(null);
+  const [msg, setMsg]       = useState({ text:"", type:"" });
+
+  const showMsg = (text, type="success") => {
+    setMsg({ text, type });
+    setTimeout(()=>setMsg({ text:"", type:"" }), 4000);
+  };
+
+  const counts = {
+    all:      claims.length,
+    pending:  claims.filter(c=>c.status==="pending").length,
+    approved: claims.filter(c=>c.status==="approved").length,
+    rejected: claims.filter(c=>c.status==="rejected").length,
+  };
+  const filtered = claims.filter(c => filter==="all" ? true : c.status===filter);
+
+  // entity_id set -> claiming an existing record (approve_claim_request).
+  // entity_id null -> brand-new venue/festival/promoter (approve_new_entity_request,
+  // which re-checks for duplicates at approval time).
+  const approve = async (c) => {
+    setBusyId(c.id);
+    try {
+      if (c.entity_id) {
+        await DB.approveClaimRequest(c.id, notes[c.id] || "");
+      } else {
+        await DB.approveNewEntityRequest(c.id, notes[c.id] || "");
+      }
+      showMsg("✓ Approved");
+      if (onRefresh) await onRefresh();
+    } catch(e) { showMsg(e.message, "error"); }
+    setBusyId(null);
+  };
+
+  const reject = async (c) => {
+    setBusyId(c.id);
+    try {
+      await DB.rejectClaimRequest(c.id, notes[c.id] || "");
+      showMsg("✓ Rejected");
+      if (onRefresh) await onRefresh();
+    } catch(e) { showMsg(e.message, "error"); }
+    setBusyId(null);
+  };
+
+  const statusBadge = (status) => {
+    const map = { approved:[C.green,"APPROVED"], pending:[C.amber,"PENDING"], rejected:[C.red,"REJECTED"] };
+    const [color,label] = map[status] || [C.muted, (status||"UNKNOWN").toUpperCase()];
+    return <Badge label={label} color={color} />;
+  };
+
+  return (
+    <div>
+      <SectionLabel>CLAIM &amp; REGISTRATION REQUESTS</SectionLabel>
+      {msg.text && <div style={{ marginBottom:12, color: msg.type==="error" ? C.red : C.green, fontSize:13 }}>{msg.text}</div>}
+
+      <div style={{ display:"flex", gap:6, marginBottom:18, flexWrap:"wrap" }}>
+        {[["all","ALL"],["pending","PENDING"],["approved","APPROVED"],["rejected","REJECTED"]].map(([k,l]) => (
+          <button key={k} onClick={()=>setFilter(k)} style={{
+            padding:"7px 14px", border:"none", borderRadius:5, cursor:"pointer",
+            fontFamily:F.display, letterSpacing:1, fontSize:12,
+            background: filter===k ? C.red : "rgba(255,255,255,0.05)",
+            color: filter===k ? "#fff" : C.muted,
+          }}>{l} ({counts[k]})</button>
+        ))}
+      </div>
+
+      {filtered.length===0 ? (
+        <div style={{ color:C.dim, fontSize:14 }}>No requests in this category.</div>
+      ) : (
+        <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+          {filtered.map(c => (
+            <div key={c.id} style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, padding:16 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", flexWrap:"wrap", gap:14 }}>
+                <div style={{ flex:1, minWidth:240 }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                    <div style={{ fontFamily:F.display, fontSize:14, color:C.white, letterSpacing:1 }}>
+                      {c.entity_id ? "CLAIM EXISTING" : "NEW ENTITY REQUEST"} — {(c.entity_type||"").toUpperCase()}
+                    </div>
+                    {statusBadge(c.status)}
+                  </div>
+                  <div style={{ fontSize:13, color:"#ccc", marginTop:6 }}>
+                    {c.entity_id
+                      ? `Entity ID: ${c.entity_id}`
+                      : `Proposed: ${c.proposed_name || "—"}${c.proposed_city ? ", " + c.proposed_city : ""}`}
+                  </div>
+                  <div style={{ fontSize:12, color:C.muted, marginTop:2 }}>Requested by: {c.requester_email}</div>
+                  {c.requester_message && (
+                    <div style={{ fontSize:12, color:C.dim, marginTop:4, fontStyle:"italic" }}>"{c.requester_message}"</div>
+                  )}
+                  <div style={{ fontSize:11, color:C.dim, marginTop:4 }}>
+                    Submitted {c.created_at ? new Date(c.created_at).toLocaleString() : "—"}
+                  </div>
+                  {c.review_notes && (
+                    <div style={{ fontSize:12, color:C.muted, marginTop:6 }}>Review notes: {c.review_notes}</div>
+                  )}
+                </div>
+
+                {c.status === "pending" && (
+                  <div style={{ display:"flex", flexDirection:"column", gap:6, minWidth:220 }}>
+                    <textarea
+                      value={notes[c.id] || ""} onChange={e=>setNotes(n=>({ ...n, [c.id]: e.target.value }))}
+                      placeholder="Review notes (optional)" rows={2}
+                      style={{ ...inputCss, resize:"vertical", fontSize:12 }}
+                    />
+                    <div style={{ display:"flex", gap:8 }}>
+                      <Btn variant="success" onClick={()=>approve(c)} disabled={busyId===c.id} style={{ fontSize:12, padding:"7px 14px" }}>
+                        ✓ APPROVE
+                      </Btn>
+                      <Btn variant="danger" onClick={()=>reject(c)} disabled={busyId===c.id} style={{ fontSize:12, padding:"7px 14px" }}>
+                        ✗ REJECT
+                      </Btn>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -4549,6 +5240,8 @@ export default function App() {
       <Routes>
         <Route path="/artist/:slug" element={<BandProfilePage />} />
         <Route path="/venue/:slug"  element={<VenueProfilePage />} />
+        <Route path="/festival/:slug" element={<FestivalProfilePage />} />
+        <Route path="/promoter/:slug" element={<PromoterProfilePage />} />
         <Route path="/gig/:slug"    element={<GigDetailPage />} />
         <Route path="/*"            element={<MainApp />} />
       </Routes>
@@ -4563,6 +5256,7 @@ function MainApp() {
   const [bands,     setBands]     = useState([]);    // admin only
   const [festivals, setFestivals] = useState([]);    // FIX 3: festival profiles
   const [venues,  setVenues]  = useState([]);    // admin only
+  const [claims,  setClaims]  = useState([]);    // PHASE 4: claim_requests, admin only
   const [venueFilterMode, setVenueFilterMode] = useState("all"); // all | incomplete
   const [loading, setLoading] = useState(true);
   const [tab,     setTab]     = useState("calendar"); // calendar | list | submit | admin
@@ -4587,6 +5281,7 @@ function MainApp() {
       DB.getBands(true).then(setBands);
       DB.getFestivals(true).then(setFestivals); // FIX 3: load all festival profiles for admin
       DB.getVenues().then(setVenues);
+      DB.getClaimRequests().then(setClaims); // PHASE 4
     }
   }, [isAdmin, auth]);
 
@@ -4601,6 +5296,8 @@ function MainApp() {
     setFestivals(freshFestivals);
     const freshVenues = await DB.getVenues();
     setVenues(freshVenues);
+    const freshClaims = await DB.getClaimRequests(); // PHASE 4
+    setClaims(freshClaims);
   }, [auth]);
 
   const handleAuth = (result) => { setAuth(result); setTab(result.profile?.role === "admin" ? "dashboard" : "submit"); };
@@ -4640,6 +5337,7 @@ function MainApp() {
     ...(isAdmin ? [
       { id:"dashboard", label:"DASHBOARD" },
       { id:"admin",     label:`MODERATION (${allGigs.filter(g=>g.status==="pending").length})` },
+      { id:"claims",    label:`CLAIMS (${claims.filter(c=>c.status==="pending").length})` },
       { id:"bands",     label:`BANDS (${bands.filter(b=>!b.disabled).length})` },
       { id:"venues",    label:`VENUES (${venues.length})` },
       { id:"import",    label:"BULK IMPORT" },
@@ -4733,6 +5431,11 @@ function MainApp() {
         {/* MODERATION */}
         {tab==="admin" && isAdmin && (
           <AdminPanel allGigs={allGigs} bands={bands} onRefresh={refreshAdmin} />
+        )}
+
+        {/* CLAIMS (PHASE 4) */}
+        {tab==="claims" && isAdmin && (
+          <AdminClaims claims={claims} onRefresh={refreshAdmin} />
         )}
 
         {/* MY PROFILE */}
