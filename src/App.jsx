@@ -5378,7 +5378,7 @@ function MainApp() {
               <Btn variant="ghost" onClick={handleSignOut} className="msm-signin-btn" style={{ fontSize:13, padding:"9px 18px" }}>SIGN OUT</Btn>
             </>
           ) : (
-            <Btn variant="ghost" onClick={()=>setTab("submit")} className="msm-signin-btn" style={{ fontSize:13, padding:"9px 18px" }}>BAND LOGIN</Btn>
+            <Btn variant="ghost" onClick={()=>setTab("submit")} className="msm-signin-btn" style={{ fontSize:13, padding:"9px 18px" }}>LOGIN / REGISTER</Btn>
           )}
         </div>
       </header>
