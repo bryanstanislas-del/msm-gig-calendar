@@ -206,17 +206,16 @@ const DB = {
   // user_id column -- match on that instead. Also falls back to the venues
   // table so venue accounts (which never get a profiles row) can sign in
   // and see their venue once a claim/registration has been approved.
-  async signIn(email, password) {
-    if (USE_MOCK) {
-      const u = MOCK_USERS[email];
-      if (!u || u.password !== password) throw new Error("Invalid credentials");
-      MOCK_USER    = { id: u.id, email };
-      MOCK_PROFILE = { id: u.id, role: u.role, band_name: u.band_name };
-      return { user: MOCK_USER, profile: MOCK_PROFILE };
-    }
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) throw new Error(error.message);
-    const user = data.user;
+  // PHASE 5: shared profile-resolution logic for any already-authenticated
+  // Supabase session, whether from an interactive signIn() or from
+  // rehydrating a persisted session on page load / navigation (see
+  // MainApp's session-restore effect). Keeping this in one place means the
+  // two code paths can never drift apart -- same profiles -> venues ->
+  // pending-placeholder fallback chain either way, covering bands, solo
+  // artists, festivals, promoters, venues and admins identically (role
+  // comes straight off the profiles row, same as before).
+  async buildAuthFromSession(session) {
+    const user = session.user;
     let profile = { role:"band", band_name:"", profile_type:null, pending:true };
     try {
       const { data: profiles } = await supabase.from("profiles").select("*").eq("user_id", user.id);
@@ -229,7 +228,20 @@ const DB = {
         }
       }
     } catch(e) { console.warn("Profile fetch failed", e); }
-    return { user, profile, token: data.session?.access_token };
+    return { user, profile, token: session?.access_token };
+  },
+
+  async signIn(email, password) {
+    if (USE_MOCK) {
+      const u = MOCK_USERS[email];
+      if (!u || u.password !== password) throw new Error("Invalid credentials");
+      MOCK_USER    = { id: u.id, email };
+      MOCK_PROFILE = { id: u.id, role: u.role, band_name: u.band_name };
+      return { user: MOCK_USER, profile: MOCK_PROFILE };
+    }
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) throw new Error(error.message);
+    return DB.buildAuthFromSession(data.session);
   },
 
   async signOut() {
@@ -5271,6 +5283,42 @@ function MainApp() {
   const [search, setSearch]   = useState("");
 
   const isAdmin = auth?.profile?.role === "admin";
+
+  // PHASE 5 FIX: restore an existing Supabase session on mount. This effect
+  // runs every time MainApp mounts -- a hard browser refresh, but also a
+  // React Router navigation away to a public profile page and back, since
+  // MainApp fully unmounts/remounts in both cases. Previously `auth` was
+  // hardcoded to null with nothing reading the session the Supabase client
+  // already persists to localStorage by default, so the user appeared
+  // logged out every time even though their token was still valid.
+  useEffect(() => {
+    if (USE_MOCK) return;
+    let active = true;
+
+    // 1) Explicit check on startup, per Supabase's recommended pattern.
+    supabase.auth.getSession().then(async ({ data, error }) => {
+      if (!active || error || !data.session) return;
+      const result = await DB.buildAuthFromSession(data.session);
+      if (active) setAuth(result);
+    });
+
+    // 2) Keep auth state synchronized with Supabase's own auth state
+    // machine going forward -- INITIAL_SESSION (fired once when the client
+    // finishes restoring from storage, overlaps with #1 above but kept for
+    // robustness), SIGNED_IN (e.g. another tab, magic link), and
+    // SIGNED_OUT (e.g. token expiry, signed out in another tab).
+    const { data: listener } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (!active) return;
+      if (event === "SIGNED_OUT") {
+        setAuth(null);
+      } else if ((event === "INITIAL_SESSION" || event === "SIGNED_IN") && session) {
+        const result = await DB.buildAuthFromSession(session);
+        if (active) setAuth(result);
+      }
+    });
+
+    return () => { active = false; listener?.subscription?.unsubscribe(); };
+  }, []);
 
   // Load public gigs and bands on mount
   useEffect(() => {
