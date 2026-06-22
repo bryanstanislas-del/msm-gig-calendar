@@ -148,6 +148,7 @@ const MOCK_USERS = {
 // ── Official Supabase client ────────────────────────────────────────
 import { createClient } from '@supabase/supabase-js';
 const supabase = USE_MOCK ? null : createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+import NewsletterAdmin from './components/admin/NewsletterAdmin';
 
 // ── DB abstraction (mock or real) ──────────────────────────────────
 const DB = {
@@ -5394,8 +5395,9 @@ function MainApp() {
       { id:"claims",    label:`CLAIMS (${claims.filter(c=>c.status==="pending").length})` },
       { id:"bands",     label:`BANDS (${bands.filter(b=>!b.disabled).length})` },
       { id:"venues",    label:`VENUES (${venues.length})` },
-      { id:"import",    label:"BULK IMPORT" },
-      { id:"backups",   label:"BACKUPS" },
+      { id:"import",      label:"BULK IMPORT" },
+      { id:"backups",     label:"BACKUPS" },
+      { id:"newsletter",  label:"NEWSLETTER" },
     ] : []),
   ];
 
@@ -5490,6 +5492,11 @@ function MainApp() {
         {/* CLAIMS (PHASE 4) */}
         {tab==="claims" && isAdmin && (
           <AdminClaims claims={claims} onRefresh={refreshAdmin} />
+        )}
+
+        {/* NEWSLETTER */}
+        {tab==="newsletter" && isAdmin && (
+          <NewsletterAdmin supabase={supabase} />
         )}
 
         {/* MY PROFILE */}
