@@ -148,7 +148,11 @@ const MOCK_USERS = {
 // ── Official Supabase client ────────────────────────────────────────
 import { createClient } from '@supabase/supabase-js';
 const supabase = USE_MOCK ? null : createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-import NewsletterAdmin from './components/admin/NewsletterAdmin';
+import NewsletterAdmin  from './components/admin/NewsletterAdmin';
+import AdminFeatured    from './components/admin/AdminFeatured';
+import AdminEditorial   from './components/admin/AdminEditorial';
+import AdminSupporters  from './components/admin/AdminSupporters';
+import AdminHallOfFame  from './components/admin/AdminHallOfFame';
 
 // ── DB abstraction (mock or real) ──────────────────────────────────
 const DB = {
@@ -5397,7 +5401,11 @@ function MainApp() {
       { id:"venues",    label:`VENUES (${venues.length})` },
       { id:"import",      label:"BULK IMPORT" },
       { id:"backups",     label:"BACKUPS" },
-      { id:"newsletter",  label:"NEWSLETTER" },
+      { id:"newsletter",    label:"NEWSLETTER" },
+      { id:"featured",      label:"FEATURED" },
+      { id:"editorial",     label:"EDITORIAL" },
+      { id:"supporters",    label:"SUPPORTERS" },
+      { id:"hall-of-fame",  label:"HALL OF FAME" },
     ] : []),
   ];
 
@@ -5497,6 +5505,26 @@ function MainApp() {
         {/* NEWSLETTER */}
         {tab==="newsletter" && isAdmin && (
           <NewsletterAdmin supabase={supabase} />
+        )}
+
+        {/* FEATURED LISTINGS */}
+        {tab==="featured" && isAdmin && (
+          <AdminFeatured />
+        )}
+
+        {/* EDITORIAL AWARDS */}
+        {tab==="editorial" && isAdmin && (
+          <AdminEditorial />
+        )}
+
+        {/* FOUNDING SUPPORTERS */}
+        {tab==="supporters" && isAdmin && (
+          <AdminSupporters />
+        )}
+
+        {/* HALL OF FAME */}
+        {tab==="hall-of-fame" && isAdmin && (
+          <AdminHallOfFame />
         )}
 
         {/* MY PROFILE */}
