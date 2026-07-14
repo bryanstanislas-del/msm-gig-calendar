@@ -4605,31 +4605,72 @@ function AdminClaims({ claims, onRefresh }) {
       {filtered.length===0 ? (
         <div style={{ color:C.dim, fontSize:14 }}>No requests in this category.</div>
       ) : (
-        <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-          {filtered.map(c => (
-            <div key={c.id} style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, padding:16 }}>
-              <div style={{ display:"flex", justifyContent:"space-between", flexWrap:"wrap", gap:14 }}>
-                <div style={{ flex:1, minWidth:240 }}>
+        <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+          {filtered.map(c => {
+            // Small local helper: keeps every label visually distinct from its
+            // value (uppercase, dimmer, letter-spaced label vs. larger,
+            // near-white value) and gives consistent vertical rhythm between
+            // rows. Presentation only -- no data or logic here.
+            const MetaRow = ({ label, children }) => (
+              <div style={{ marginTop:14 }}>
+                <div style={{ fontFamily:F.display, fontSize:11, letterSpacing:1.5, color:"#9a9a9a", textTransform:"uppercase", marginBottom:3 }}>
+                  {label}
+                </div>
+                <div style={{ fontSize:15, color:"#eeeeee", lineHeight:1.5, wordBreak:"break-word" }}>
+                  {children}
+                </div>
+              </div>
+            );
+
+            return (
+            <div key={c.id} style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, padding:"20px 22px" }}>
+              <div style={{ display:"flex", justifyContent:"space-between", flexWrap:"wrap", gap:18 }}>
+                <div style={{ flex:1, minWidth:260 }}>
                   <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
                     <div style={{ fontFamily:F.display, fontSize:14, color:C.white, letterSpacing:1 }}>
                       {c.entity_id ? "CLAIM EXISTING" : "NEW ENTITY REQUEST"} — {(c.entity_type||"").toUpperCase()}
                     </div>
                     {statusBadge(c.status)}
                   </div>
-                  <div style={{ fontSize:13, color:"#ccc", marginTop:6 }}>
+
+                  <MetaRow label={c.entity_id ? "Entity ID" : "Proposed"}>
                     {c.entity_id
-                      ? `Entity ID: ${c.entity_id}`
-                      : `Proposed: ${c.proposed_name || "—"}${c.proposed_city ? ", " + c.proposed_city : ""}`}
-                  </div>
-                  <div style={{ fontSize:12, color:C.muted, marginTop:2 }}>Requested by: {c.requester_email}</div>
+                      ? c.entity_id
+                      : `${c.proposed_name || "—"}${c.proposed_city ? ", " + c.proposed_city : ""}`}
+                  </MetaRow>
+
+                  <MetaRow label="Requested by">
+                    {c.requester_email}
+                  </MetaRow>
+
+                  <MetaRow label="Submitted">
+                    {c.created_at ? new Date(c.created_at).toLocaleString() : "—"}
+                  </MetaRow>
+
+                  {/* Applicant's comment is the most important thing an admin
+                      needs to read to make a decision, so it gets the most
+                      prominent treatment on the card: its own clearly labelled
+                      section, larger type, and the highest-contrast text. */}
                   {c.requester_message && (
-                    <div style={{ fontSize:12, color:C.dim, marginTop:4, fontStyle:"italic" }}>"{c.requester_message}"</div>
+                    <div style={{
+                      marginTop:16, padding:"12px 14px",
+                      background:"rgba(255,255,255,0.04)",
+                      borderLeft:`3px solid ${C.red}`,
+                      borderRadius:4,
+                    }}>
+                      <div style={{ fontFamily:F.display, fontSize:11, letterSpacing:1.5, color:C.red, textTransform:"uppercase", marginBottom:6 }}>
+                        Applicant Comment
+                      </div>
+                      <div style={{ fontSize:16, color:"#ffffff", lineHeight:1.6, wordBreak:"break-word" }}>
+                        {c.requester_message}
+                      </div>
+                    </div>
                   )}
-                  <div style={{ fontSize:11, color:C.dim, marginTop:4 }}>
-                    Submitted {c.created_at ? new Date(c.created_at).toLocaleString() : "—"}
-                  </div>
+
                   {c.review_notes && (
-                    <div style={{ fontSize:12, color:C.muted, marginTop:6 }}>Review notes: {c.review_notes}</div>
+                    <MetaRow label="Review notes">
+                      {c.review_notes}
+                    </MetaRow>
                   )}
                 </div>
 
@@ -4652,7 +4693,8 @@ function AdminClaims({ claims, onRefresh }) {
                 )}
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
