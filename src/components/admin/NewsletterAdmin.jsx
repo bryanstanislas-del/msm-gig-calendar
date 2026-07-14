@@ -331,7 +331,7 @@ export default function NewsletterAdmin({ supabase }) {
     emptyState: {
       textAlign: 'center',
       padding: '48px 16px',
-      color: '#94a3b8',
+      color: '#64748b',
       fontSize: 14,
     },
     statusDot: (status) => ({
@@ -514,7 +514,7 @@ export default function NewsletterAdmin({ supabase }) {
 
   // ── render ────────────────────────────────────────────────
   if (loading) return (
-    <div style={{ textAlign: 'center', padding: 60, color: '#94a3b8' }}>
+    <div style={{ textAlign: 'center', padding: 60, color: '#64748b' }}>
       Loading newsletter data…
     </div>
   );
