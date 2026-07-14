@@ -33,7 +33,7 @@ const Toggle   = ({checked, onChange, label, hint}) => (
     </div>
     <div>
       <span className="text-sm font-medium text-gray-700">{label}</span>
-      {hint && <p className="text-xs text-gray-400 mt-0.5">{hint}</p>}
+      {hint && <p className="text-xs text-gray-500 mt-0.5">{hint}</p>}
     </div>
   </label>
 );
@@ -81,7 +81,7 @@ function SubjectSearch({ targetType, value, onChange }) {
     <div className="relative">
       <Input type="text" value={q} onChange={e => setQ(e.target.value)}
         placeholder={targetType === 'gig' ? 'Search gigs…' : 'Search bands, artists, festivals…'} />
-      {loading && <div className="absolute right-3 top-2.5 text-xs text-gray-400">Searching…</div>}
+      {loading && <div className="absolute right-3 top-2.5 text-xs text-gray-500">Searching…</div>}
       {open && results.length > 0 && (
         <ul className="absolute z-30 w-full bg-white border border-gray-200 rounded shadow-lg mt-1 max-h-48 overflow-y-auto">
           {results.map(item => (
@@ -93,7 +93,7 @@ function SubjectSearch({ targetType, value, onChange }) {
         </ul>
       )}
       {open && !loading && results.length === 0 && (
-        <div className="absolute z-30 w-full bg-white border border-gray-200 rounded shadow-lg mt-1 px-3 py-2 text-sm text-gray-400">No results</div>
+        <div className="absolute z-30 w-full bg-white border border-gray-200 rounded shadow-lg mt-1 px-3 py-2 text-sm text-gray-500">No results</div>
       )}
       {value && <p className="mt-1 text-xs text-yellow-700 font-medium">✓ {value.label}</p>}
     </div>
@@ -142,7 +142,7 @@ function InductionForm({ hofTypeId, initial, onSave, onCancel, saving }) {
           <span className="text-2xl">🏆</span>
           <h3 className="font-bold text-gray-900">{initial ? 'Edit Hall of Fame Entry' : 'Induct into MSM Hall of Fame'}</h3>
         </div>
-        <button type="button" onClick={onCancel} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+        <button type="button" onClick={onCancel} className="text-gray-500 hover:text-gray-600 text-xl leading-none">×</button>
       </div>
 
       <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-xs text-yellow-900">
@@ -201,7 +201,7 @@ function InductionForm({ hofTypeId, initial, onSave, onCancel, saving }) {
         <Label>MSM feature / tribute URL</Label>
         <Input type="url" value={form.review_url} onChange={e => set('review_url', e.target.value)}
           placeholder="https://musicscenemagazine.co.uk/features/…" />
-        <p className="mt-1 text-xs text-gray-400">Strongly recommended — shown as "Read Feature" on the archive page.</p>
+        <p className="mt-1 text-xs text-gray-500">Strongly recommended — shown as "Read Feature" on the archive page.</p>
       </div>
 
       {/* Dates */}
@@ -213,7 +213,7 @@ function InductionForm({ hofTypeId, initial, onSave, onCancel, saving }) {
         <div>
           <Label>Publish date / time</Label>
           <Input type="datetime-local" value={form.published_at} onChange={e => set('published_at', e.target.value)} />
-          <p className="mt-1 text-xs text-gray-400">Blank = publish immediately.</p>
+          <p className="mt-1 text-xs text-gray-500">Blank = publish immediately.</p>
         </div>
       </div>
 
@@ -222,7 +222,7 @@ function InductionForm({ hofTypeId, initial, onSave, onCancel, saving }) {
         <Label>Archive slug</Label>
         <Input type="text" value={form.slug} onChange={e => set('slug', e.target.value)} className="font-mono text-xs"
           placeholder="hall-of-fame-band-name-2026" />
-        <p className="mt-1 text-xs text-gray-400">Permanent URL: /editorial-archive/{form.slug || '…'}</p>
+        <p className="mt-1 text-xs text-gray-500">Permanent URL: /editorial-archive/{form.slug || '…'}</p>
       </div>
 
       {/* Display + visibility */}
@@ -441,17 +441,17 @@ export default function AdminHallOfFame() {
           <option value="visible">Visible</option>
           <option value="hidden">Hidden</option>
         </select>
-        <span className="text-xs text-gray-400 ml-1">{filtered.length} inductee{filtered.length!==1?'s':''}</span>
+        <span className="text-xs text-gray-500 ml-1">{filtered.length} inductee{filtered.length!==1?'s':''}</span>
       </div>
 
       {loading ? (
-        <div className="text-sm text-gray-400 py-12 text-center">Loading…</div>
+        <div className="text-sm text-gray-500 py-12 text-center">Loading…</div>
       ) : error ? (
         <div className="text-sm text-red-600 py-4 px-4 bg-red-50 rounded-lg">{error}</div>
       ) : filtered.length === 0 ? (
         <div className="py-16 text-center border-2 border-dashed border-gray-200 rounded-xl">
           <p className="text-4xl mb-3">🏆</p>
-          <p className="text-gray-400 text-sm">No inductees yet. Use the button above to induct.</p>
+          <p className="text-gray-500 text-sm">No inductees yet. Use the button above to induct.</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -470,13 +470,13 @@ export default function AdminHallOfFame() {
                           {fmtYear(i.awarded_at)}
                         </span>
                         {!i.archive_visible && (
-                          <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">Hidden</span>
+                          <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">Hidden</span>
                         )}
                       </div>
                       <p className="font-bold text-gray-900">{subjectLabel(i)}</p>
                       {i.headline && <p className="text-sm text-yellow-700 font-medium mt-0.5">{i.headline}</p>}
                       {i.body_text && <p className="text-xs text-gray-500 mt-1 line-clamp-2">{i.body_text}</p>}
-                      {i.slug && <p className="text-xs text-gray-400 font-mono mt-1">/editorial-archive/{i.slug}</p>}
+                      {i.slug && <p className="text-xs text-gray-500 font-mono mt-1">/editorial-archive/{i.slug}</p>}
                     </div>
                     <div className="flex gap-1.5 flex-wrap flex-shrink-0">
                       <button onClick={() => openEdit(i)}
@@ -495,7 +495,7 @@ export default function AdminHallOfFame() {
                       )}
                     </div>
                   </div>
-                  <p className="text-xs text-gray-400 mt-2">Inducted {fmtDate(i.awarded_at)}</p>
+                  <p className="text-xs text-gray-500 mt-2">Inducted {fmtDate(i.awarded_at)}</p>
                 </div>
               </div>
             </div>
@@ -504,7 +504,7 @@ export default function AdminHallOfFame() {
       )}
 
       {inductees.length > 0 && (
-        <p className="mt-6 text-xs text-gray-400 text-center">
+        <p className="mt-6 text-xs text-gray-500 text-center">
           Hall of Fame records are permanent. Entries cannot be deleted — only hidden from public view.
         </p>
       )}
