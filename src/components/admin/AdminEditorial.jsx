@@ -41,7 +41,7 @@ const Toggle = ({checked, onChange, label, hint}) => (
     </div>
     <div>
       <span className="text-sm font-medium text-gray-700">{label}</span>
-      {hint && <p className="text-xs text-gray-400 mt-0.5">{hint}</p>}
+      {hint && <p className="text-xs text-gray-500 mt-0.5">{hint}</p>}
     </div>
   </label>
 );
@@ -101,7 +101,7 @@ function SubjectSearch({ targetType, value, onChange }) {
         onChange={e => setQ(e.target.value)}
         placeholder={targetType === 'gig' ? 'Search approved gigs…' : 'Search bands, artists, festivals…'}
       />
-      {loading && <div className="absolute right-3 top-2.5 text-xs text-gray-400">Searching…</div>}
+      {loading && <div className="absolute right-3 top-2.5 text-xs text-gray-500">Searching…</div>}
       {open && results.length > 0 && (
         <ul className="absolute z-30 w-full bg-white border border-gray-200 rounded shadow-lg mt-1 max-h-48 overflow-y-auto">
           {results.map(item => (
@@ -113,7 +113,7 @@ function SubjectSearch({ targetType, value, onChange }) {
         </ul>
       )}
       {open && !loading && results.length === 0 && (
-        <div className="absolute z-30 w-full bg-white border border-gray-200 rounded shadow-lg mt-1 px-3 py-2 text-sm text-gray-400">No results</div>
+        <div className="absolute z-30 w-full bg-white border border-gray-200 rounded shadow-lg mt-1 px-3 py-2 text-sm text-gray-500">No results</div>
       )}
       {value && <p className="mt-1 text-xs text-green-700 font-medium">✓ {value.label}</p>}
     </div>
@@ -165,7 +165,7 @@ function EditorialForm({ awardTypes, initial, onSave, onCancel, saving }) {
     <form onSubmit={handleSubmit} className="bg-white border-2 border-green-200 rounded-xl p-6 space-y-5 shadow-sm">
       <div className="flex items-center justify-between">
         <h3 className="font-bold text-gray-900">{initial ? 'Edit Award' : 'Assign Editorial Award'}</h3>
-        <button type="button" onClick={onCancel} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+        <button type="button" onClick={onCancel} className="text-gray-500 hover:text-gray-600 text-xl leading-none">×</button>
       </div>
 
       {/* Award type */}
@@ -247,7 +247,7 @@ function EditorialForm({ awardTypes, initial, onSave, onCancel, saving }) {
         <Label>Review / article URL</Label>
         <Input type="url" value={form.review_url} onChange={e => set('review_url', e.target.value)}
           placeholder="https://musicscenemagazine.co.uk/reviews/…" />
-        <p className="mt-1 text-xs text-gray-400">Shown as "Read Review" link on the archive page.</p>
+        <p className="mt-1 text-xs text-gray-500">Shown as "Read Review" link on the archive page.</p>
       </div>
 
       {/* Award date + Publish + Expiry */}
@@ -259,12 +259,12 @@ function EditorialForm({ awardTypes, initial, onSave, onCancel, saving }) {
         <div>
           <Label>Publish date</Label>
           <Input type="datetime-local" value={form.published_at} onChange={e => set('published_at', e.target.value)} />
-          <p className="mt-1 text-xs text-gray-400">Leave blank to publish immediately.</p>
+          <p className="mt-1 text-xs text-gray-500">Leave blank to publish immediately.</p>
         </div>
         <div>
           <Label>Expiry date</Label>
           <Input type="datetime-local" value={form.expires_at} onChange={e => set('expires_at', e.target.value)} />
-          <p className="mt-1 text-xs text-gray-400">Leave blank for no expiry.</p>
+          <p className="mt-1 text-xs text-gray-500">Leave blank for no expiry.</p>
         </div>
       </div>
 
@@ -273,7 +273,7 @@ function EditorialForm({ awardTypes, initial, onSave, onCancel, saving }) {
         <Label>Archive slug</Label>
         <Input type="text" value={form.slug} onChange={e => set('slug', e.target.value)}
           placeholder="auto-generated — edit if needed" className="font-mono text-xs" />
-        <p className="mt-1 text-xs text-gray-400">Public URL: /editorial-archive/{form.slug || '…'}</p>
+        <p className="mt-1 text-xs text-gray-500">Public URL: /editorial-archive/{form.slug || '…'}</p>
       </div>
 
       {/* Display controls */}
@@ -282,7 +282,7 @@ function EditorialForm({ awardTypes, initial, onSave, onCancel, saving }) {
           <Label>Display order</Label>
           <Input type="number" value={form.display_order} onChange={e => set('display_order', parseInt(e.target.value)||0)}
             min="0" placeholder="0" />
-          <p className="mt-1 text-xs text-gray-400">Lower = higher position. 0 = default.</p>
+          <p className="mt-1 text-xs text-gray-500">Lower = higher position. 0 = default.</p>
         </div>
         <div className="space-y-3 pt-5">
           <Toggle checked={form.is_pinned} onChange={v => set('is_pinned', v)}
@@ -511,10 +511,10 @@ export default function AdminEditorial() {
                     <>
                       <p className="text-sm font-semibold text-gray-900 truncate">{subjectLabel(current)}</p>
                       {current.headline && <p className="text-xs text-gray-500 truncate">{current.headline}</p>}
-                      <p className="text-xs text-gray-400">{fmtDate(current.awarded_at)}</p>
+                      <p className="text-xs text-gray-500">{fmtDate(current.awarded_at)}</p>
                     </>
                   ) : (
-                    <p className="text-sm text-gray-400 italic">None assigned</p>
+                    <p className="text-sm text-gray-500 italic">None assigned</p>
                   )}
                 </div>
               </div>
@@ -553,17 +553,17 @@ export default function AdminEditorial() {
           <option value="active">Active</option>
           <option value="inactive">Inactive</option>
         </select>
-        <span className="text-xs text-gray-400 ml-1">{filtered.length} award{filtered.length !== 1 ? 's' : ''}</span>
+        <span className="text-xs text-gray-500 ml-1">{filtered.length} award{filtered.length !== 1 ? 's' : ''}</span>
       </div>
 
       {/* Table */}
       {loading ? (
-        <div className="text-sm text-gray-400 py-12 text-center">Loading…</div>
+        <div className="text-sm text-gray-500 py-12 text-center">Loading…</div>
       ) : error ? (
         <div className="text-sm text-red-600 py-4 px-4 bg-red-50 rounded-lg">{error}</div>
       ) : filtered.length === 0 ? (
         <div className="py-16 text-center border-2 border-dashed border-gray-200 rounded-xl">
-          <p className="text-gray-400 text-sm">No awards found. Assign one above.</p>
+          <p className="text-gray-500 text-sm">No awards found. Assign one above.</p>
         </div>
       ) : (
         <div className="border border-gray-200 rounded-xl overflow-hidden shadow-sm">
@@ -586,11 +586,11 @@ export default function AdminEditorial() {
                         {f.award_label}
                       </span>
                     </div>
-                    {f.display_order > 0 && <p className="text-xs text-gray-400 mt-0.5">Order: {f.display_order}</p>}
+                    {f.display_order > 0 && <p className="text-xs text-gray-500 mt-0.5">Order: {f.display_order}</p>}
                   </td>
                   <td className="px-4 py-3">
                     <p className="font-medium text-gray-900 truncate max-w-[180px]">{subjectLabel(f)}</p>
-                    {f.image_url && <p className="text-xs text-gray-400">📷 Image set</p>}
+                    {f.image_url && <p className="text-xs text-gray-500">📷 Image set</p>}
                   </td>
                   <td className="px-4 py-3 text-xs text-gray-500 max-w-[160px] truncate">{f.headline || '—'}</td>
                   <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
@@ -600,7 +600,7 @@ export default function AdminEditorial() {
                   </td>
                   <td className="px-4 py-3"><Pill active={f.active} /></td>
                   <td className="px-4 py-3">
-                    <span className={`text-xs font-medium ${f.archive_visible ? 'text-green-700' : 'text-gray-400'}`}>
+                    <span className={`text-xs font-medium ${f.archive_visible ? 'text-green-700' : 'text-gray-500'}`}>
                       {f.archive_visible ? '✓ Visible' : '— Hidden'}
                     </span>
                   </td>
