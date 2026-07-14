@@ -42,7 +42,7 @@ const Toggle   = ({checked, onChange, label, hint}) => (
     </div>
     <div>
       <span className="text-sm font-medium text-gray-700">{label}</span>
-      {hint && <p className="text-xs text-gray-400 mt-0.5">{hint}</p>}
+      {hint && <p className="text-xs text-gray-500 mt-0.5">{hint}</p>}
     </div>
   </label>
 );
@@ -102,7 +102,7 @@ function ProfileSearch({ value, onChange, excludeIds=[] }) {
     <div className="relative">
       <Input type="text" value={q} onChange={e => setQ(e.target.value)}
         placeholder="Search registered bands, artists, festivals…" />
-      {loading && <div className="absolute right-3 top-2.5 text-xs text-gray-400">Searching…</div>}
+      {loading && <div className="absolute right-3 top-2.5 text-xs text-gray-500">Searching…</div>}
       {open && results.length > 0 && (
         <ul className="absolute z-30 w-full bg-white border border-gray-200 rounded shadow-lg mt-1 max-h-48 overflow-y-auto">
           {results.map(p => (
@@ -114,7 +114,7 @@ function ProfileSearch({ value, onChange, excludeIds=[] }) {
         </ul>
       )}
       {open && !loading && results.length === 0 && (
-        <div className="absolute z-30 w-full bg-white border border-gray-200 rounded shadow-lg mt-1 px-3 py-2 text-sm text-gray-400">
+        <div className="absolute z-30 w-full bg-white border border-gray-200 rounded shadow-lg mt-1 px-3 py-2 text-sm text-gray-500">
           No results — profile must be registered in the system
         </div>
       )}
@@ -155,7 +155,7 @@ function SupporterForm({ existingIds, initial, onSave, onCancel, saving }) {
     <form onSubmit={handleSubmit} className="bg-white border-2 border-purple-200 rounded-xl p-6 space-y-5 shadow-sm">
       <div className="flex items-center justify-between">
         <h3 className="font-bold text-gray-900">{initial ? 'Edit Supporter' : 'Grant Founding Supporter Status'}</h3>
-        <button type="button" onClick={onCancel} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+        <button type="button" onClick={onCancel} className="text-gray-500 hover:text-gray-600 text-xl leading-none">×</button>
       </div>
 
       {/* Profile (only on create) */}
@@ -173,7 +173,7 @@ function SupporterForm({ existingIds, initial, onSave, onCancel, saving }) {
           className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500">
           {SUPPORTER_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
         </select>
-        <p className="mt-1 text-xs text-gray-400">Level is for display and filtering only — no automated privileges.</p>
+        <p className="mt-1 text-xs text-gray-500">Level is for display and filtering only — no automated privileges.</p>
       </div>
 
       {/* Website URL */}
@@ -181,7 +181,7 @@ function SupporterForm({ existingIds, initial, onSave, onCancel, saving }) {
         <Label>Website URL</Label>
         <Input type="url" value={form.website_url} onChange={e => set('website_url', e.target.value)}
           placeholder="https://…" />
-        <p className="mt-1 text-xs text-gray-400">Shown as an external link on the supporters page.</p>
+        <p className="mt-1 text-xs text-gray-500">Shown as an external link on the supporters page.</p>
       </div>
 
       {/* Headline + Body */}
@@ -201,7 +201,7 @@ function SupporterForm({ existingIds, initial, onSave, onCancel, saving }) {
         <div>
           <Label>Logo / image URL</Label>
           <Input type="url" value={form.image_url} onChange={e => set('image_url', e.target.value)} placeholder="https://…" />
-          <p className="mt-1 text-xs text-gray-400">Replaces profile photo on supporters page.</p>
+          <p className="mt-1 text-xs text-gray-500">Replaces profile photo on supporters page.</p>
         </div>
         <div>
           <Label>Image alt text</Label>
@@ -217,12 +217,12 @@ function SupporterForm({ existingIds, initial, onSave, onCancel, saving }) {
         <div>
           <Label>Publish date / time</Label>
           <Input type="datetime-local" value={form.published_at} onChange={e => set('published_at', e.target.value)} />
-          <p className="mt-1 text-xs text-gray-400">Blank = publish immediately.</p>
+          <p className="mt-1 text-xs text-gray-500">Blank = publish immediately.</p>
         </div>
         <div>
           <Label>Expiry date / time</Label>
           <Input type="datetime-local" value={form.expires_at} onChange={e => set('expires_at', e.target.value)} />
-          <p className="mt-1 text-xs text-gray-400">Blank = no expiry.</p>
+          <p className="mt-1 text-xs text-gray-500">Blank = no expiry.</p>
         </div>
       </div>
 
@@ -232,7 +232,7 @@ function SupporterForm({ existingIds, initial, onSave, onCancel, saving }) {
           <Label>Display order</Label>
           <Input type="number" value={form.display_order} min="0"
             onChange={e => set('display_order', parseInt(e.target.value)||0)} />
-          <p className="mt-1 text-xs text-gray-400">Lower = higher position.</p>
+          <p className="mt-1 text-xs text-gray-500">Lower = higher position.</p>
         </div>
         <div className="space-y-3 pt-5">
           <Toggle checked={form.is_pinned} onChange={v => set('is_pinned', v)} label="Pin to top" hint="Overrides display order" />
@@ -445,16 +445,16 @@ export default function AdminSupporters() {
             {levels.map(l => <option key={l} value={l}>{l}</option>)}
           </select>
         )}
-        <span className="text-xs text-gray-400 ml-1">{filtered.length} record{filtered.length!==1?'s':''}</span>
+        <span className="text-xs text-gray-500 ml-1">{filtered.length} record{filtered.length!==1?'s':''}</span>
       </div>
 
       {loading ? (
-        <div className="text-sm text-gray-400 py-12 text-center">Loading…</div>
+        <div className="text-sm text-gray-500 py-12 text-center">Loading…</div>
       ) : error ? (
         <div className="text-sm text-red-600 py-4 px-4 bg-red-50 rounded-lg">{error}</div>
       ) : filtered.length === 0 ? (
         <div className="py-16 text-center border-2 border-dashed border-gray-200 rounded-xl">
-          <p className="text-gray-400 text-sm">No supporters found. Grant status above.</p>
+          <p className="text-gray-500 text-sm">No supporters found. Grant status above.</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -496,8 +496,8 @@ export default function AdminSupporters() {
                             🔗 {s.website_url.replace(/^https?:\/\//, '')}
                           </a>
                         )}
-                        {s.profile_city && <span className="text-xs text-gray-400">{s.profile_city}</span>}
-                        <span className="text-xs text-gray-400">Since {fmtDate(s.granted_at)}</span>
+                        {s.profile_city && <span className="text-xs text-gray-500">{s.profile_city}</span>}
+                        <span className="text-xs text-gray-500">Since {fmtDate(s.granted_at)}</span>
                       </div>
                     </div>
 
