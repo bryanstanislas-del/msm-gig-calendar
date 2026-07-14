@@ -551,6 +551,48 @@ const DB = {
     const { error } = await supabase.from("gigs").delete().eq("id", gigId);
     if (error) throw new Error(error.message);
   },
+
+  // ── PUBLIC EDITORIAL AWARDS (Stage 1) ──────────────────────────────
+  // Single filtered query against editorial_features, embedding the
+  // related editorial_award_types row via the existing FK so callers get
+  // everything needed in one round trip (no N+1, no admin RPC).
+  // RLS already restricts anon/public reads to active=true; this adds the
+  // publish-window check RLS does not enforce (published_at/expires_at).
+  // Pass profileId, gigId, or both -- a single award can be linked to a
+  // gig AND its performing artist, so passing both returns the combined,
+  // de-duplicated set in one query rather than two separate requests.
+  async getActiveAwards({ profileId = null, gigId = null } = {}) {
+    if (USE_MOCK) return [];
+    if (!profileId && !gigId) return [];
+    const nowIso = new Date().toISOString();
+    let query = supabase
+      .from("editorial_features")
+      .select("*, editorial_award_types(*)")
+      .eq("active", true)
+      .or(`published_at.is.null,published_at.lte.${nowIso}`)
+      .or(`expires_at.is.null,expires_at.gt.${nowIso}`)
+      .order("awarded_at", { ascending: false });
+
+    if (profileId && gigId) {
+      query = query.or(`profile_id.eq.${profileId},gig_id.eq.${gigId}`);
+    } else if (profileId) {
+      query = query.eq("profile_id", profileId);
+    } else {
+      query = query.eq("gig_id", gigId);
+    }
+
+    const { data, error } = await query;
+    if (error) { console.warn("Awards fetch failed", error); return []; }
+
+    // Defensive de-dupe by id -- the schema allows a single row to carry
+    // both profile_id and gig_id, so guard against ever double-counting it.
+    const seen = new Set();
+    return (data || []).filter(row => {
+      if (seen.has(row.id)) return false;
+      seen.add(row.id);
+      return true;
+    });
+  },
 };
 
 // ── MSM Logo ────────────────────────────────────────────────────────
@@ -839,6 +881,122 @@ const Select = ({ label, value, onChange, options }) => (
     <select value={value} onChange={onChange} style={{ ...inputCss, cursor:"pointer" }}>
       {options.map(o => <option key={o.value||o} value={o.value||o}>{o.label||o}</option>)}
     </select>
+  </div>
+);
+
+// ════════════════════════════════════════════════════════════════════
+//  PUBLIC EDITORIAL AWARDS -- shared read-only display components
+// ════════════════════════════════════════════════════════════════════
+// Awards are assigned entirely through the existing Admin Editorial
+// workflow (AdminEditorial.jsx, unchanged). These components only render
+// rows already fetched via DB.getActiveAwards() -- no writes, and never
+// the admin_get_editorial_features RPC (that RPC intentionally ignores
+// active/publish-window filtering, so it must stay admin-only).
+const fmtAwardDate = ts => {
+  if (!ts) return "";
+  return new Date(ts).toLocaleDateString("en-GB", { day:"numeric", month:"short", year:"numeric" });
+};
+
+const awardColor = (type) => type?.color_hex ? `#${String(type.color_hex).replace(/^#/, "")}` : C.red;
+
+// Compact single-line pill for page heroes (artist/festival/promoter
+// profiles, gig pages) -- deliberately small so a handful of awards never
+// overwhelm the header. Uses the award type's short label where available.
+const EditorialAwardPill = ({ award }) => {
+  const type  = award.editorial_award_types || {};
+  const color = awardColor(type);
+  const label = type.label_short || type.label || "MSM AWARD";
+  return (
+    <div style={{
+      display:"flex", alignItems:"center", gap:8, flexWrap:"wrap",
+      padding:"6px 12px", borderRadius:6,
+      background:`${color}1a`, border:`1px solid ${color}66`,
+    }}>
+      {type.image_url && (
+        <img src={type.image_url} alt="" style={{ width:18, height:18, objectFit:"contain", flexShrink:0 }} />
+      )}
+      <span style={{ fontFamily:F.display, fontSize:12, letterSpacing:1.5, color:C.white }}>{label}</span>
+      {award.awarded_at && (
+        <span style={{ fontSize:11, color:"#ccc" }}>{fmtAwardDate(award.awarded_at)}</span>
+      )}
+      {award.review_url && (
+        <a href={award.review_url} target="_blank" rel="noopener noreferrer"
+          style={{ fontSize:11, fontFamily:F.display, letterSpacing:1, color, textDecoration:"none", borderBottom:`1px solid ${color}` }}
+        >READ REVIEW ↗</a>
+      )}
+    </div>
+  );
+};
+
+// Row of pills, newest first (DB.getActiveAwards already orders this way).
+// Renders nothing when there are no awards, so it never leaves a gap in
+// the hero for profiles/gigs that don't have any yet.
+export const EditorialAwardStrip = ({ awards, style={} }) => {
+  if (!awards || awards.length === 0) return null;
+  return (
+    <div style={{ display:"flex", gap:8, flexWrap:"wrap", ...style }}>
+      {awards.map(a => <EditorialAwardPill key={a.id} award={a} />)}
+    </div>
+  );
+};
+
+// Fuller card used inside the MSM Coverage section: image, award type,
+// headline, date and a clear Read Review button through to the full
+// article on musicscenemagazine.co.uk (review_url). Never renders
+// body_text as a substitute for the WordPress article.
+const EditorialCoverageCard = ({ award }) => {
+  const type  = award.editorial_award_types || {};
+  const color = awardColor(type);
+  const image = award.image_url || type.image_url;
+  return (
+    <div style={{
+      display:"flex", gap:16, padding:18, background:C.surface,
+      border:`1px solid ${C.border}`, borderLeft:`3px solid ${color}`,
+      borderRadius:8, flexWrap:"wrap",
+    }}>
+      {image && (
+        <img src={image} alt={award.image_alt || type.label || ""}
+          style={{ width:72, height:72, borderRadius:6, objectFit:"cover", flexShrink:0 }}
+        />
+      )}
+      <div style={{ flex:1, minWidth:180 }}>
+        <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap", marginBottom:6 }}>
+          <Badge label={type.label || "MSM EDITORIAL"} color={color} />
+          {award.awarded_at && <span style={{ fontSize:12, color:"#aaa" }}>{fmtAwardDate(award.awarded_at)}</span>}
+        </div>
+        {award.headline && (
+          <div style={{ fontFamily:F.display, fontSize:17, letterSpacing:0.5, color:C.white, marginBottom:6, lineHeight:1.3 }}>
+            {award.headline}
+          </div>
+        )}
+        {award.review_url && (
+          <a href={award.review_url} target="_blank" rel="noopener noreferrer"
+            style={{ display:"inline-block", marginTop:4, padding:"8px 16px", background:color, color:"#fff", textDecoration:"none", borderRadius:5, fontFamily:F.display, fontSize:11, letterSpacing:2 }}
+          >READ REVIEW →</a>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// Full MSM Coverage section -- replaces the old static placeholder.
+// Keeps the friendly empty-state copy when there's no coverage yet, so
+// the section's presence/behaviour looks the same as before on profiles
+// and gigs that don't have any awards.
+export const MSMCoverageSection = ({ awards, subjectLabel = "this artist" }) => (
+  <div style={{ marginBottom:48 }}>
+    <SectionLabel>MSM COVERAGE</SectionLabel>
+    {(!awards || awards.length === 0) ? (
+      <div style={{ padding:24, background:"rgba(255,255,255,0.02)", border:`1px dashed ${C.border}`, borderRadius:8 }}>
+        <div style={{ fontSize:13, color:C.dim }}>
+          Reviews, interviews and features related to {subjectLabel} will appear here.
+        </div>
+      </div>
+    ) : (
+      <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+        {awards.map(a => <EditorialCoverageCard key={a.id} award={a} />)}
+      </div>
+    )}
   </div>
 );
 
@@ -2924,6 +3082,7 @@ function GigDetailPage() {
   const [venue,    setVenue]    = useState(null);
   const [venueGigs,setVenueGigs]= useState([]);
   const [prevNext, setPrevNext] = useState({ prev:null, next:null });
+  const [awards,   setAwards]   = useState([]);
   const [loading,  setLoading]  = useState(true);
   const [copied,   setCopied]   = useState(false);
   const today = new Date().toISOString().slice(0,10);
@@ -2959,8 +3118,12 @@ function GigDetailPage() {
       setMeta("twitter:description", pageDesc,              "name");
       setMeta("twitter:image",       pageImg,               "name");
 
-      // Load band, venue, prev/next in parallel
-      const [bandData, venueData, pn] = await Promise.all([
+      // Load band, venue, prev/next and Editorial Awards in parallel.
+      // Awards are looked up by gig_id AND the artist's profile_id in a
+      // single call (getActiveAwards de-dupes internally) so a gig with
+      // its own award and an artist with their own award never double up,
+      // and this doesn't need to wait for the band/venue fetch above.
+      const [bandData, venueData, pn, aw] = await Promise.all([
         g.band_profile_id
           ? supabase.from("profiles").select("*").eq("id", g.band_profile_id).then(r => r.data?.[0] || null)
           : Promise.resolve(null),
@@ -2968,11 +3131,13 @@ function GigDetailPage() {
           ? supabase.from("venues").select("*").eq("id", g.venue_id).then(r => r.data?.[0] || null)
           : Promise.resolve(null),
         DB.getPrevNextGigs(g.date, g.time, g.id),
+        DB.getActiveAwards({ profileId: g.band_profile_id || null, gigId: g.id }),
       ]);
 
       setBand(bandData);
       setVenue(venueData);
       setPrevNext(pn);
+      setAwards(aw);
 
       // Load other gigs at this venue
       if (g.venue_id) {
@@ -3088,6 +3253,7 @@ function GigDetailPage() {
               : gig.band_name
             }
           </div>
+          <EditorialAwardStrip awards={awards} style={{ marginBottom:14 }} />
           <div style={{ fontSize:18, color:"#cccccc", marginBottom:6 }}>
             {dayName(gig.date)} {fmtDate(gig.date)}
           </div>
@@ -3260,13 +3426,8 @@ function GigDetailPage() {
           </div>
         )}
 
-        {/* MSM Coverage placeholder */}
-        <div style={{ marginBottom:48, padding:24, background:"rgba(255,255,255,0.02)", border:`1px dashed ${C.border}`, borderRadius:8 }}>
-          <SectionLabel>MSM COVERAGE</SectionLabel>
-          <div style={{ fontSize:13, color:C.dim }}>
-            Reviews, interviews and features related to {gig.band_name} will appear here.
-          </div>
-        </div>
+        {/* MSM Coverage -- Editorial Awards (Stage 4) */}
+        <MSMCoverageSection awards={awards} subjectLabel={gig.band_name} />
 
         {/* Prev / Next navigation */}
         {(prevNext.prev || prevNext.next) && (
@@ -3384,6 +3545,7 @@ function VenueProfilePage() {
   const navigate    = useNavigate();
   const [venue,     setVenue]   = useState(null);
   const [gigs,      setGigs]    = useState([]);
+  const [awards,    setAwards]  = useState([]);
   const [loading,   setLoading] = useState(true);
   const today = new Date().toISOString().slice(0,10);
 
@@ -3393,8 +3555,19 @@ function VenueProfilePage() {
       const v = await DB.getVenueBySlug(slug);
       if (!v) { setLoading(false); return; }
       setVenue(v);
-      const g = await DB.getGigsByVenue(v.id);
+      // NOTE: editorial_features.profile_id is FK'd to public.profiles.id
+      // only -- venues live in a separate public.venues table with its own
+      // id space, and the current Admin Editorial subject-search only
+      // offers profiles/gigs as award targets. This call is wired up so a
+      // venue award will display the moment that becomes possible, but
+      // under the current schema/admin workflow it will always resolve to
+      // an empty list. Flagged in the implementation notes.
+      const [g, aw] = await Promise.all([
+        DB.getGigsByVenue(v.id),
+        DB.getActiveAwards({ profileId: v.id }),
+      ]);
       setGigs(g);
+      setAwards(aw);
       setLoading(false);
     }
     load();
@@ -3451,6 +3624,7 @@ function VenueProfilePage() {
           <div style={{ fontFamily:F.display, fontSize:48, letterSpacing:2, color:C.white, lineHeight:1, marginBottom:10 }}>
             {venue.name}
           </div>
+          <EditorialAwardStrip awards={awards} style={{ marginBottom:14 }} />
           <div style={{ display:"flex", gap:16, alignItems:"center", flexWrap:"wrap", marginBottom:20 }}>
             <span style={{ fontSize:15, color:"#cccccc" }}>📍 {venue.city}</span>
             <span style={{ fontSize:13, color:C.dim }}>🎸 {gigs.length} gig{gigs.length!==1?"s":""} listed</span>
@@ -3488,6 +3662,9 @@ function VenueProfilePage() {
             <div style={{ fontSize:16, color:"#dddddd", lineHeight:1.8, maxWidth:700 }}>{venue.description}</div>
           </div>
         )}
+
+        {/* MSM Coverage -- Editorial Awards (Stage 4) */}
+        <MSMCoverageSection awards={awards} subjectLabel={venue.name} />
 
         {/* PHASE 4: claim this venue if it's an unclaimed admin-created listing */}
         <ClaimEntityBox entityType="venue" entityId={venue.id} adminCreated={venue.admin_created} claimStatus={venue.claim_status} />
@@ -3560,6 +3737,7 @@ function BandProfilePage() {
   const navigate = useNavigate();
   const [band, setBand]   = useState(null);
   const [gigs, setGigs]   = useState([]);
+  const [awards, setAwards] = useState([]);
   const [loading, setLoading] = useState(true);
   const today = new Date().toISOString().slice(0,10);
 
@@ -3569,8 +3747,14 @@ function BandProfilePage() {
       const b = await DB.getBandBySlug(slug);
       if (!b) { setLoading(false); return; }
       setBand(b);
-      const g = await DB.getGigsByBand(b.band_name, b.id);
+      // Gigs and awards are independent reads once we have the profile id --
+      // fetch them in parallel rather than one after the other.
+      const [g, aw] = await Promise.all([
+        DB.getGigsByBand(b.band_name, b.id),
+        DB.getActiveAwards({ profileId: b.id }),
+      ]);
       setGigs(g);
+      setAwards(aw);
       setLoading(false);
     }
     load();
@@ -3653,6 +3837,7 @@ function BandProfilePage() {
             <div style={{ fontFamily:F.display, fontSize:42, letterSpacing:2, color:C.white, lineHeight:1, marginBottom:8 }}>
               {band.band_name}
             </div>
+            <EditorialAwardStrip awards={awards} style={{ marginBottom:14 }} />
             <div style={{ display:"flex", gap:12, flexWrap:"wrap", marginBottom:16, alignItems:"center" }}>
               {band.primary_genre && <Badge label={band.primary_genre} color={color} />}
               {band.secondary_genre && <Badge label={band.secondary_genre} color={C.muted} />}
@@ -3708,6 +3893,9 @@ function BandProfilePage() {
             <div style={{ fontSize:16, color:"#dddddd", lineHeight:1.8, maxWidth:700 }}>{band.bio}</div>
           </div>
         )}
+
+        {/* MSM Coverage -- Editorial Awards (Stage 4) */}
+        <MSMCoverageSection awards={awards} subjectLabel={band.band_name} />
 
         {/* PHASE 4: claim this listing if it's an unclaimed admin-created profile */}
         <ClaimEntityBox entityType={band.profile_type || "band"} entityId={band.id} adminCreated={band.admin_created} claimStatus={band.claim_status} />
@@ -3823,13 +4011,16 @@ function FestivalProfilePage() {
   const { slug }    = useParams();
   const navigate    = useNavigate();
   const [entity,    setEntity]  = useState(null);
+  const [awards,    setAwards]  = useState([]);
   const [loading,   setLoading] = useState(true);
 
   useEffect(() => {
     async function load() {
       setLoading(true);
       const b = await DB.getBandBySlug(slug);
-      setEntity(b && b.profile_type === "festival" ? b : null);
+      const e = b && b.profile_type === "festival" ? b : null;
+      setEntity(e);
+      setAwards(e ? await DB.getActiveAwards({ profileId: e.id }) : []);
       setLoading(false);
     }
     load();
@@ -3882,6 +4073,7 @@ function FestivalProfilePage() {
           <div style={{ fontFamily:F.display, fontSize:48, letterSpacing:2, color:C.white, lineHeight:1, marginBottom:10 }}>
             {entity.band_name}
           </div>
+          <EditorialAwardStrip awards={awards} style={{ marginBottom:14 }} />
           <div style={{ display:"flex", gap:16, alignItems:"center", flexWrap:"wrap", marginBottom:20 }}>
             {entity.city && <span style={{ fontSize:15, color:"#cccccc" }}>📍 {entity.city}</span>}
             <ClaimStatusBadge claimStatus={entity.claim_status} entityType="festival" />
@@ -3910,6 +4102,9 @@ function FestivalProfilePage() {
             <div style={{ fontSize:16, color:"#dddddd", lineHeight:1.8, maxWidth:700 }}>{entity.bio}</div>
           </div>
         )}
+        {/* MSM Coverage -- Editorial Awards (Stage 4) */}
+        <MSMCoverageSection awards={awards} subjectLabel={entity.band_name} />
+
         <ClaimEntityBox entityType="festival" entityId={entity.id} adminCreated={entity.admin_created} claimStatus={entity.claim_status} />
       </div>
     </div>
@@ -3923,13 +4118,16 @@ function PromoterProfilePage() {
   const { slug }    = useParams();
   const navigate    = useNavigate();
   const [entity,    setEntity]  = useState(null);
+  const [awards,    setAwards]  = useState([]);
   const [loading,   setLoading] = useState(true);
 
   useEffect(() => {
     async function load() {
       setLoading(true);
       const b = await DB.getBandBySlug(slug);
-      setEntity(b && b.profile_type === "promoter" ? b : null);
+      const e = b && b.profile_type === "promoter" ? b : null;
+      setEntity(e);
+      setAwards(e ? await DB.getActiveAwards({ profileId: e.id }) : []);
       setLoading(false);
     }
     load();
@@ -3982,6 +4180,7 @@ function PromoterProfilePage() {
           <div style={{ fontFamily:F.display, fontSize:48, letterSpacing:2, color:C.white, lineHeight:1, marginBottom:10 }}>
             {entity.band_name}
           </div>
+          <EditorialAwardStrip awards={awards} style={{ marginBottom:14 }} />
           <div style={{ display:"flex", gap:16, alignItems:"center", flexWrap:"wrap", marginBottom:20 }}>
             {entity.city && <span style={{ fontSize:15, color:"#cccccc" }}>📍 {entity.city}</span>}
             <ClaimStatusBadge claimStatus={entity.claim_status} entityType="promoter" />
@@ -4010,6 +4209,9 @@ function PromoterProfilePage() {
             <div style={{ fontSize:16, color:"#dddddd", lineHeight:1.8, maxWidth:700 }}>{entity.bio}</div>
           </div>
         )}
+        {/* MSM Coverage -- Editorial Awards (Stage 4) */}
+        <MSMCoverageSection awards={awards} subjectLabel={entity.band_name} />
+
         <ClaimEntityBox entityType="promoter" entityId={entity.id} adminCreated={entity.admin_created} claimStatus={entity.claim_status} />
       </div>
     </div>
