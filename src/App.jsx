@@ -791,7 +791,22 @@ export const C = {
   bg:"#0d0d0d", surface:"#111", surfaceHigh:"#161616",
   border:"rgba(255,255,255,0.07)", borderStrong:"rgba(255,255,255,0.12)",
   red:"#e8203a", redDim:"rgba(232,32,58,0.15)",
-  white:"#fff", muted:"#555", dim:"#333",
+  white:"#fff",
+  // ACCESSIBILITY PASS: muted/dim were #555/#333 -- 2.6:1 and 1.5:1 against
+  // the dark backgrounds above, both well under the WCAG AA 4.5:1 minimum
+  // for normal text (verified against bg/surface/surfaceHigh). Raised so
+  // secondary info (muted) and placeholder/disabled/inactive text (dim)
+  // stay visually subordinate to near-white primary text and to each
+  // other, while both are now comfortably readable:
+  //   white  #fff     ~18-19:1  (primary content, unchanged)
+  //   muted  #9a9a9a  ~6.4-6.9:1  (secondary info -- was #555 at ~2.6:1)
+  //   dim    #828282  ~4.7-5.1:1  (placeholder / disabled / inactive -- was #333 at ~1.5:1,
+  //                                 then #787878 at ~4.1-4.4:1 which still fell just under
+  //                                 AA on the lightest surface; #828282 clears 4.5:1 with
+  //                                 margin on bg/surface/surfaceHigh alike, since dim is also
+  //                                 used for genuinely readable secondary content -- e.g. gig
+  //                                 info labels, notes -- not only inert/disabled controls)
+  muted:"#9a9a9a", dim:"#828282",
   green:"#43aa8b", amber:"#f4a261",
 };
 export const F = { display:"'Bebas Neue',sans-serif", body:"'Barlow',sans-serif" };
