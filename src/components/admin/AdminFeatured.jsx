@@ -50,7 +50,7 @@ const Toggle = ({checked, onChange, label, hint}) => (
     </div>
     <div>
       <span className="text-sm font-medium text-gray-700">{label}</span>
-      {hint && <p className="text-xs text-gray-400 mt-0.5">{hint}</p>}
+      {hint && <p className="text-xs text-gray-500 mt-0.5">{hint}</p>}
     </div>
   </label>
 );
@@ -105,7 +105,7 @@ function EntitySearch({ entityType, value, onChange }) {
     <div className="relative">
       <Input type="text" value={q} onChange={e => setQ(e.target.value)}
         placeholder={`Search ${entityType}s…`} />
-      {loading && <div className="absolute right-3 top-2.5 text-xs text-gray-400">Searching…</div>}
+      {loading && <div className="absolute right-3 top-2.5 text-xs text-gray-500">Searching…</div>}
       {open && results.length > 0 && (
         <ul className="absolute z-30 w-full bg-white border border-gray-200 rounded shadow-lg mt-1 max-h-48 overflow-y-auto">
           {results.map(item => (
@@ -117,7 +117,7 @@ function EntitySearch({ entityType, value, onChange }) {
         </ul>
       )}
       {open && !loading && results.length === 0 && (
-        <div className="absolute z-30 w-full bg-white border border-gray-200 rounded shadow-lg mt-1 px-3 py-2 text-sm text-gray-400">No results</div>
+        <div className="absolute z-30 w-full bg-white border border-gray-200 rounded shadow-lg mt-1 px-3 py-2 text-sm text-gray-500">No results</div>
       )}
       {value && <p className="mt-1 text-xs text-yellow-700 font-medium">✓ {value.label}</p>}
     </div>
@@ -159,7 +159,7 @@ function FeaturedForm({ initial, onSave, onCancel, saving }) {
     <form onSubmit={handleSubmit} className="bg-white border-2 border-yellow-200 rounded-xl p-6 space-y-5 shadow-sm">
       <div className="flex items-center justify-between">
         <h3 className="font-bold text-gray-900">{initial ? 'Edit Featured Listing' : 'New Featured Listing'}</h3>
-        <button type="button" onClick={onCancel} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+        <button type="button" onClick={onCancel} className="text-gray-500 hover:text-gray-600 text-xl leading-none">×</button>
       </div>
 
       {/* Entity type tabs */}
@@ -243,17 +243,17 @@ function FeaturedForm({ initial, onSave, onCancel, saving }) {
         <div>
           <Label>End date</Label>
           <Input type="date" value={form.end_date} onChange={e => set('end_date', e.target.value)} min={form.start_date} />
-          <p className="mt-1 text-xs text-gray-400">Leave blank for ongoing.</p>
+          <p className="mt-1 text-xs text-gray-500">Leave blank for ongoing.</p>
         </div>
         <div>
           <Label>Publish date / time</Label>
           <Input type="datetime-local" value={form.published_at} onChange={e => set('published_at', e.target.value)} />
-          <p className="mt-1 text-xs text-gray-400">Blank = publish immediately.</p>
+          <p className="mt-1 text-xs text-gray-500">Blank = publish immediately.</p>
         </div>
         <div>
           <Label>Expiry date / time</Label>
           <Input type="datetime-local" value={form.expires_at} onChange={e => set('expires_at', e.target.value)} />
-          <p className="mt-1 text-xs text-gray-400">Blank = no expiry.</p>
+          <p className="mt-1 text-xs text-gray-500">Blank = no expiry.</p>
         </div>
       </div>
 
@@ -263,7 +263,7 @@ function FeaturedForm({ initial, onSave, onCancel, saving }) {
           <Label>Display order</Label>
           <Input type="number" value={form.display_order} min="0"
             onChange={e => set('display_order', parseInt(e.target.value)||0)} />
-          <p className="mt-1 text-xs text-gray-400">Lower = higher position.</p>
+          <p className="mt-1 text-xs text-gray-500">Lower = higher position.</p>
         </div>
         <div className="space-y-3 pt-5">
           <Toggle checked={form.is_pinned} onChange={v => set('is_pinned', v)} label="Pin to top" hint="Overrides display order" />
@@ -486,16 +486,16 @@ export default function AdminFeatured() {
           <option value="active">Active</option>
           <option value="inactive">Inactive</option>
         </select>
-        <span className="text-xs text-gray-400 ml-1">{filtered.length} listing{filtered.length!==1?'s':''}</span>
+        <span className="text-xs text-gray-500 ml-1">{filtered.length} listing{filtered.length!==1?'s':''}</span>
       </div>
 
       {loading ? (
-        <div className="text-sm text-gray-400 py-12 text-center">Loading…</div>
+        <div className="text-sm text-gray-500 py-12 text-center">Loading…</div>
       ) : error ? (
         <div className="text-sm text-red-600 py-4 px-4 bg-red-50 rounded-lg">{error}</div>
       ) : filtered.length === 0 ? (
         <div className="py-16 text-center border-2 border-dashed border-gray-200 rounded-xl">
-          <p className="text-gray-400 text-sm">No listings found. Create one above.</p>
+          <p className="text-gray-500 text-sm">No listings found. Create one above.</p>
         </div>
       ) : (
         <div className="border border-gray-200 rounded-xl overflow-hidden shadow-sm">
@@ -516,7 +516,7 @@ export default function AdminFeatured() {
                   </td>
                   <td className="px-4 py-3">
                     <p className="font-medium text-gray-900 truncate max-w-[160px]">{entityLabel(l)}</p>
-                    {l.image_url && <p className="text-xs text-gray-400">📷 Image</p>}
+                    {l.image_url && <p className="text-xs text-gray-500">📷 Image</p>}
                   </td>
                   <td className="px-4 py-3 text-xs text-gray-500 max-w-[140px] truncate">{l.headline||'—'}</td>
                   <td className="px-4 py-3">
