@@ -7,6 +7,16 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../../supabaseClient';
+import {
+  ACCENTS, AdminPage, AdminHeader, SystemNotice, StatGrid, StatCard,
+  AdminCard, FormHeader, FormSection, FieldRow, Field, Label, HelpText,
+  TextInput, Select, Textarea, RadioGrid, RadioOption, ToggleSetting,
+  ActionsRow, PrimaryButton, SecondaryButton, SmallActionButton,
+  FilterBar, ResultsPanel, EmptyState, TableShell, Th, Td, Tr,
+  Pill, StatusPill, Toast, SearchDropdown, SearchOption, SearchEmpty,
+} from './adminUI';
+
+const ACCENT = ACCENTS.editorial;
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
@@ -15,56 +25,6 @@ const toDateInput = (d) => d ? new Date(d).toISOString().slice(0,10) : '';
 const slugify = (s) => s.toLowerCase().replace(/[^a-z0-9\s-]/g,'').trim().replace(/\s+/g,'-').replace(/-+/g,'-');
 const autoSlug = (awardSlug, name, date) =>
   `${awardSlug}-${slugify(name||'unknown')}-${date ? new Date(date).getFullYear() : new Date().getFullYear()}`;
-
-// ─── Shared UI atoms ──────────────────────────────────────────────────────────
-
-const Label = ({children, required}) => (
-  <label className="block text-xs font-semibold text-gray-600 mb-2">
-    {children}{required && <span className="text-red-500 ml-0.5">*</span>}
-  </label>
-);
-const HelpText = ({children}) => <p className="mt-2 text-xs text-gray-500 leading-relaxed">{children}</p>;
-const Field = ({children, className=''}) => <div className={`mb-6 last:mb-0 ${className}`}>{children}</div>;
-const FormSection = ({title, first, children}) => (
-  <div className={first ? 'pb-8' : 'pt-8 pb-8 border-t border-gray-100'}>
-    {title && <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-5">{title}</p>}
-    {children}
-  </div>
-);
-
-const Input = (props) => (
-  <input {...props} className={`w-full max-w-xl border border-gray-300 rounded-lg px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 ${props.className||''}`} />
-);
-
-const Textarea = (props) => (
-  <textarea {...props} className={`w-full border border-gray-300 rounded-lg px-3.5 py-3 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-green-500 resize-y ${props.className||''}`} />
-);
-
-const Toggle = ({checked, onChange, label, hint}) => (
-  <label className="flex items-start gap-3 cursor-pointer select-none">
-    <div className="relative mt-0.5 flex-shrink-0">
-      <input type="checkbox" className="sr-only" checked={checked} onChange={e=>onChange(e.target.checked)} />
-      <div className={`w-9 h-5 rounded-full transition-colors ${checked?'bg-green-600':'bg-gray-300'}`} />
-      <div className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${checked?'translate-x-4':''}`} />
-    </div>
-    <div>
-      <span className="text-sm font-medium text-gray-700">{label}</span>
-      {hint && <p className="text-xs text-gray-500 mt-1">{hint}</p>}
-    </div>
-  </label>
-);
-
-const Pill = ({active}) => (
-  <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium whitespace-nowrap ${active?'bg-green-100 text-green-800':'bg-gray-100 text-gray-500'}`}>
-    {active?'Active':'Inactive'}
-  </span>
-);
-
-const Toast = ({toast}) => toast ? (
-  <div className={`mb-5 px-4 py-3 rounded-lg text-sm font-medium ${toast.type==='error'?'bg-red-100 text-red-800':'bg-green-100 text-green-800'}`}>
-    {toast.msg}
-  </div>
-) : null;
 
 // ─── Subject search (gig or profile) ─────────────────────────────────────────
 
@@ -103,27 +63,23 @@ function SubjectSearch({ targetType, value, onChange }) {
   };
 
   return (
-    <div className="relative">
-      <Input
+    <div style={{ position:'relative' }}>
+      <TextInput
+        accent={ACCENT}
         type="text" value={q}
         onChange={e => setQ(e.target.value)}
         placeholder={targetType === 'gig' ? 'Search approved gigs…' : 'Search bands, artists, festivals…'}
       />
-      {loading && <div className="absolute right-3 top-2.5 text-xs text-gray-500">Searching…</div>}
+      {loading && <div style={{ marginTop:6, fontSize:12, color:'#8a8a8a' }}>Searching…</div>}
       {open && results.length > 0 && (
-        <ul className="absolute z-30 w-full max-w-xl bg-white border border-gray-200 rounded-lg shadow-lg mt-2 max-h-48 overflow-y-auto">
+        <SearchDropdown>
           {results.map(item => (
-            <li key={item.id} onClick={() => select(item)}
-              className="px-3.5 py-2.5 text-sm cursor-pointer hover:bg-green-50 border-b border-gray-50 last:border-0">
-              {labelFor(item)}
-            </li>
+            <SearchOption key={item.id} onClick={() => select(item)}>{labelFor(item)}</SearchOption>
           ))}
-        </ul>
+        </SearchDropdown>
       )}
-      {open && !loading && results.length === 0 && (
-        <div className="absolute z-30 w-full max-w-xl bg-white border border-gray-200 rounded-lg shadow-lg mt-2 px-3.5 py-2.5 text-sm text-gray-500">No results</div>
-      )}
-      {value && <p className="mt-2 text-xs text-green-700 font-medium">✓ {value.label}</p>}
+      {open && !loading && results.length === 0 && <SearchEmpty>No results</SearchEmpty>}
+      {value && <p style={{ marginTop:8, fontSize:12, color:ACCENT, fontWeight:600 }}>✓ {value.label}</p>}
     </div>
   );
 }
@@ -170,163 +126,154 @@ function EditorialForm({ awardTypes, initial, onSave, onCancel, saving }) {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="bg-white border-2 border-green-200 rounded-xl p-8 shadow-sm">
-      <div className="flex items-center justify-between mb-2">
-        <h3 className="font-bold text-gray-900 text-base">{initial ? 'Edit Award' : 'Assign Editorial Award'}</h3>
-        <button type="button" onClick={onCancel} className="text-gray-500 hover:text-gray-600 text-xl leading-none">×</button>
-      </div>
+    <AdminCard accent={ACCENT}>
+      <form onSubmit={handleSubmit}>
+        <FormHeader icon="🏅" title={initial ? 'Edit Award' : 'Assign Editorial Award'} onCancel={onCancel} />
 
-      {/* 1. Award Type & Subject */}
-      <FormSection title="Award Type & Subject" first>
-        <Field>
-          <Label required>Award type</Label>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {awardTypes.filter(a => !a.is_hall_of_fame).map(a => (
-              <label key={a.id} className={`flex items-center gap-2.5 p-3 rounded-lg border cursor-pointer transition-all ${
-                form.award_type_id === a.id ? 'border-green-500 bg-green-50 shadow-sm' : 'border-gray-200 hover:border-green-300'
-              }`}>
-                <input type="radio" name="award_type" value={a.id} className="sr-only"
-                  checked={form.award_type_id === a.id} onChange={() => set('award_type_id', a.id)} />
-                <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: `#${a.color_hex}` }} />
-                <span className="text-xs font-medium text-gray-800">{a.label}</span>
-                {a.singleton && <span className="ml-auto text-xs text-orange-500 font-medium">Singleton</span>}
-              </label>
-            ))}
-          </div>
-          {selectedType?.singleton && (
-            <p className="mt-3 text-xs bg-orange-50 border border-orange-200 text-orange-700 rounded-lg px-3.5 py-2.5 leading-relaxed">
-              ⚠ Singleton — only one active {selectedType.label} at a time. Assigning will deactivate the current one.
-            </p>
-          )}
-        </Field>
-
-        <Field>
-          <Label required>Award applies to</Label>
-          <div className="flex flex-wrap gap-5">
-            {[['profile','Band / Artist / Festival'],['gig','Specific gig']].map(([v,l]) => (
-              <label key={v} className="flex items-center gap-2 text-sm cursor-pointer">
-                <input type="radio" name="target_type" checked={form.target_type === v}
-                  onChange={() => { set('target_type', v); set('subject', null); }} />
-                {l}
-              </label>
-            ))}
-          </div>
-        </Field>
-
-        <Field className="mb-0">
-          <Label required>{form.target_type === 'gig' ? 'Select gig' : 'Select band / artist / festival'}</Label>
-          <SubjectSearch targetType={form.target_type} value={form.subject} onChange={v => set('subject', v)} />
-        </Field>
-      </FormSection>
-
-      {/* 2. Content */}
-      <FormSection title="Content">
-        <Field>
-          <Label>Headline</Label>
-          <Input type="text" value={form.headline} onChange={e => set('headline', e.target.value)}
-            placeholder="Short editorial headline (optional — subject name used if blank)" />
-        </Field>
-        <Field>
-          <Label>Editorial body text</Label>
-          <Textarea rows={4} value={form.body_text} onChange={e => set('body_text', e.target.value)}
-            placeholder="Editorial copy for this entry. Shown on archive page and public entry." />
-        </Field>
-        <Field className={form.image_url ? '' : 'mb-0'}>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-            <div>
-              <Label>Image URL</Label>
-              <Input type="url" value={form.image_url} onChange={e => set('image_url', e.target.value)}
-                placeholder="https://…" />
-            </div>
-            <div>
-              <Label>Image alt text</Label>
-              <Input type="text" value={form.image_alt} onChange={e => set('image_alt', e.target.value)}
-                placeholder="Describe the image" />
-            </div>
-          </div>
-        </Field>
-        {form.image_url && (
-          <Field className="mb-0">
-            <img src={form.image_url} alt={form.image_alt || ''} className="h-24 w-auto rounded-lg border border-gray-200 object-cover" onError={e=>e.target.style.display='none'} />
+        {/* 1. Award Type & Subject */}
+        <FormSection title="Award Type & Subject" first>
+          <Field>
+            <Label required>Award type</Label>
+            <RadioGrid minWidth={190}>
+              {awardTypes.filter(a => !a.is_hall_of_fame).map(a => (
+                <RadioOption key={a.id} name="award_type" accent={ACCENT}
+                  checked={form.award_type_id === a.id}
+                  onChange={() => set('award_type_id', a.id)}
+                  dot={`#${a.color_hex}`}
+                  badge={a.singleton ? 'SINGLETON' : null}
+                >{a.label}</RadioOption>
+              ))}
+            </RadioGrid>
+            {selectedType?.singleton && (
+              <p style={{ marginTop:14, fontSize:12.5, background:'rgba(251,146,60,0.1)', border:'1px solid rgba(251,146,60,0.35)', color:'#fb923c', borderRadius:9, padding:'11px 14px', lineHeight:1.6 }}>
+                ⚠ Singleton — only one active {selectedType.label} at a time. Assigning will deactivate the current one.
+              </p>
+            )}
           </Field>
-        )}
-      </FormSection>
 
-      {/* 3. Schedule */}
-      <FormSection title="Schedule">
-        <Field>
-          <Label>Review / article URL</Label>
-          <Input type="url" value={form.review_url} onChange={e => set('review_url', e.target.value)}
-            placeholder="https://musicscenemagazine.co.uk/reviews/…" />
-          <HelpText>Shown as "Read Review" link on the archive page.</HelpText>
-        </Field>
+          <Field>
+            <Label required>Award applies to</Label>
+            <RadioGrid minWidth={200}>
+              {[['profile','Band / Artist / Festival'],['gig','Specific gig / performance']].map(([v,l]) => (
+                <RadioOption key={v} name="target_type" accent={ACCENT}
+                  checked={form.target_type === v}
+                  onChange={() => { set('target_type', v); set('subject', null); }}
+                >{l}</RadioOption>
+              ))}
+            </RadioGrid>
+          </Field>
 
-        <Field>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-x-5 gap-y-6">
+          <Field>
+            <Label required>{form.target_type === 'gig' ? 'Select gig' : 'Select band / artist / festival'}</Label>
+            <SubjectSearch targetType={form.target_type} value={form.subject} onChange={v => set('subject', v)} />
+          </Field>
+        </FormSection>
+
+        {/* 2. Content */}
+        <FormSection title="Content">
+          <Field>
+            <Label>Headline</Label>
+            <TextInput accent={ACCENT} wide type="text" value={form.headline} onChange={e => set('headline', e.target.value)}
+              placeholder="Short editorial headline (optional — subject name used if blank)" />
+          </Field>
+          <Field>
+            <Label>Editorial body text</Label>
+            <Textarea accent={ACCENT} rows={4} value={form.body_text} onChange={e => set('body_text', e.target.value)}
+              placeholder="Editorial copy for this entry. Shown on archive page and public entry." />
+          </Field>
+          <Field>
+            <FieldRow>
+              <div>
+                <Label>Image URL</Label>
+                <TextInput accent={ACCENT} wide type="url" value={form.image_url} onChange={e => set('image_url', e.target.value)}
+                  placeholder="https://…" />
+              </div>
+              <div>
+                <Label>Image alt text</Label>
+                <TextInput accent={ACCENT} wide type="text" value={form.image_alt} onChange={e => set('image_alt', e.target.value)}
+                  placeholder="Describe the image" />
+              </div>
+            </FieldRow>
+          </Field>
+          {form.image_url && (
+            <Field>
+              <img src={form.image_url} alt={form.image_alt || ''} style={{ height:96, width:'auto', borderRadius:10, border:'1px solid rgba(255,255,255,0.09)', objectFit:'cover' }} onError={e=>e.target.style.display='none'} />
+            </Field>
+          )}
+        </FormSection>
+
+        {/* 3. Schedule */}
+        <FormSection title="Schedule">
+          <Field>
+            <Label>Review / article URL</Label>
+            <TextInput accent={ACCENT} wide type="url" value={form.review_url} onChange={e => set('review_url', e.target.value)}
+              placeholder="https://musicscenemagazine.co.uk/reviews/…" />
+            <HelpText>Shown as "Read Review" link on the archive page.</HelpText>
+          </Field>
+
+          <Field>
+            <FieldRow minWidth={180}>
+              <div>
+                <Label required>Award date</Label>
+                <TextInput accent={ACCENT} wide type="date" value={form.awarded_at} onChange={e => set('awarded_at', e.target.value)} required />
+              </div>
+              <div>
+                <Label>Publish date</Label>
+                <TextInput accent={ACCENT} wide type="datetime-local" value={form.published_at} onChange={e => set('published_at', e.target.value)} />
+                <HelpText>Leave blank to publish immediately.</HelpText>
+              </div>
+              <div>
+                <Label>Expiry date</Label>
+                <TextInput accent={ACCENT} wide type="datetime-local" value={form.expires_at} onChange={e => set('expires_at', e.target.value)} />
+                <HelpText>Leave blank for no expiry.</HelpText>
+              </div>
+            </FieldRow>
+          </Field>
+
+          <Field>
+            <Label>Archive slug</Label>
+            <TextInput accent={ACCENT} wide type="text" value={form.slug} onChange={e => set('slug', e.target.value)}
+              placeholder="auto-generated — edit if needed" style={{ fontFamily:'monospace', fontSize:12.5 }} />
+            <HelpText>Public URL: /editorial-archive/{form.slug || '…'}</HelpText>
+          </Field>
+        </FormSection>
+
+        {/* 4. Display Options */}
+        <FormSection title="Display Options">
+          <FieldRow>
             <div>
-              <Label required>Award date</Label>
-              <Input type="date" value={form.awarded_at} onChange={e => set('awarded_at', e.target.value)} required />
+              <Label>Display order</Label>
+              <TextInput accent={ACCENT} wide type="number" value={form.display_order} onChange={e => set('display_order', parseInt(e.target.value)||0)}
+                min="0" placeholder="0" />
+              <HelpText>Lower = higher position. 0 = default.</HelpText>
             </div>
-            <div>
-              <Label>Publish date</Label>
-              <Input type="datetime-local" value={form.published_at} onChange={e => set('published_at', e.target.value)} />
-              <HelpText>Leave blank to publish immediately.</HelpText>
+            <div style={{ display:'flex', flexDirection:'column', gap:18, paddingTop:2 }}>
+              <ToggleSetting accent={ACCENT} checked={form.is_pinned} onChange={v => set('is_pinned', v)}
+                label="Pin to top" hint="Overrides display order" />
+              <ToggleSetting accent={ACCENT} checked={form.archive_visible} onChange={v => set('archive_visible', v)}
+                label="Show in archive" hint="Historical record visible publicly" />
             </div>
-            <div>
-              <Label>Expiry date</Label>
-              <Input type="datetime-local" value={form.expires_at} onChange={e => set('expires_at', e.target.value)} />
-              <HelpText>Leave blank for no expiry.</HelpText>
-            </div>
-          </div>
-        </Field>
+          </FieldRow>
+        </FormSection>
 
-        <Field className="mb-0">
-          <Label>Archive slug</Label>
-          <Input type="text" value={form.slug} onChange={e => set('slug', e.target.value)}
-            placeholder="auto-generated — edit if needed" className="font-mono text-xs" />
-          <HelpText>Public URL: /editorial-archive/{form.slug || '…'}</HelpText>
-        </Field>
-      </FormSection>
+        {/* 5. Internal/Admin Notes */}
+        <FormSection title="Internal / Admin Notes">
+          <Field>
+            <Label>Internal notes</Label>
+            <Textarea accent={ACCENT} rows={3} value={form.notes} onChange={e => set('notes', e.target.value)}
+              placeholder="Admin-only notes — not shown publicly" />
+          </Field>
+        </FormSection>
 
-      {/* 4. Display Options */}
-      <FormSection title="Display Options">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-6">
-          <div>
-            <Label>Display order</Label>
-            <Input type="number" value={form.display_order} onChange={e => set('display_order', parseInt(e.target.value)||0)}
-              min="0" placeholder="0" />
-            <HelpText>Lower = higher position. 0 = default.</HelpText>
-          </div>
-          <div className="space-y-4 sm:pt-1">
-            <Toggle checked={form.is_pinned} onChange={v => set('is_pinned', v)}
-              label="Pin to top" hint="Overrides display order" />
-            <Toggle checked={form.archive_visible} onChange={v => set('archive_visible', v)}
-              label="Show in archive" hint="Historical record visible publicly" />
-          </div>
-        </div>
-      </FormSection>
-
-      {/* 5. Internal/Admin Notes */}
-      <FormSection title="Internal / Admin Notes">
-        <Field className="mb-0">
-          <Label>Internal notes</Label>
-          <Textarea rows={3} value={form.notes} onChange={e => set('notes', e.target.value)}
-            placeholder="Admin-only notes — not shown publicly" />
-        </Field>
-      </FormSection>
-
-      {/* 6. Actions */}
-      <div className="flex gap-4 pt-8 border-t border-gray-100">
-        <button type="submit" disabled={saving}
-          className="px-6 py-2.5 bg-green-700 hover:bg-green-800 text-white text-sm font-semibold rounded-lg disabled:opacity-50">
-          {saving ? 'Saving…' : initial ? 'Save changes' : 'Assign award'}
-        </button>
-        <button type="button" onClick={onCancel}
-          className="px-6 py-2.5 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">
-          Cancel
-        </button>
-      </div>
-    </form>
+        {/* 6. Actions */}
+        <ActionsRow>
+          <PrimaryButton type="submit" accent={ACCENT} disabled={saving}>
+            {saving ? 'Saving…' : initial ? 'Save changes' : 'Assign award'}
+          </PrimaryButton>
+          <SecondaryButton type="button" onClick={onCancel}>Cancel</SecondaryButton>
+        </ActionsRow>
+      </form>
+    </AdminCard>
   );
 }
 
@@ -493,166 +440,135 @@ export default function AdminEditorial() {
   const singletons = awardTypes.filter(a => a.singleton && !a.is_hall_of_fame);
 
   return (
-    <div className="max-w-6xl mx-auto py-8 px-4 sm:px-6">
-
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Editorial Awards</h1>
-          <p className="text-sm text-gray-500 mt-1">Non-purchasable — editorial assignment only</p>
-        </div>
-        {!showForm && (
-          <button onClick={() => { setShowForm(true); setEditItem(null); }}
-            className="px-4 py-2.5 bg-green-700 hover:bg-green-800 text-white text-sm font-semibold rounded-lg shadow-sm self-start sm:self-auto">
-            + Assign award
-          </button>
+    <AdminPage>
+      <AdminHeader
+        icon="🏅" title="Editorial Awards" subtitle="Non-purchasable — editorial assignment only"
+        action={!showForm && (
+          <PrimaryButton accent={ACCENT} onClick={() => { setShowForm(true); setEditItem(null); }}>+ Assign award</PrimaryButton>
         )}
-      </div>
+      />
 
-      {/* System boundary */}
-      <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg text-xs text-green-800 leading-relaxed">
+      <SystemNotice accent={ACCENT}>
         <strong>EDITORIAL SYSTEM</strong> — Awards are non-purchasable. Strict firewall from commercial Featured Listings.
-      </div>
+      </SystemNotice>
 
       {/* Singleton summary */}
       {singletons.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
+        <StatGrid minWidth={220}>
           {singletons.map(a => {
             const current = features.find(f => f.award_type_id === a.id && f.active);
             return (
-              <div key={a.id} className="p-4 bg-white border border-gray-200 rounded-xl flex items-start gap-3">
-                <span className="w-3 h-3 rounded-full mt-1 flex-shrink-0" style={{ backgroundColor: `#${a.color_hex}` }} />
-                <div className="min-w-0">
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{a.label}</p>
+              <div key={a.id} style={{ padding:'16px 18px', background:'#141414', border:'1px solid rgba(255,255,255,0.06)', borderRadius:12, display:'flex', alignItems:'flex-start', gap:12, textAlign:'left' }}>
+                <span style={{ width:11, height:11, borderRadius:'50%', marginTop:4, flexShrink:0, background:`#${a.color_hex}` }} />
+                <div style={{ minWidth:0 }}>
+                  <p style={{ fontSize:11, fontWeight:700, color:'#8a8a8a', textTransform:'uppercase', letterSpacing:'0.06em', margin:0 }}>{a.label}</p>
                   {current ? (
                     <>
-                      <p className="text-sm font-semibold text-gray-900 truncate mt-1">{subjectLabel(current)}</p>
-                      {current.headline && <p className="text-xs text-gray-500 truncate mt-0.5">{current.headline}</p>}
-                      <p className="text-xs text-gray-500 mt-0.5">{fmtDate(current.awarded_at)}</p>
+                      <p style={{ fontSize:14, fontWeight:700, color:'#fff', margin:'6px 0 0', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{subjectLabel(current)}</p>
+                      {current.headline && <p style={{ fontSize:12, color:'#8a8a8a', margin:'3px 0 0', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{current.headline}</p>}
+                      <p style={{ fontSize:12, color:'#8a8a8a', margin:'3px 0 0' }}>{fmtDate(current.awarded_at)}</p>
                     </>
                   ) : (
-                    <p className="text-sm text-gray-500 italic mt-1">None assigned</p>
+                    <p style={{ fontSize:13, color:'#8a8a8a', fontStyle:'italic', margin:'6px 0 0' }}>None assigned</p>
                   )}
                 </div>
               </div>
             );
           })}
-        </div>
+        </StatGrid>
       )}
 
       <Toast toast={toast} />
 
       {/* Form */}
       {showForm && (
-        <div className="mb-8">
-          <EditorialForm
-            awardTypes={awardTypes}
-            initial={editItem ? featureToForm(editItem) : null}
-            onSave={handleSave}
-            onCancel={cancelForm}
-            saving={saving}
-          />
-        </div>
+        <EditorialForm
+          awardTypes={awardTypes}
+          initial={editItem ? featureToForm(editItem) : null}
+          onSave={handleSave}
+          onCancel={cancelForm}
+          saving={saving}
+        />
       )}
 
-      {/* Filters -- visually separated from the results below */}
-      <div className="flex flex-wrap gap-3 items-center mb-5 pb-5 border-b border-gray-200">
-        <select value={filterType} onChange={e => setFilterType(e.target.value)}
-          className="border border-gray-300 rounded-lg px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500">
-          <option value="all">All award types</option>
-          {awardTypes.filter(a => !a.is_hall_of_fame).map(a => (
-            <option key={a.id} value={a.slug}>{a.label}</option>
-          ))}
-        </select>
-        <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
-          className="border border-gray-300 rounded-lg px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500">
-          <option value="all">All statuses</option>
-          <option value="active">Active</option>
-          <option value="inactive">Inactive</option>
-        </select>
-        <span className="text-xs text-gray-500 ml-1">{filtered.length} award{filtered.length !== 1 ? 's' : ''}</span>
-      </div>
+      <ResultsPanel title="Assigned Awards" count={`${filtered.length} award${filtered.length !== 1 ? 's' : ''}`}>
+        {/* Filters -- visually separated from the results below */}
+        <FilterBar>
+          <Select accent={ACCENT} value={filterType} onChange={e => setFilterType(e.target.value)} style={{ maxWidth:220 }}>
+            <option value="all">All award types</option>
+            {awardTypes.filter(a => !a.is_hall_of_fame).map(a => (
+              <option key={a.id} value={a.slug}>{a.label}</option>
+            ))}
+          </Select>
+          <Select accent={ACCENT} value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={{ maxWidth:180 }}>
+            <option value="all">All statuses</option>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+          </Select>
+        </FilterBar>
 
-      {/* Table */}
-      {loading ? (
-        <div className="text-sm text-gray-500 py-12 text-center">Loading…</div>
-      ) : error ? (
-        <div className="text-sm text-red-600 py-4 px-4 bg-red-50 rounded-lg">{error}</div>
-      ) : filtered.length === 0 ? (
-        <div className="py-16 text-center border-2 border-dashed border-gray-200 rounded-xl">
-          <p className="text-gray-500 text-sm">No awards found. Assign one above.</p>
-        </div>
-      ) : (
-        <div className="border border-gray-200 rounded-xl shadow-sm overflow-x-auto">
-          <table className="w-full text-sm min-w-[900px]">
-            <thead className="bg-gray-50 border-b border-gray-200">
+        {/* Table */}
+        {loading ? (
+          <EmptyState>Loading…</EmptyState>
+        ) : error ? (
+          <div style={{ fontSize:13, color:'#f87171', padding:'14px 16px', background:'rgba(248,113,113,0.1)', borderRadius:10 }}>{error}</div>
+        ) : filtered.length === 0 ? (
+          <EmptyState icon="🏅">No awards found. Assign one above.</EmptyState>
+        ) : (
+          <TableShell minWidth={900}>
+            <thead>
               <tr>
-                {['Award','Subject','Headline','Date','Status','Archive','Actions'].map(h => (
-                  <th key={h} className="text-left px-5 py-3.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
-                ))}
+                {['Award','Subject','Headline','Date','Status','Archive','Actions'].map(h => <Th key={h}>{h}</Th>)}
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody>
               {filtered.map(f => (
-                <tr key={f.id} className={`hover:bg-gray-50 transition-colors ${!f.active ? 'opacity-50' : ''}`}>
-                  <td className="px-5 py-4">
-                    <div className="flex items-center gap-2">
-                      {f.is_pinned && <span className="text-yellow-500 text-xs">📌</span>}
-                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold text-white whitespace-nowrap"
-                        style={{ backgroundColor: `#${f.award_color_hex}` }}>
+                <Tr key={f.id} dim={!f.active}>
+                  <Td>
+                    <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                      {f.is_pinned && <span style={{ fontSize:12 }}>📌</span>}
+                      <span style={{ display:'inline-flex', alignItems:'center', padding:'4px 11px', borderRadius:999, fontSize:11, fontWeight:700, color:'#0d0d0d', whiteSpace:'nowrap', background:`#${f.award_color_hex}` }}>
                         {f.award_label}
                       </span>
                     </div>
-                    {f.display_order > 0 && <p className="text-xs text-gray-500 mt-1">Order: {f.display_order}</p>}
-                  </td>
-                  <td className="px-5 py-4">
-                    <p className="font-medium text-gray-900 truncate max-w-[180px]">{subjectLabel(f)}</p>
-                    {f.image_url && <p className="text-xs text-gray-500 mt-0.5">📷 Image set</p>}
-                  </td>
-                  <td className="px-5 py-4 text-xs text-gray-500 max-w-[160px] truncate">{f.headline || '—'}</td>
-                  <td className="px-5 py-4 text-xs text-gray-500 whitespace-nowrap leading-relaxed">
-                    <p>{fmtDate(f.awarded_at)}</p>
-                    {f.published_at && <p className="text-green-600">Pub: {fmtDate(f.published_at)}</p>}
-                    {f.expires_at   && <p className="text-orange-500">Exp: {fmtDate(f.expires_at)}</p>}
-                  </td>
-                  <td className="px-5 py-4"><Pill active={f.active} /></td>
-                  <td className="px-5 py-4">
-                    <span className={`text-xs font-medium whitespace-nowrap ${f.archive_visible ? 'text-green-700' : 'text-gray-500'}`}>
+                    {f.display_order > 0 && <p style={{ fontSize:11, color:'#8a8a8a', margin:'6px 0 0' }}>Order: {f.display_order}</p>}
+                  </Td>
+                  <Td>
+                    <p style={{ fontWeight:600, color:'#fff', maxWidth:180, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', margin:0 }}>{subjectLabel(f)}</p>
+                    {f.image_url && <p style={{ fontSize:11, color:'#8a8a8a', margin:'4px 0 0' }}>📷 Image set</p>}
+                  </Td>
+                  <Td style={{ maxWidth:160, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', color:'#8a8a8a', fontSize:12.5 }}>{f.headline || '—'}</Td>
+                  <Td style={{ whiteSpace:'nowrap', fontSize:12, color:'#8a8a8a', lineHeight:1.7 }}>
+                    <p style={{margin:0}}>{fmtDate(f.awarded_at)}</p>
+                    {f.published_at && <p style={{margin:0, color:'#4ade80'}}>Pub: {fmtDate(f.published_at)}</p>}
+                    {f.expires_at   && <p style={{margin:0, color:'#fbbf24'}}>Exp: {fmtDate(f.expires_at)}</p>}
+                  </Td>
+                  <Td><StatusPill active={f.active} /></Td>
+                  <Td>
+                    <span style={{ fontSize:12, fontWeight:600, whiteSpace:'nowrap', color: f.archive_visible ? '#4ade80' : '#8a8a8a' }}>
                       {f.archive_visible ? '✓ Visible' : '— Hidden'}
                     </span>
-                  </td>
-                  <td className="px-5 py-4">
-                    <div className="flex gap-2 justify-end flex-wrap">
-                      <button onClick={() => openEdit(f)}
-                        className="text-xs px-2.5 py-1.5 rounded-md border border-gray-300 hover:bg-gray-100 text-gray-600 whitespace-nowrap">
-                        Edit
-                      </button>
-                      <button onClick={() => toggleActive(f.id, f.active)}
-                        className="text-xs px-2.5 py-1.5 rounded-md border border-gray-300 hover:bg-gray-100 text-gray-600 whitespace-nowrap">
-                        {f.active ? 'Deactivate' : 'Activate'}
-                      </button>
-                      <button onClick={() => toggleArchive(f.id, f.archive_visible)}
-                        className="text-xs px-2.5 py-1.5 rounded-md border border-gray-300 hover:bg-gray-100 text-gray-600 whitespace-nowrap">
-                        {f.archive_visible ? 'Hide' : 'Show'}
-                      </button>
-                      <button onClick={() => togglePin(f.id, f.is_pinned)}
-                        className={`text-xs px-2.5 py-1.5 rounded-md border transition-colors whitespace-nowrap ${f.is_pinned ? 'border-yellow-300 bg-yellow-50 text-yellow-700' : 'border-gray-300 hover:bg-gray-100 text-gray-600'}`}>
-                        {f.is_pinned ? 'Unpin' : 'Pin'}
-                      </button>
+                  </Td>
+                  <Td>
+                    <div style={{ display:'flex', gap:8, flexWrap:'wrap', justifyContent:'flex-end' }}>
+                      <SmallActionButton onClick={() => openEdit(f)}>Edit</SmallActionButton>
+                      <SmallActionButton onClick={() => toggleActive(f.id, f.active)}>{f.active ? 'Deactivate' : 'Activate'}</SmallActionButton>
+                      <SmallActionButton onClick={() => toggleArchive(f.id, f.archive_visible)}>{f.archive_visible ? 'Hide' : 'Show'}</SmallActionButton>
+                      <SmallActionButton tone={f.is_pinned ? 'accent' : 'neutral'} accent="#fbbf24" onClick={() => togglePin(f.id, f.is_pinned)}>{f.is_pinned ? 'Unpin' : 'Pin'}</SmallActionButton>
                       {f.review_url && (
-                        <a href={f.review_url} target="_blank" rel="noopener noreferrer"
-                          className="text-xs px-2.5 py-1.5 rounded-md border border-green-200 text-green-700 hover:bg-green-50 whitespace-nowrap">
+                        <SmallActionButton as="a" tone="accent" accent={ACCENT}
+                          onClick={() => window.open(f.review_url, '_blank', 'noopener,noreferrer')}>
                           Review ↗
-                        </a>
+                        </SmallActionButton>
                       )}
                     </div>
-                  </td>
-                </tr>
+                  </Td>
+                </Tr>
               ))}
             </tbody>
-          </table>
-        </div>
-      )}
-    </div>
+          </TableShell>
+        )}
+      </ResultsPanel>
+    </AdminPage>
   );
 }
