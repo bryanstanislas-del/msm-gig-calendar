@@ -1137,19 +1137,88 @@ export const MSMCoverageSection = ({ awards, subjectLabel = "this artist" }) => 
 // existing routing touched. Follow state is read fresh from band_follows
 // (RLS-scoped to the signed-in user's own rows) on mount, so it's
 // correct across sessions and devices, not just this tab.
-function FollowBandPanel({ bandProfileId, bandName }) {
-  const [authUser, setAuthUser]   = useState(undefined); // undefined=checking, null=signed out
-  const [following, setFollowing] = useState(null);       // null=checking/unknown
-  const [uiMode, setUiMode]       = useState("idle");      // idle | signin | fanSignup
-  const [busy, setBusy]           = useState(false);
-  const [error, setError]         = useState("");
-  const [success, setSuccess]     = useState("");
-
-  // Inline auth form fields (kept local to this widget -- unrelated to
-  // the full AuthPanel's band/venue/festival registration flow)
+// Shared inline sign-in / free-account-creation prompt. Used wherever a
+// signed-out visitor needs to authenticate to finish an action right where
+// they are (Follow a Band, claiming a profile) without navigating away or
+// losing their place -- the caller re-renders its own authenticated branch
+// once onAuthed fires, so whatever the visitor was about to do continues
+// against the exact same entity, no re-search required. Fan accounts are
+// auth-only (see DB.signUpFan) -- no profile row is ever created.
+function InlineAuthPrompt({ accent = C.red, actionLabel = "CONTINUE", onAuthed, onCancel }) {
+  const [uiMode, setUiMode]           = useState("signin"); // signin | fanSignup
   const [email, setEmail]             = useState("");
   const [password, setPassword]       = useState("");
   const [displayName, setDisplayName] = useState("");
+  const [busy, setBusy]               = useState(false);
+  const [error, setError]             = useState("");
+  const [info, setInfo]               = useState("");
+
+  const handleSignIn = async () => {
+    setError(""); setBusy(true);
+    try {
+      const { user } = await DB.signIn(email, password);
+      onAuthed(user);
+    } catch(e) { setError(e.message); setBusy(false); }
+  };
+
+  const handleFanSignUp = async () => {
+    setError("");
+    if (!email.trim())     { setError("Email is required"); return; }
+    if (password.length<6) { setError("Password must be at least 6 characters"); return; }
+    setBusy(true);
+    try {
+      const { user } = await DB.signUpFan(email.trim(), password, displayName.trim());
+      if (user) {
+        onAuthed(user);
+      } else {
+        // Email confirmation required before a session exists yet.
+        setInfo("Check your email to confirm your account, then come back to continue.");
+        setBusy(false);
+      }
+    } catch(e) { setError(e.message); setBusy(false); }
+  };
+
+  if (info) return <div style={{ color:C.green, fontSize:13 }}>✓ {info}</div>;
+
+  return (
+    <div>
+      <div style={{ display:"flex", gap:16, marginBottom:14 }}>
+        {[["signin","SIGN IN"],["fanSignup","CREATE FREE ACCOUNT"]].map(([m,l]) => (
+          <span key={m} onClick={()=>{ setUiMode(m); setError(""); }}
+            style={{
+              fontFamily:F.display, fontSize:12, letterSpacing:2, cursor:"pointer",
+              color: uiMode===m ? accent : C.muted,
+              borderBottom: uiMode===m ? `2px solid ${accent}` : "2px solid transparent",
+              paddingBottom:6,
+            }}
+          >{l}</span>
+        ))}
+      </div>
+      <div style={{ display:"flex", flexDirection:"column", gap:10, maxWidth:360 }}>
+        <Input label="Email" type="email" value={email} onChange={e=>setEmail(e.target.value)} required />
+        <Input label="Password" type="password" value={password} onChange={e=>setPassword(e.target.value)} required />
+        {uiMode==="fanSignup" && (
+          <Input label="Display name (optional)" value={displayName} onChange={e=>setDisplayName(e.target.value)} placeholder="How we'll greet you -- optional" />
+        )}
+        {error && <div style={{ color:C.red, fontSize:12 }}>{error}</div>}
+        <div style={{ display:"flex", gap:14, alignItems:"center" }}>
+          <Btn onClick={uiMode==="signin" ? handleSignIn : handleFanSignUp} disabled={busy} style={{ fontSize:11, padding:"9px 18px" }}>
+            {busy ? "PLEASE WAIT..." : uiMode==="signin" ? `SIGN IN & ${actionLabel}` : `CREATE ACCOUNT & ${actionLabel}`}
+          </Btn>
+          <span onClick={onCancel} style={{ fontSize:12, color:C.muted, cursor:"pointer" }}>Cancel</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FollowBandPanel({ bandProfileId, bandName }) {
+  const [authUser, setAuthUser]   = useState(undefined); // undefined=checking, null=signed out
+  const [following, setFollowing] = useState(null);       // null=checking/unknown
+  const [uiMode, setUiMode]       = useState("idle");      // idle | auth
+  const [busy, setBusy]           = useState(false);
+  const [error, setError]         = useState("");
+  const [success, setSuccess]     = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -1170,8 +1239,6 @@ function FollowBandPanel({ bandProfileId, bandName }) {
     return () => { cancelled = true; };
   }, [bandProfileId]);
 
-  const resetAuthFields = () => { setEmail(""); setPassword(""); setDisplayName(""); setError(""); };
-
   const doFollow = async (userId) => {
     setBusy(true); setError("");
     try {
@@ -1180,38 +1247,6 @@ function FollowBandPanel({ bandProfileId, bandName }) {
       setSuccess(`You're now following ${bandName}. We'll email you when they announce a new gig.`);
     } catch(e) { setError(e.message); }
     finally { setBusy(false); }
-  };
-
-  const handleSignIn = async () => {
-    setError(""); setBusy(true);
-    try {
-      const { user } = await DB.signIn(email, password);
-      setAuthUser(user);
-      setUiMode("idle");
-      resetAuthFields();
-      await doFollow(user.id); // they clicked "sign in to follow" -- finish the job
-    } catch(e) { setError(e.message); setBusy(false); }
-  };
-
-  const handleFanSignUp = async () => {
-    setError("");
-    if (!email.trim())     { setError("Email is required"); return; }
-    if (password.length<6) { setError("Password must be at least 6 characters"); return; }
-    setBusy(true);
-    try {
-      const { user } = await DB.signUpFan(email.trim(), password, displayName.trim());
-      if (user) {
-        setAuthUser(user);
-        setUiMode("idle");
-        resetAuthFields();
-        await doFollow(user.id);
-      } else {
-        // Email confirmation required before a session exists yet.
-        setSuccess("Check your email to confirm your account, then come back to follow.");
-        setUiMode("idle");
-        setBusy(false);
-      }
-    } catch(e) { setError(e.message); setBusy(false); }
   };
 
   const handleUnfollow = async () => {
@@ -1240,41 +1275,19 @@ function FollowBandPanel({ bandProfileId, bandName }) {
       return wrap(
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:12 }}>
           <div style={{ fontSize:13, color:C.muted, letterSpacing:1 }}>🔔 Follow {bandName} to hear about new gigs</div>
-          <Btn onClick={()=>{ setUiMode("signin"); resetAuthFields(); }} style={{ fontSize:11, padding:"10px 18px" }}>
+          <Btn onClick={()=>setUiMode("auth")} style={{ fontSize:11, padding:"10px 18px" }}>
             SIGN IN TO FOLLOW
           </Btn>
         </div>
       );
     }
     return wrap(
-      <div>
-        <div style={{ display:"flex", gap:16, marginBottom:14 }}>
-          {[["signin","SIGN IN"],["fanSignup","CREATE FAN ACCOUNT"]].map(([m,l]) => (
-            <span key={m} onClick={()=>{ setUiMode(m); resetAuthFields(); }}
-              style={{
-                fontFamily:F.display, fontSize:12, letterSpacing:2, cursor:"pointer",
-                color: uiMode===m ? C.red : C.muted,
-                borderBottom: uiMode===m ? `2px solid ${C.red}` : "2px solid transparent",
-                paddingBottom:6,
-              }}
-            >{l}</span>
-          ))}
-        </div>
-        <div style={{ display:"flex", flexDirection:"column", gap:10, maxWidth:360 }}>
-          <Input label="Email" type="email" value={email} onChange={e=>setEmail(e.target.value)} required />
-          <Input label="Password" type="password" value={password} onChange={e=>setPassword(e.target.value)} required />
-          {uiMode==="fanSignup" && (
-            <Input label="Display name (optional)" value={displayName} onChange={e=>setDisplayName(e.target.value)} placeholder="How we'll greet you -- optional" />
-          )}
-          {error && <div style={{ color:C.red, fontSize:12 }}>{error}</div>}
-          <div style={{ display:"flex", gap:14, alignItems:"center" }}>
-            <Btn onClick={uiMode==="signin" ? handleSignIn : handleFanSignUp} disabled={busy} style={{ fontSize:11, padding:"9px 18px" }}>
-              {busy ? "PLEASE WAIT..." : uiMode==="signin" ? "SIGN IN & FOLLOW" : "CREATE ACCOUNT & FOLLOW"}
-            </Btn>
-            <span onClick={()=>{ setUiMode("idle"); resetAuthFields(); }} style={{ fontSize:12, color:C.muted, cursor:"pointer" }}>Cancel</span>
-          </div>
-        </div>
-      </div>
+      <InlineAuthPrompt
+        accent={C.red}
+        actionLabel="FOLLOW"
+        onCancel={()=>setUiMode("idle")}
+        onAuthed={async (user) => { setAuthUser(user); setUiMode("idle"); await doFollow(user.id); }}
+      />
     );
   }
 
@@ -3785,20 +3798,24 @@ function GigDetailPage() {
 // Submitting a claim is a plain authenticated INSERT into claim_requests;
 // it deliberately does NOT call signUp(), so it never triggers the
 // handle_new_user() auto-create path and cannot create a duplicate profile.
-// STAGE 1: eligibility is now driven by claim_status rather than the old
-// admin_created && !claimed pair. admin_created is still checked -- a
-// self-registered venue/festival/promoter (admin_created=false) already has
-// its own owner and was never meant to show a claim box to other visitors.
-// claim_status === 'pending' shows a CLAIM PENDING badge instead of the
-// button: once a claim is active the UI no longer offers a second one, which
-// closes off most duplicate-claim attempts before they ever reach the
-// database (the Phase B unique-index + friendly-error handling remains the
-// backstop for races/edge cases, not the primary defence).
-function ClaimEntityBox({ entityType, entityId, adminCreated, claimStatus }) {
+//
+// Eligibility is driven entirely by claim_status, not admin_created.
+// admin_created was previously used as an extra gate on the assumption
+// that a self-registered profile (admin_created=false) always already has
+// a real owner -- but that's not reliably true (e.g. profiles created by
+// older import paths can have admin_created=false, claim_status
+// ='unclaimed', and no genuine owner, which silently hid the claim box
+// entirely for them, including on the "Chicago 9" band profile). Since
+// claim_status is the field the whole approve/reject workflow already
+// authoritatively maintains, it's the only signal this component needs:
+// 'unclaimed' -> show the claim CTA, 'pending' -> show the pending badge,
+// 'claimed' -> show nothing.
+function ClaimEntityBox({ entityType, entityId, claimStatus }) {
   const [authUser, setAuthUser] = useState(undefined); // undefined = checking, null = signed out
   const [message, setMessage]   = useState("");
   const [status, setStatus]     = useState("idle");
   const [msg, setMsg]           = useState("");
+  const [showAuth, setShowAuth] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -3813,7 +3830,11 @@ function ClaimEntityBox({ entityType, entityId, adminCreated, claimStatus }) {
     return () => { cancelled = true; };
   }, []);
 
-  if (!adminCreated || claimStatus === "claimed" || authUser === undefined) return null;
+  if (claimStatus === "claimed" || authUser === undefined) return null;
+
+  const nounFor = { band:"band", solo_artist:"artist", venue:"venue", festival:"festival", promoter:"promoter" };
+  const noun = nounFor[entityType] || "profile";
+  const ctaLabel = entityType === "band" || entityType === "solo_artist" ? "CLAIM THIS BAND PROFILE" : `CLAIM THIS ${noun.toUpperCase()}`;
 
   if (claimStatus === "pending") {
     return (
@@ -3843,26 +3864,57 @@ function ClaimEntityBox({ entityType, entityId, adminCreated, claimStatus }) {
 
   return (
     <div style={{ marginTop:24, padding:16, background:"rgba(244,162,97,0.08)", border:`1px solid ${C.amber}`, borderRadius:8 }}>
-      <div style={{ fontFamily:F.display, fontSize:13, color:C.amber, letterSpacing:2, marginBottom:8 }}>IS THIS YOURS?</div>
-      {!authUser && status !== "success" && (
-        <div style={{ fontSize:13, color:"#ccc", lineHeight:1.6 }}>
-          This listing hasn't been claimed yet. Sign in or register on the calendar to claim it.
+      <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+        <Badge label="UNCLAIMED" color={C.amber} />
+      </div>
+
+      {/* Signed-out visitor: prominent CTA, then inline sign-in/fan-signup on click.
+          Continues straight into the claim form below once authenticated --
+          same entityType/entityId the whole time, no re-navigation. */}
+      {!authUser && status !== "success" && !showAuth && (
+        <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+          <div style={{ fontSize:13, color:"#ccc", lineHeight:1.6 }}>
+            Is this your {noun}? Claim this profile to manage your {noun === "artist" ? "artist" : noun} information, links, images and gig listings.
+          </div>
+          <Btn onClick={()=>setShowAuth(true)} style={{ fontSize:12, alignSelf:"flex-start", padding:"10px 20px" }}>
+            {ctaLabel}
+          </Btn>
         </div>
       )}
+      {!authUser && status !== "success" && showAuth && (
+        <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+          <div style={{ fontSize:13, color:"#ccc", lineHeight:1.6 }}>
+            Sign in or create a free account to claim this profile.
+          </div>
+          <InlineAuthPrompt
+            accent={C.amber}
+            actionLabel="CLAIM"
+            onCancel={()=>setShowAuth(false)}
+            onAuthed={(user)=>{ setAuthUser(user); setShowAuth(false); }}
+          />
+        </div>
+      )}
+
+      {/* Signed-in: the actual claim submission form, reusing the existing
+          claim_requests workflow exactly as before. */}
       {authUser && status !== "success" && (
         <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+          <div style={{ fontSize:13, color:"#ccc", lineHeight:1.6 }}>
+            Is this your {noun}? Claim this profile to manage your {noun === "artist" ? "artist" : noun} information, links, images and gig listings.
+          </div>
           <textarea
             value={message} onChange={e=>setMessage(e.target.value)}
             placeholder="Optional note for our team (e.g. how to verify you're the owner)"
             rows={2}
             style={{ ...inputCss, resize:"vertical" }}
           />
-          <Btn onClick={submitClaim} disabled={status==="loading"} style={{ fontSize:12, alignSelf:"flex-start", padding:"8px 16px" }}>
-            {status==="loading" ? "SUBMITTING..." : "CLAIM THIS PROFILE"}
+          <Btn onClick={submitClaim} disabled={status==="loading"} style={{ fontSize:12, alignSelf:"flex-start", padding:"10px 20px" }}>
+            {status==="loading" ? "SUBMITTING..." : ctaLabel}
           </Btn>
           {status==="error" && <div style={{ color:C.red, fontSize:12 }}>{msg}</div>}
         </div>
       )}
+
       {status==="success" && <div style={{ color:C.green, fontSize:13 }}>✓ {msg}</div>}
     </div>
   );
@@ -3998,7 +4050,7 @@ function VenueProfilePage() {
         <MSMCoverageSection awards={awards} subjectLabel={venue.name} />
 
         {/* PHASE 4: claim this venue if it's an unclaimed admin-created listing */}
-        <ClaimEntityBox entityType="venue" entityId={venue.id} adminCreated={venue.admin_created} claimStatus={venue.claim_status} />
+        <ClaimEntityBox entityType="venue" entityId={venue.id} claimStatus={venue.claim_status} />
 
         {/* Upcoming Gigs */}
         <div style={{ marginBottom:48 }}>
@@ -4229,7 +4281,7 @@ function BandProfilePage() {
         <MSMCoverageSection awards={awards} subjectLabel={band.band_name} />
 
         {/* PHASE 4: claim this listing if it's an unclaimed admin-created profile */}
-        <ClaimEntityBox entityType={band.profile_type || "band"} entityId={band.id} adminCreated={band.admin_created} claimStatus={band.claim_status} />
+        <ClaimEntityBox entityType={band.profile_type || "band"} entityId={band.id} claimStatus={band.claim_status} />
 
         {/* Contact */}
         {(band.booking_email || band.management_contact || band.press_contact) && (
@@ -4433,7 +4485,7 @@ function FestivalProfilePage() {
         {/* MSM Coverage -- Editorial Awards (Stage 4) */}
         <MSMCoverageSection awards={awards} subjectLabel={entity.band_name} />
 
-        <ClaimEntityBox entityType="festival" entityId={entity.id} adminCreated={entity.admin_created} claimStatus={entity.claim_status} />
+        <ClaimEntityBox entityType="festival" entityId={entity.id} claimStatus={entity.claim_status} />
       </div>
     </div>
   );
@@ -4540,7 +4592,7 @@ function PromoterProfilePage() {
         {/* MSM Coverage -- Editorial Awards (Stage 4) */}
         <MSMCoverageSection awards={awards} subjectLabel={entity.band_name} />
 
-        <ClaimEntityBox entityType="promoter" entityId={entity.id} adminCreated={entity.admin_created} claimStatus={entity.claim_status} />
+        <ClaimEntityBox entityType="promoter" entityId={entity.id} claimStatus={entity.claim_status} />
       </div>
     </div>
   );
