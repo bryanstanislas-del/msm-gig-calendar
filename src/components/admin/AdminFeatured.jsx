@@ -6,6 +6,16 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../../supabaseClient';
+import {
+  ACCENTS, AdminPage, AdminHeader, SystemNotice, StatGrid, StatCard,
+  AdminCard, FormHeader, FormSection, FieldRow, Field, Label, HelpText,
+  TextInput, Select, Textarea, RadioGrid, RadioOption, ToggleSetting,
+  ActionsRow, PrimaryButton, SecondaryButton, SmallActionButton,
+  FilterBar, ResultsPanel, EmptyState, TableShell, Th, Td, Tr,
+  Pill, StatusPill, Toast, SearchDropdown, SearchOption, SearchEmpty,
+} from './adminUI';
+
+const ACCENT = ACCENTS.featured;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -27,44 +37,6 @@ const TODAY = new Date().toISOString().split('T')[0];
 
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' }) : '—';
 const toInput  = (d) => d ? new Date(d).toISOString().slice(0,10) : '';
-
-// ─── Shared atoms ─────────────────────────────────────────────────────────────
-
-const Label = ({children, required}) => (
-  <label className="block text-xs font-semibold text-gray-600 mb-2">
-    {children}{required && <span className="text-red-500 ml-0.5">*</span>}
-  </label>
-);
-const HelpText = ({children}) => <p className="mt-2 text-xs text-gray-500 leading-relaxed">{children}</p>;
-const Field = ({children, className=''}) => <div className={`mb-6 last:mb-0 ${className}`}>{children}</div>;
-const FormSection = ({title, first, children}) => (
-  <div className={first ? 'pb-8' : 'pt-8 pb-8 border-t border-gray-100'}>
-    {title && <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-5">{title}</p>}
-    {children}
-  </div>
-);
-const Input = (props) => (
-  <input {...props} className={`w-full max-w-xl border border-gray-300 rounded-lg px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-500 ${props.className||''}`} />
-);
-const Textarea = (props) => (
-  <textarea {...props} className={`w-full border border-gray-300 rounded-lg px-3.5 py-3 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-yellow-500 resize-y ${props.className||''}`} />
-);
-const Toggle = ({checked, onChange, label, hint}) => (
-  <label className="flex items-start gap-3 cursor-pointer select-none">
-    <div className="relative mt-0.5 flex-shrink-0">
-      <input type="checkbox" className="sr-only" checked={checked} onChange={e=>onChange(e.target.checked)} />
-      <div className={`w-9 h-5 rounded-full transition-colors ${checked?'bg-yellow-500':'bg-gray-300'}`} />
-      <div className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${checked?'translate-x-4':''}`} />
-    </div>
-    <div>
-      <span className="text-sm font-medium text-gray-700">{label}</span>
-      {hint && <p className="text-xs text-gray-500 mt-1">{hint}</p>}
-    </div>
-  </label>
-);
-const Toast = ({toast}) => toast ? (
-  <div className={`mb-5 px-4 py-3 rounded-lg text-sm font-medium ${toast.type==='error'?'bg-red-100 text-red-800':'bg-green-100 text-green-800'}`}>{toast.msg}</div>
-) : null;
 
 // ─── Entity search ────────────────────────────────────────────────────────────
 
@@ -110,24 +82,17 @@ function EntitySearch({ entityType, value, onChange }) {
   };
 
   return (
-    <div className="relative">
-      <Input type="text" value={q} onChange={e => setQ(e.target.value)}
+    <div style={{ position:'relative' }}>
+      <TextInput accent={ACCENT} type="text" value={q} onChange={e => setQ(e.target.value)}
         placeholder={`Search ${entityType}s…`} />
-      {loading && <div className="absolute right-3 top-2.5 text-xs text-gray-500">Searching…</div>}
+      {loading && <div style={{ marginTop:6, fontSize:12, color:'#8a8a8a' }}>Searching…</div>}
       {open && results.length > 0 && (
-        <ul className="absolute z-30 w-full max-w-xl bg-white border border-gray-200 rounded-lg shadow-lg mt-2 max-h-48 overflow-y-auto">
-          {results.map(item => (
-            <li key={item.id} onClick={() => select(item)}
-              className="px-3.5 py-2.5 text-sm cursor-pointer hover:bg-yellow-50 border-b border-gray-50 last:border-0">
-              {labelFor(item)}
-            </li>
-          ))}
-        </ul>
+        <SearchDropdown>
+          {results.map(item => <SearchOption key={item.id} onClick={() => select(item)}>{labelFor(item)}</SearchOption>)}
+        </SearchDropdown>
       )}
-      {open && !loading && results.length === 0 && (
-        <div className="absolute z-30 w-full max-w-xl bg-white border border-gray-200 rounded-lg shadow-lg mt-2 px-3.5 py-2.5 text-sm text-gray-500">No results</div>
-      )}
-      {value && <p className="mt-2 text-xs text-yellow-700 font-medium">✓ {value.label}</p>}
+      {open && !loading && results.length === 0 && <SearchEmpty>No results</SearchEmpty>}
+      {value && <p style={{ marginTop:8, fontSize:12, color:ACCENT, fontWeight:600 }}>✓ {value.label}</p>}
     </div>
   );
 }
@@ -164,151 +129,138 @@ function FeaturedForm({ initial, onSave, onCancel, saving }) {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="bg-white border-2 border-yellow-200 rounded-xl p-8 shadow-sm">
-      <div className="flex items-center justify-between mb-2">
-        <h3 className="font-bold text-gray-900 text-base">{initial ? 'Edit Featured Listing' : 'New Featured Listing'}</h3>
-        <button type="button" onClick={onCancel} className="text-gray-500 hover:text-gray-600 text-xl leading-none">×</button>
-      </div>
+    <AdminCard accent={ACCENT}>
+      <form onSubmit={handleSubmit}>
+        <FormHeader icon="⭐" title={initial ? 'Edit Featured Listing' : 'New Featured Listing'} onCancel={onCancel} />
 
-      {/* 1. Listing Type & Subject */}
-      <FormSection title="Listing Type & Subject" first>
-        <Field>
-          <Label required>Featured type</Label>
-          <div className="flex flex-wrap gap-3">
-            {ENTITY_TYPES.map(et => (
-              <button key={et.value} type="button"
-                onClick={() => { set('entity_type', et.value); set('entity', null); }}
-                className={`flex-1 min-w-[100px] py-3 px-3 rounded-lg border text-xs font-semibold transition-all ${
-                  form.entity_type === et.value
-                    ? 'bg-yellow-500 border-yellow-600 text-white shadow-sm'
-                    : 'bg-white border-gray-300 text-gray-600 hover:border-yellow-400'
-                }`}>
-                {et.icon} {et.label}
-              </button>
-            ))}
-          </div>
-        </Field>
-
-        <Field className="mb-0">
-          <Label required>Select {form.entity_type}</Label>
-          <EntitySearch key={form.entity_type} entityType={form.entity_type} value={form.entity} onChange={v => set('entity', v)} />
-        </Field>
-      </FormSection>
-
-      {/* 2. Listing Tier */}
-      <FormSection title="Listing Tier">
-        <Field className="mb-0">
-          <Label required>Listing tier</Label>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {LISTING_TYPES.map(lt => (
-              <label key={lt.value} className={`flex items-center gap-3 p-4 rounded-lg border cursor-pointer transition-all ${
-                form.listing_type === lt.value ? 'border-yellow-500 bg-yellow-50' : 'border-gray-200 hover:border-yellow-300'
-              }`}>
-                <input type="radio" name="listing_type" value={lt.value} className="sr-only"
-                  checked={form.listing_type === lt.value} onChange={() => set('listing_type', lt.value)} />
-                <div>
-                  <p className="text-sm font-semibold text-gray-800">{lt.label}</p>
-                  <p className="text-xs text-gray-500 mt-0.5">{lt.desc}</p>
-                </div>
-              </label>
-            ))}
-          </div>
-        </Field>
-      </FormSection>
-
-      {/* 3. Content */}
-      <FormSection title="Content">
-        <Field>
-          <Label>Headline</Label>
-          <Input type="text" value={form.headline} onChange={e => set('headline', e.target.value)}
-            placeholder="Optional — entity name used if blank" />
-        </Field>
-        <Field>
-          <Label>Body text</Label>
-          <Textarea rows={4} value={form.body_text} onChange={e => set('body_text', e.target.value)}
-            placeholder="Optional editorial copy for this listing" />
-        </Field>
-        <Field className={form.image_url ? '' : 'mb-0'}>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-            <div>
-              <Label>Image URL</Label>
-              <Input type="url" value={form.image_url} onChange={e => set('image_url', e.target.value)} placeholder="https://…" />
-            </div>
-            <div>
-              <Label>Image alt text</Label>
-              <Input type="text" value={form.image_alt} onChange={e => set('image_alt', e.target.value)} placeholder="Describe the image" />
-            </div>
-          </div>
-        </Field>
-        {form.image_url && (
-          <Field className="mb-0">
-            <img src={form.image_url} alt={form.image_alt||''} className="h-20 w-auto rounded-lg border border-gray-200 object-cover" onError={e=>e.target.style.display='none'} />
+        {/* 1. Listing Type & Subject */}
+        <FormSection title="Listing Type & Subject" first>
+          <Field>
+            <Label required>Featured type</Label>
+            <RadioGrid minWidth={140}>
+              {ENTITY_TYPES.map(et => (
+                <RadioOption key={et.value} name="entity_type" accent={ACCENT}
+                  checked={form.entity_type === et.value}
+                  onChange={() => { set('entity_type', et.value); set('entity', null); }}
+                >{et.icon} {et.label}</RadioOption>
+              ))}
+            </RadioGrid>
           </Field>
-        )}
-      </FormSection>
 
-      {/* 4. Schedule */}
-      <FormSection title="Schedule">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-6">
-          <div>
-            <Label required>Start date</Label>
-            <Input type="date" value={form.start_date} onChange={e => set('start_date', e.target.value)} required />
-          </div>
-          <div>
-            <Label>End date</Label>
-            <Input type="date" value={form.end_date} onChange={e => set('end_date', e.target.value)} min={form.start_date} />
-            <HelpText>Leave blank for ongoing.</HelpText>
-          </div>
-          <div>
-            <Label>Publish date / time</Label>
-            <Input type="datetime-local" value={form.published_at} onChange={e => set('published_at', e.target.value)} />
-            <HelpText>Blank = publish immediately.</HelpText>
-          </div>
-          <div>
-            <Label>Expiry date / time</Label>
-            <Input type="datetime-local" value={form.expires_at} onChange={e => set('expires_at', e.target.value)} />
-            <HelpText>Blank = no expiry.</HelpText>
-          </div>
-        </div>
-      </FormSection>
+          <Field>
+            <Label required>Select {form.entity_type}</Label>
+            <EntitySearch key={form.entity_type} entityType={form.entity_type} value={form.entity} onChange={v => set('entity', v)} />
+          </Field>
+        </FormSection>
 
-      {/* 5. Display Options */}
-      <FormSection title="Display Options">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-6">
-          <div>
-            <Label>Display order</Label>
-            <Input type="number" value={form.display_order} min="0"
-              onChange={e => set('display_order', parseInt(e.target.value)||0)} />
-            <HelpText>Lower = higher position.</HelpText>
-          </div>
-          <div className="space-y-4 sm:pt-1">
-            <Toggle checked={form.is_pinned} onChange={v => set('is_pinned', v)} label="Pin to top" hint="Overrides display order" />
-            <Toggle checked={form.archive_visible} onChange={v => set('archive_visible', v)} label="Show in archive" />
-          </div>
-        </div>
-      </FormSection>
+        {/* 2. Listing Tier */}
+        <FormSection title="Listing Tier">
+          <Field>
+            <Label required>Listing tier</Label>
+            <RadioGrid minWidth={220}>
+              {LISTING_TYPES.map(lt => (
+                <RadioOption key={lt.value} name="listing_type" accent={ACCENT}
+                  checked={form.listing_type === lt.value}
+                  onChange={() => set('listing_type', lt.value)}
+                >
+                  <span style={{ display:'block', fontWeight:700 }}>{lt.label}</span>
+                  <span style={{ display:'block', fontSize:11, color:'#8a8a8a', fontWeight:400, marginTop:2 }}>{lt.desc}</span>
+                </RadioOption>
+              ))}
+            </RadioGrid>
+          </Field>
+        </FormSection>
 
-      {/* 6. Internal/Admin Notes */}
-      <FormSection title="Internal / Admin Notes">
-        <Field className="mb-0">
-          <Label>Internal notes</Label>
-          <Textarea rows={3} value={form.notes} onChange={e => set('notes', e.target.value)}
-            placeholder="Admin-only notes — not shown publicly" />
-        </Field>
-      </FormSection>
+        {/* 3. Content */}
+        <FormSection title="Content">
+          <Field>
+            <Label>Headline</Label>
+            <TextInput accent={ACCENT} wide type="text" value={form.headline} onChange={e => set('headline', e.target.value)}
+              placeholder="Optional — entity name used if blank" />
+          </Field>
+          <Field>
+            <Label>Body text</Label>
+            <Textarea accent={ACCENT} rows={4} value={form.body_text} onChange={e => set('body_text', e.target.value)}
+              placeholder="Optional editorial copy for this listing" />
+          </Field>
+          <Field>
+            <FieldRow>
+              <div>
+                <Label>Image URL</Label>
+                <TextInput accent={ACCENT} wide type="url" value={form.image_url} onChange={e => set('image_url', e.target.value)} placeholder="https://…" />
+              </div>
+              <div>
+                <Label>Image alt text</Label>
+                <TextInput accent={ACCENT} wide type="text" value={form.image_alt} onChange={e => set('image_alt', e.target.value)} placeholder="Describe the image" />
+              </div>
+            </FieldRow>
+          </Field>
+          {form.image_url && (
+            <Field>
+              <img src={form.image_url} alt={form.image_alt||''} style={{ height:80, width:'auto', borderRadius:10, border:'1px solid rgba(255,255,255,0.09)', objectFit:'cover' }} onError={e=>e.target.style.display='none'} />
+            </Field>
+          )}
+        </FormSection>
 
-      {/* 7. Actions */}
-      <div className="flex gap-4 pt-8 border-t border-gray-100">
-        <button type="submit" disabled={saving}
-          className="px-6 py-2.5 bg-yellow-500 hover:bg-yellow-600 text-white text-sm font-semibold rounded-lg disabled:opacity-50">
-          {saving ? 'Saving…' : initial ? 'Save changes' : 'Create listing'}
-        </button>
-        <button type="button" onClick={onCancel}
-          className="px-6 py-2.5 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">
-          Cancel
-        </button>
-      </div>
-    </form>
+        {/* 4. Schedule */}
+        <FormSection title="Schedule">
+          <FieldRow minWidth={200}>
+            <div>
+              <Label required>Start date</Label>
+              <TextInput accent={ACCENT} wide type="date" value={form.start_date} onChange={e => set('start_date', e.target.value)} required />
+            </div>
+            <div>
+              <Label>End date</Label>
+              <TextInput accent={ACCENT} wide type="date" value={form.end_date} onChange={e => set('end_date', e.target.value)} min={form.start_date} />
+              <HelpText>Leave blank for ongoing.</HelpText>
+            </div>
+            <div>
+              <Label>Publish date / time</Label>
+              <TextInput accent={ACCENT} wide type="datetime-local" value={form.published_at} onChange={e => set('published_at', e.target.value)} />
+              <HelpText>Blank = publish immediately.</HelpText>
+            </div>
+            <div>
+              <Label>Expiry date / time</Label>
+              <TextInput accent={ACCENT} wide type="datetime-local" value={form.expires_at} onChange={e => set('expires_at', e.target.value)} />
+              <HelpText>Blank = no expiry.</HelpText>
+            </div>
+          </FieldRow>
+        </FormSection>
+
+        {/* 5. Display Options */}
+        <FormSection title="Display Options">
+          <FieldRow>
+            <div>
+              <Label>Display order</Label>
+              <TextInput accent={ACCENT} wide type="number" value={form.display_order} min="0"
+                onChange={e => set('display_order', parseInt(e.target.value)||0)} />
+              <HelpText>Lower = higher position.</HelpText>
+            </div>
+            <div style={{ display:'flex', flexDirection:'column', gap:18, paddingTop:2 }}>
+              <ToggleSetting accent={ACCENT} checked={form.is_pinned} onChange={v => set('is_pinned', v)} label="Pin to top" hint="Overrides display order" />
+              <ToggleSetting accent={ACCENT} checked={form.archive_visible} onChange={v => set('archive_visible', v)} label="Show in archive" />
+            </div>
+          </FieldRow>
+        </FormSection>
+
+        {/* 6. Internal/Admin Notes */}
+        <FormSection title="Internal / Admin Notes">
+          <Field>
+            <Label>Internal notes</Label>
+            <Textarea accent={ACCENT} rows={3} value={form.notes} onChange={e => set('notes', e.target.value)}
+              placeholder="Admin-only notes — not shown publicly" />
+          </Field>
+        </FormSection>
+
+        {/* 7. Actions */}
+        <ActionsRow>
+          <PrimaryButton type="submit" accent={ACCENT} disabled={saving}>
+            {saving ? 'Saving…' : initial ? 'Save changes' : 'Create listing'}
+          </PrimaryButton>
+          <SecondaryButton type="button" onClick={onCancel}>Cancel</SecondaryButton>
+        </ActionsRow>
+      </form>
+    </AdminCard>
   );
 }
 
@@ -452,130 +404,94 @@ export default function AdminFeatured() {
   }, {});
 
   return (
-    <div className="max-w-6xl mx-auto py-8 px-4 sm:px-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Featured Listings</h1>
-          <p className="text-sm text-gray-500 mt-1">Commercial system — Gigs, Bands, Venues, Festivals</p>
-        </div>
-        {!showForm && (
-          <button onClick={() => { setShowForm(true); setEditItem(null); }}
-            className="px-4 py-2.5 bg-yellow-500 hover:bg-yellow-600 text-white text-sm font-semibold rounded-lg shadow-sm self-start sm:self-auto">
-            + New listing
-          </button>
+    <AdminPage>
+      <AdminHeader
+        icon="⭐" title="Featured Listings" subtitle="Commercial system — Gigs, Bands, Venues, Festivals"
+        action={!showForm && (
+          <PrimaryButton accent={ACCENT} onClick={() => { setShowForm(true); setEditItem(null); }}>+ New listing</PrimaryButton>
         )}
-      </div>
+      />
 
-      <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg text-xs text-yellow-800 leading-relaxed">
+      <SystemNotice accent={ACCENT}>
         <strong>COMMERCIAL SYSTEM</strong> — Featured listings are paid placements. Strict firewall from Editorial Awards.
-      </div>
+      </SystemNotice>
 
       {/* Summary counts */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
-        {ENTITY_TYPES.map(et => (
-          <div key={et.value} className="p-5 bg-white border border-gray-200 rounded-xl text-center">
-            <p className="text-2xl font-bold text-gray-900">{counts[et.value]}</p>
-            <p className="text-xs text-gray-500 mt-1.5">{et.icon} {et.label}</p>
-          </div>
-        ))}
-      </div>
+      <StatGrid minWidth={130}>
+        {ENTITY_TYPES.map(et => <StatCard key={et.value} value={counts[et.value]} label={`${et.icon} ${et.label}`} />)}
+      </StatGrid>
 
       <Toast toast={toast} />
 
       {showForm && (
-        <div className="mb-8">
-          <FeaturedForm
-            initial={editItem ? toForm(editItem) : null}
-            onSave={handleSave}
-            onCancel={() => { setShowForm(false); setEditItem(null); }}
-            saving={saving}
-          />
-        </div>
+        <FeaturedForm
+          initial={editItem ? toForm(editItem) : null}
+          onSave={handleSave}
+          onCancel={() => { setShowForm(false); setEditItem(null); }}
+          saving={saving}
+        />
       )}
 
-      {/* Filters -- visually separated from the results below */}
-      <div className="flex flex-wrap gap-3 items-center mb-5 pb-5 border-b border-gray-200">
-        <select value={filterType} onChange={e => setFilterType(e.target.value)}
-          className="border border-gray-300 rounded-lg px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-500">
-          <option value="all">All types</option>
-          {ENTITY_TYPES.map(et => <option key={et.value} value={et.value}>{et.icon} {et.label}</option>)}
-        </select>
-        <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
-          className="border border-gray-300 rounded-lg px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-500">
-          <option value="all">All statuses</option>
-          <option value="active">Active</option>
-          <option value="inactive">Inactive</option>
-        </select>
-        <span className="text-xs text-gray-500 ml-1">{filtered.length} listing{filtered.length!==1?'s':''}</span>
-      </div>
+      <ResultsPanel title="Featured Listings" count={`${filtered.length} listing${filtered.length!==1?'s':''}`}>
+        {/* Filters -- visually separated from the results below */}
+        <FilterBar>
+          <Select accent={ACCENT} value={filterType} onChange={e => setFilterType(e.target.value)} style={{ maxWidth:180 }}>
+            <option value="all">All types</option>
+            {ENTITY_TYPES.map(et => <option key={et.value} value={et.value}>{et.icon} {et.label}</option>)}
+          </Select>
+          <Select accent={ACCENT} value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={{ maxWidth:180 }}>
+            <option value="all">All statuses</option>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+          </Select>
+        </FilterBar>
 
-      {loading ? (
-        <div className="text-sm text-gray-500 py-12 text-center">Loading…</div>
-      ) : error ? (
-        <div className="text-sm text-red-600 py-4 px-4 bg-red-50 rounded-lg">{error}</div>
-      ) : filtered.length === 0 ? (
-        <div className="py-16 text-center border-2 border-dashed border-gray-200 rounded-xl">
-          <p className="text-gray-500 text-sm">No listings found. Create one above.</p>
-        </div>
-      ) : (
-        <div className="border border-gray-200 rounded-xl shadow-sm overflow-x-auto">
-          <table className="w-full text-sm min-w-[820px]">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                {['Type','Entity','Headline','Tier','Dates','Status','Actions'].map(h => (
-                  <th key={h} className="text-left px-5 py-3.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
-                ))}
-              </tr>
+        {loading ? (
+          <EmptyState>Loading…</EmptyState>
+        ) : error ? (
+          <div style={{ fontSize:13, color:'#f87171', padding:'14px 16px', background:'rgba(248,113,113,0.1)', borderRadius:10 }}>{error}</div>
+        ) : filtered.length === 0 ? (
+          <EmptyState icon="⭐">No listings found. Create one above.</EmptyState>
+        ) : (
+          <TableShell minWidth={820}>
+            <thead>
+              <tr>{['Type','Entity','Headline','Tier','Dates','Status','Actions'].map(h => <Th key={h}>{h}</Th>)}</tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody>
               {filtered.map(l => (
-                <tr key={l.id} className={`hover:bg-gray-50 transition-colors ${!l.active?'opacity-50':''}`}>
-                  <td className="px-5 py-4 text-xs font-medium text-gray-600 whitespace-nowrap">
-                    {l.is_pinned && <span className="text-yellow-500 mr-1">📌</span>}
+                <Tr key={l.id} dim={!l.active}>
+                  <Td style={{ fontWeight:600, color:'#b3b3b3', whiteSpace:'nowrap', fontSize:12.5 }}>
+                    {l.is_pinned && <span style={{ marginRight:4 }}>📌</span>}
                     {ENTITY_TYPES.find(e=>e.value===l.entity_type)?.icon} {l.entity_type}
-                  </td>
-                  <td className="px-5 py-4">
-                    <p className="font-medium text-gray-900 truncate max-w-[160px]">{entityLabel(l)}</p>
-                    {l.image_url && <p className="text-xs text-gray-500 mt-0.5">📷 Image</p>}
-                  </td>
-                  <td className="px-5 py-4 text-xs text-gray-500 max-w-[140px] truncate">{l.headline||'—'}</td>
-                  <td className="px-5 py-4">
-                    <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold whitespace-nowrap ${
-                      l.listing_type==='gold' ? 'bg-yellow-100 text-yellow-800' : 'bg-blue-100 text-blue-800'
-                    }`}>
-                      {l.listing_type==='gold'?'★ Gold':'◆ Blue'}
-                    </span>
-                  </td>
-                  <td className="px-5 py-4 text-xs text-gray-500 whitespace-nowrap leading-relaxed">
-                    <p>{fmtDate(l.start_date)}</p>
-                    <p>{l.end_date ? `→ ${fmtDate(l.end_date)}` : '→ ongoing'}</p>
-                    {l.expires_at && <p className="text-orange-500">Exp: {fmtDate(l.expires_at)}</p>}
-                  </td>
-                  <td className="px-5 py-4">
-                    <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium whitespace-nowrap ${l.active?'bg-green-100 text-green-800':'bg-gray-100 text-gray-500'}`}>
-                      {l.active?'Active':'Inactive'}
-                    </span>
-                  </td>
-                  <td className="px-5 py-4">
-                    <div className="flex gap-2 flex-wrap justify-end">
-                      <button onClick={() => openEdit(l)}
-                        className="text-xs px-2.5 py-1.5 rounded-md border border-gray-300 hover:bg-gray-100 text-gray-600 whitespace-nowrap">Edit</button>
-                      <button onClick={() => toggleActive(l.id, l.active)}
-                        className="text-xs px-2.5 py-1.5 rounded-md border border-gray-300 hover:bg-gray-100 text-gray-600 whitespace-nowrap">
-                        {l.active?'Deactivate':'Activate'}</button>
-                      <button onClick={() => togglePin(l.id, l.is_pinned)}
-                        className={`text-xs px-2.5 py-1.5 rounded-md border transition-colors whitespace-nowrap ${l.is_pinned?'border-yellow-300 bg-yellow-50 text-yellow-700':'border-gray-300 hover:bg-gray-100 text-gray-600'}`}>
-                        {l.is_pinned?'Unpin':'Pin'}</button>
-                      <button onClick={() => deleteListing(l.id)}
-                        className="text-xs px-2.5 py-1.5 rounded-md border border-red-200 hover:bg-red-50 text-red-600 whitespace-nowrap">Delete</button>
+                  </Td>
+                  <Td>
+                    <p style={{ fontWeight:600, color:'#fff', maxWidth:160, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', margin:0 }}>{entityLabel(l)}</p>
+                    {l.image_url && <p style={{ fontSize:11, color:'#8a8a8a', margin:'4px 0 0' }}>📷 Image</p>}
+                  </Td>
+                  <Td style={{ maxWidth:140, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', color:'#8a8a8a', fontSize:12.5 }}>{l.headline||'—'}</Td>
+                  <Td>
+                    <Pill color={l.listing_type==='gold' ? '#fbbf24' : '#60a5fa'}>{l.listing_type==='gold'?'★ Gold':'◆ Blue'}</Pill>
+                  </Td>
+                  <Td style={{ whiteSpace:'nowrap', fontSize:12, color:'#8a8a8a', lineHeight:1.7 }}>
+                    <p style={{margin:0}}>{fmtDate(l.start_date)}</p>
+                    <p style={{margin:0}}>{l.end_date ? `→ ${fmtDate(l.end_date)}` : '→ ongoing'}</p>
+                    {l.expires_at && <p style={{margin:0, color:'#fbbf24'}}>Exp: {fmtDate(l.expires_at)}</p>}
+                  </Td>
+                  <Td><StatusPill active={l.active} /></Td>
+                  <Td>
+                    <div style={{ display:'flex', gap:8, flexWrap:'wrap', justifyContent:'flex-end' }}>
+                      <SmallActionButton onClick={() => openEdit(l)}>Edit</SmallActionButton>
+                      <SmallActionButton onClick={() => toggleActive(l.id, l.active)}>{l.active?'Deactivate':'Activate'}</SmallActionButton>
+                      <SmallActionButton tone={l.is_pinned ? 'accent' : 'neutral'} accent="#fbbf24" onClick={() => togglePin(l.id, l.is_pinned)}>{l.is_pinned?'Unpin':'Pin'}</SmallActionButton>
+                      <SmallActionButton tone="danger" onClick={() => deleteListing(l.id)}>Delete</SmallActionButton>
                     </div>
-                  </td>
-                </tr>
+                  </Td>
+                </Tr>
               ))}
             </tbody>
-          </table>
-        </div>
-      )}
-    </div>
+          </TableShell>
+        )}
+      </ResultsPanel>
+    </AdminPage>
   );
 }
