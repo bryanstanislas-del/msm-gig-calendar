@@ -1928,6 +1928,7 @@ function CalendarView({ gigs, onGigClick, bands=[] }) {
   const todayStr = today();
   const [y, setY] = useState(new Date().getFullYear());
   const [m, setM] = useState(new Date().getMonth());
+  const [showGenreKey, setShowGenreKey] = useState(false); // Genre Key: collapsed by default
 
   const gigMap = useMemo(() => {
     const map = {};
@@ -2013,14 +2014,35 @@ function CalendarView({ gigs, onGigClick, bands=[] }) {
         })}
       </div>
 
-      {/* Legend */}
-      <div className="msm-legend" style={{ marginTop:20, display:"flex", flexWrap:"wrap", gap:"12px 24px" }}>
-        {Object.entries(GENRE_COLORS).map(([g,c])=>(
-          <div key={g} style={{ display:"flex", alignItems:"center", gap:8, fontSize:15, color:C.muted }}>
-            <span style={{ width:14, height:14, borderRadius:"50%", background:c, display:"inline-block", flexShrink:0, boxShadow:`0 0 6px ${c}99` }} />
-            {g}
+      {/* Genre Key -- collapsed by default to save screen space */}
+      <div style={{ marginTop:20 }}>
+        <button
+          type="button"
+          onClick={() => setShowGenreKey(v => !v)}
+          aria-expanded={showGenreKey}
+          style={{
+            display:"inline-flex", alignItems:"center", gap:8,
+            background:"rgba(255,255,255,0.03)", border:`1px solid ${C.border}`,
+            borderRadius:6, padding:"8px 14px", cursor:"pointer",
+            fontFamily:F.display, fontSize:12, letterSpacing:2, color:C.muted,
+          }}
+          onMouseEnter={e=>e.currentTarget.style.color=C.white}
+          onMouseLeave={e=>e.currentTarget.style.color=C.muted}
+        >
+          <span style={{ display:"inline-block", transition:"transform 0.15s", transform: showGenreKey ? "rotate(90deg)" : "rotate(0deg)" }}>▸</span>
+          {showGenreKey ? "HIDE GENRE KEY" : "SHOW GENRE KEY"}
+        </button>
+
+        {showGenreKey && (
+          <div className="msm-legend" style={{ marginTop:16, display:"flex", flexWrap:"wrap", gap:"12px 24px", maxWidth:"100%" }}>
+            {Object.entries(GENRE_COLORS).map(([g,c])=>(
+              <div key={g} style={{ display:"flex", alignItems:"center", gap:8, fontSize:15, color:C.muted }}>
+                <span style={{ width:14, height:14, borderRadius:"50%", background:c, display:"inline-block", flexShrink:0, boxShadow:`0 0 6px ${c}99` }} />
+                {g}
+              </div>
+            ))}
           </div>
-        ))}
+        )}
       </div>
     </div>
   );
