@@ -1935,8 +1935,13 @@ function CalendarView({ gigs, onGigClick, bands=[] }) {
     gigs.forEach(g => {
       // Generate all dates between start and end
       const start = new Date(g.date);
-      const end   = g.end_date ? new Date(g.end_date) : start;
-      const cur   = new Date(start);
+      let end = g.end_date ? new Date(g.end_date) : start;
+      // Defensive: a corrupted/mis-entered end_date earlier than the start
+      // date must never silently remove the gig from the calendar (this is
+      // exactly what happened previously -- the while loop below simply
+      // never ran). Fall back to a single-day event instead.
+      if (end < start) end = start;
+      const cur = new Date(start);
       while (cur <= end) {
         const ds = cur.toISOString().slice(0,10);
         if (!map[ds]) map[ds] = [];
