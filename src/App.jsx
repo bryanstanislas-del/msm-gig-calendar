@@ -593,6 +593,60 @@ const DB = {
       return true;
     });
   },
+
+  // ── FAN FEATURES PHASE 1: Follow a Band ────────────────────────────
+  // Fan accounts are intentionally minimal: an auth.users row plus an
+  // optional display_name kept in that user's own auth metadata. No
+  // profiles/venues row is ever created for a fan -- handle_new_user()
+  // is currently a no-op (profile creation only happens via the Admin/
+  // claim-approval paths), so this mirrors that: auth signUp is the
+  // entire "account", nothing else to create or clean up.
+  async signUpFan(email, password, displayName) {
+    if (USE_MOCK) {
+      const id = `fan_${Date.now()}`;
+      MOCK_USER = { id, email };
+      return { user: MOCK_USER };
+    }
+    const { data, error } = await supabase.auth.signUp({
+      email, password,
+      options: { data: { profile_type: "fan", display_name: displayName || null } },
+    });
+    if (error) throw new Error(error.message);
+    return { user: data.user };
+  },
+
+  async isFollowingBand(userId, bandProfileId) {
+    if (USE_MOCK || !userId || !bandProfileId) return false;
+    const { data, error } = await supabase
+      .from("band_follows")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("band_profile_id", bandProfileId)
+      .maybeSingle();
+    if (error) { console.warn("Follow status check failed", error); return false; }
+    return !!data;
+  },
+
+  async followBand(userId, bandProfileId) {
+    if (USE_MOCK) return;
+    const { error } = await supabase
+      .from("band_follows")
+      .insert({ user_id: userId, band_profile_id: bandProfileId });
+    // 23505 = unique_violation -- a double-click/race against the
+    // (user_id, band_profile_id) unique constraint. Treat as success:
+    // the end state (following) is exactly what the user wanted.
+    if (error && error.code !== "23505") throw new Error(error.message);
+  },
+
+  async unfollowBand(userId, bandProfileId) {
+    if (USE_MOCK) return;
+    const { error } = await supabase
+      .from("band_follows")
+      .delete()
+      .eq("user_id", userId)
+      .eq("band_profile_id", bandProfileId);
+    if (error) throw new Error(error.message);
+  },
 };
 
 // ── MSM Logo ────────────────────────────────────────────────────────
@@ -1014,6 +1068,185 @@ export const MSMCoverageSection = ({ awards, subjectLabel = "this artist" }) => 
     )}
   </div>
 );
+
+// ════════════════════════════════════════════════════════════════════
+//  FAN FEATURES -- PHASE 1: FOLLOW A BAND
+// ════════════════════════════════════════════════════════════════════
+// Fan accounts are auth-only: DB.signUpFan creates nothing but the
+// auth.users row (plus an optional display_name in that user's own auth
+// metadata) -- no profiles/venues row is ever created for a fan, exactly
+// mirroring how venue/festival/promoter signups already skip profile
+// creation. Sign-in and fan sign-up both happen right here, inline, on
+// the band profile page -- no redirect-and-return flow needed, and no
+// existing routing touched. Follow state is read fresh from band_follows
+// (RLS-scoped to the signed-in user's own rows) on mount, so it's
+// correct across sessions and devices, not just this tab.
+function FollowBandPanel({ bandProfileId, bandName }) {
+  const [authUser, setAuthUser]   = useState(undefined); // undefined=checking, null=signed out
+  const [following, setFollowing] = useState(null);       // null=checking/unknown
+  const [uiMode, setUiMode]       = useState("idle");      // idle | signin | fanSignup
+  const [busy, setBusy]           = useState(false);
+  const [error, setError]         = useState("");
+  const [success, setSuccess]     = useState("");
+
+  // Inline auth form fields (kept local to this widget -- unrelated to
+  // the full AuthPanel's band/venue/festival registration flow)
+  const [email, setEmail]             = useState("");
+  const [password, setPassword]       = useState("");
+  const [displayName, setDisplayName] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      if (USE_MOCK) { if (!cancelled) setAuthUser(null); return; }
+      try {
+        const { data } = await supabase.auth.getUser();
+        const user = data?.user || null;
+        if (cancelled) return;
+        setAuthUser(user);
+        if (user) {
+          const isFollowing = await DB.isFollowingBand(user.id, bandProfileId);
+          if (!cancelled) setFollowing(isFollowing);
+        }
+      } catch(e) { if (!cancelled) setAuthUser(null); }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, [bandProfileId]);
+
+  const resetAuthFields = () => { setEmail(""); setPassword(""); setDisplayName(""); setError(""); };
+
+  const doFollow = async (userId) => {
+    setBusy(true); setError("");
+    try {
+      await DB.followBand(userId, bandProfileId);
+      setFollowing(true);
+      setSuccess(`You're now following ${bandName}. We'll email you when they announce a new gig.`);
+    } catch(e) { setError(e.message); }
+    finally { setBusy(false); }
+  };
+
+  const handleSignIn = async () => {
+    setError(""); setBusy(true);
+    try {
+      const { user } = await DB.signIn(email, password);
+      setAuthUser(user);
+      setUiMode("idle");
+      resetAuthFields();
+      await doFollow(user.id); // they clicked "sign in to follow" -- finish the job
+    } catch(e) { setError(e.message); setBusy(false); }
+  };
+
+  const handleFanSignUp = async () => {
+    setError("");
+    if (!email.trim())     { setError("Email is required"); return; }
+    if (password.length<6) { setError("Password must be at least 6 characters"); return; }
+    setBusy(true);
+    try {
+      const { user } = await DB.signUpFan(email.trim(), password, displayName.trim());
+      if (user) {
+        setAuthUser(user);
+        setUiMode("idle");
+        resetAuthFields();
+        await doFollow(user.id);
+      } else {
+        // Email confirmation required before a session exists yet.
+        setSuccess("Check your email to confirm your account, then come back to follow.");
+        setUiMode("idle");
+        setBusy(false);
+      }
+    } catch(e) { setError(e.message); setBusy(false); }
+  };
+
+  const handleUnfollow = async () => {
+    setBusy(true); setError(""); setSuccess("");
+    try {
+      await DB.unfollowBand(authUser.id, bandProfileId);
+      setFollowing(false);
+    } catch(e) { setError(e.message); }
+    finally { setBusy(false); }
+  };
+
+  const wrap = children => (
+    <div style={{ padding:20, background:"rgba(255,255,255,0.02)", border:`1px solid ${C.border}`, borderRadius:8 }}>
+      {children}
+    </div>
+  );
+
+  // Loading: initial auth check, or (once signed in) the follow-state check
+  if (authUser === undefined || (authUser && following === null)) {
+    return wrap(<div style={{ fontSize:13, color:C.dim, letterSpacing:1 }}>LOADING...</div>);
+  }
+
+  // Signed-out visitor
+  if (authUser === null) {
+    if (uiMode === "idle") {
+      return wrap(
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:12 }}>
+          <div style={{ fontSize:13, color:C.muted, letterSpacing:1 }}>🔔 Follow {bandName} to hear about new gigs</div>
+          <Btn onClick={()=>{ setUiMode("signin"); resetAuthFields(); }} style={{ fontSize:11, padding:"10px 18px" }}>
+            SIGN IN TO FOLLOW
+          </Btn>
+        </div>
+      );
+    }
+    return wrap(
+      <div>
+        <div style={{ display:"flex", gap:16, marginBottom:14 }}>
+          {[["signin","SIGN IN"],["fanSignup","CREATE FAN ACCOUNT"]].map(([m,l]) => (
+            <span key={m} onClick={()=>{ setUiMode(m); resetAuthFields(); }}
+              style={{
+                fontFamily:F.display, fontSize:12, letterSpacing:2, cursor:"pointer",
+                color: uiMode===m ? C.red : C.muted,
+                borderBottom: uiMode===m ? `2px solid ${C.red}` : "2px solid transparent",
+                paddingBottom:6,
+              }}
+            >{l}</span>
+          ))}
+        </div>
+        <div style={{ display:"flex", flexDirection:"column", gap:10, maxWidth:360 }}>
+          <Input label="Email" type="email" value={email} onChange={e=>setEmail(e.target.value)} required />
+          <Input label="Password" type="password" value={password} onChange={e=>setPassword(e.target.value)} required />
+          {uiMode==="fanSignup" && (
+            <Input label="Display name (optional)" value={displayName} onChange={e=>setDisplayName(e.target.value)} placeholder="How we'll greet you -- optional" />
+          )}
+          {error && <div style={{ color:C.red, fontSize:12 }}>{error}</div>}
+          <div style={{ display:"flex", gap:14, alignItems:"center" }}>
+            <Btn onClick={uiMode==="signin" ? handleSignIn : handleFanSignUp} disabled={busy} style={{ fontSize:11, padding:"9px 18px" }}>
+              {busy ? "PLEASE WAIT..." : uiMode==="signin" ? "SIGN IN & FOLLOW" : "CREATE ACCOUNT & FOLLOW"}
+            </Btn>
+            <span onClick={()=>{ setUiMode("idle"); resetAuthFields(); }} style={{ fontSize:12, color:C.muted, cursor:"pointer" }}>Cancel</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Signed in
+  return wrap(
+    <div>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:12 }}>
+        {following ? (
+          <>
+            <Badge label="✓ FOLLOWING" color={C.green} />
+            <Btn variant="ghost" onClick={handleUnfollow} disabled={busy} style={{ fontSize:11, padding:"9px 16px" }}>
+              {busy ? "..." : "UNFOLLOW"}
+            </Btn>
+          </>
+        ) : (
+          <>
+            <div style={{ fontSize:13, color:C.muted, letterSpacing:1 }}>🔔 Get notified about new {bandName} gigs</div>
+            <Btn onClick={()=>doFollow(authUser.id)} disabled={busy} style={{ fontSize:11, padding:"10px 18px" }}>
+              {busy ? "..." : "FOLLOW THIS BAND"}
+            </Btn>
+          </>
+        )}
+      </div>
+      {error   && <div style={{ color:C.red,   fontSize:12, marginTop:10 }}>{error}</div>}
+      {success && <div style={{ color:C.green, fontSize:12, marginTop:10 }}>✓ {success}</div>}
+    </div>
+  );
+}
 
 // ════════════════════════════════════════════════════════════════════
 //  AUTH PANEL
@@ -4006,11 +4239,8 @@ function BandProfilePage() {
           </div>
         )}
 
-        {/* Follow placeholder — reserved for future */}
-        <div style={{ padding:24, background:"rgba(255,255,255,0.02)", border:`1px dashed ${C.border}`, borderRadius:8, textAlign:"center" }}>
-          <div style={{ fontSize:13, color:C.dim, letterSpacing:1 }}>🔔 FOLLOW THIS BAND — Coming Soon</div>
-          <div style={{ fontSize:11, color:C.dim, marginTop:4 }}>Get notified when {band.band_name} adds new gigs</div>
-        </div>
+        {/* Fan Features Phase 1: Follow this band */}
+        <FollowBandPanel bandProfileId={band.id} bandName={band.band_name} />
       </div>
     </div>
   );
