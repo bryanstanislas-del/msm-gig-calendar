@@ -552,12 +552,27 @@ const DB = {
     if (error) throw new Error(error.message);
   },
 
-  // ── PUBLIC EDITORIAL AWARDS (Stage 1) ──────────────────────────────
+  // ── PUBLIC EDITORIAL AWARDS (Stage 1, revised for singleton history) ──
   // Single filtered query against editorial_features, embedding the
   // related editorial_award_types row via the existing FK so callers get
   // everything needed in one round trip (no N+1, no admin RPC).
-  // RLS already restricts anon/public reads to active=true; this adds the
-  // publish-window check RLS does not enforce (published_at/expires_at).
+  //
+  // Despite the name, this now returns two kinds of rows, not just the
+  // current holder:
+  //   - active = true               (the current active award, if any)
+  //   - active = false AND
+  //     archive_visible = true      (a former singleton holder etc. whose
+  //                                   historical recognition must keep
+  //                                   showing on their own profile, per
+  //                                   the singleton-history requirement)
+  // RLS mirrors this exact condition (active OR archive_visible), so a
+  // deactivated row with archive_visible = false stays invisible to the
+  // public at the database level, not just filtered out here. Callers
+  // that only want the current holder(s) should filter the result on
+  // `.active` themselves (see EditorialAwardStrip) -- this function
+  // deliberately returns the full current+historical set so a single
+  // fetch can power both the hero badge strip and the Current/Previous
+  // split in MSMCoverageSection without a second round trip.
   // Pass profileId, gigId, or both -- a single award can be linked to a
   // gig AND its performing artist, so passing both returns the combined,
   // de-duplicated set in one query rather than two separate requests.
@@ -568,7 +583,7 @@ const DB = {
     let query = supabase
       .from("editorial_features")
       .select("*, editorial_award_types(*)")
-      .eq("active", true)
+      .or("active.eq.true,archive_visible.eq.true")
       .or(`published_at.is.null,published_at.lte.${nowIso}`)
       .or(`expires_at.is.null,expires_at.gt.${nowIso}`)
       .order("awarded_at", { ascending: false });
@@ -998,13 +1013,17 @@ const EditorialAwardPill = ({ award }) => {
 };
 
 // Row of pills, newest first (DB.getActiveAwards already orders this way).
-// Renders nothing when there are no awards, so it never leaves a gap in
-// the hero for profiles/gigs that don't have any yet.
+// Renders nothing when there are no CURRENT awards -- historical/former
+// singleton holders no longer show as a hero pill (they get their own
+// "Previous Editorial Awards" section in MSMCoverageSection instead), so
+// this never leaves a gap in the hero for profiles/gigs that don't
+// currently hold one.
 export const EditorialAwardStrip = ({ awards, style={} }) => {
-  if (!awards || awards.length === 0) return null;
+  const current = (awards || []).filter(a => a.active);
+  if (current.length === 0) return null;
   return (
     <div style={{ display:"flex", gap:8, flexWrap:"wrap", ...style }}>
-      {awards.map(a => <EditorialAwardPill key={a.id} award={a} />)}
+      {current.map(a => <EditorialAwardPill key={a.id} award={a} />)}
     </div>
   );
 };
@@ -1048,26 +1067,63 @@ const EditorialCoverageCard = ({ award }) => {
   );
 };
 
-// Full MSM Coverage section -- replaces the old static placeholder.
-// Keeps the friendly empty-state copy when there's no coverage yet, so
-// the section's presence/behaviour looks the same as before on profiles
-// and gigs that don't have any awards.
-export const MSMCoverageSection = ({ awards, subjectLabel = "this artist" }) => (
-  <div style={{ marginBottom:48 }}>
-    <SectionLabel>MSM COVERAGE</SectionLabel>
-    {(!awards || awards.length === 0) ? (
-      <div style={{ padding:24, background:"rgba(255,255,255,0.02)", border:`1px dashed ${C.border}`, borderRadius:8 }}>
-        <div style={{ fontSize:13, color:C.dim }}>
-          Reviews, interviews and features related to {subjectLabel} will appear here.
-        </div>
-      </div>
-    ) : (
-      <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-        {awards.map(a => <EditorialCoverageCard key={a.id} award={a} />)}
-      </div>
-    )}
+// Small uppercase sub-heading used to separate Current Recognition from
+// Previous Editorial Awards within the coverage section -- deliberately
+// lighter than SectionLabel (no underline bar) so it reads as a subgroup,
+// not a whole new page section.
+const CoverageGroupLabel = ({ children }) => (
+  <div style={{ fontSize:11, fontFamily:F.display, letterSpacing:2, color:C.muted, marginBottom:10 }}>
+    {children}
   </div>
 );
+
+// Full MSM Coverage section -- replaces the old static placeholder.
+// Awards fetched via DB.getActiveAwards() now include both the current
+// active award(s) AND historical (deactivated) awards that remain
+// archive_visible=true -- e.g. a previous Record of the Week holder whose
+// recognition must keep showing on their own profile after a new artist
+// takes over the singleton. Split them here into two clearly labelled
+// groups rather than mixing current and historical recognition together.
+// Keeps the friendly empty-state copy when there's no coverage at all, so
+// the section's presence/behaviour looks the same as before on profiles
+// and gigs that don't have any.
+export const MSMCoverageSection = ({ awards, subjectLabel = "this artist" }) => {
+  const current  = (awards || []).filter(a => a.active);
+  const previous = (awards || []).filter(a => !a.active);
+  const hasAny = current.length > 0 || previous.length > 0;
+
+  return (
+    <div style={{ marginBottom:48 }}>
+      <SectionLabel>MSM COVERAGE</SectionLabel>
+      {!hasAny ? (
+        <div style={{ padding:24, background:"rgba(255,255,255,0.02)", border:`1px dashed ${C.border}`, borderRadius:8 }}>
+          <div style={{ fontSize:13, color:C.dim }}>
+            Reviews, interviews and features related to {subjectLabel} will appear here.
+          </div>
+        </div>
+      ) : (
+        <div style={{ display:"flex", flexDirection:"column", gap:28 }}>
+          {current.length > 0 && (
+            <div>
+              <CoverageGroupLabel>CURRENT RECOGNITION</CoverageGroupLabel>
+              <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+                {current.map(a => <EditorialCoverageCard key={a.id} award={a} />)}
+              </div>
+            </div>
+          )}
+          {previous.length > 0 && (
+            <div>
+              <CoverageGroupLabel>PREVIOUS EDITORIAL AWARDS</CoverageGroupLabel>
+              <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+                {previous.map(a => <EditorialCoverageCard key={a.id} award={a} />)}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
 
 // ════════════════════════════════════════════════════════════════════
 //  FAN FEATURES -- PHASE 1: FOLLOW A BAND
