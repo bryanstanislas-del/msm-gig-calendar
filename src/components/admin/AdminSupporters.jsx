@@ -27,14 +27,22 @@ const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day:'2-digi
 // ─── Shared atoms ─────────────────────────────────────────────────────────────
 
 const Label = ({children, required}) => (
-  <label className="block text-xs font-semibold text-gray-600 mb-1">
+  <label className="block text-xs font-semibold text-gray-600 mb-2">
     {children}{required && <span className="text-red-500 ml-0.5">*</span>}
   </label>
 );
-const Input    = (props) => <input    {...props} className={`w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 ${props.className||''}`} />;
-const Textarea = (props) => <textarea {...props} className={`w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 resize-none ${props.className||''}`} />;
+const HelpText = ({children}) => <p className="mt-2 text-xs text-gray-500 leading-relaxed">{children}</p>;
+const Field = ({children, className=''}) => <div className={`mb-6 last:mb-0 ${className}`}>{children}</div>;
+const FormSection = ({title, first, children}) => (
+  <div className={first ? 'pb-8' : 'pt-8 pb-8 border-t border-gray-100'}>
+    {title && <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-5">{title}</p>}
+    {children}
+  </div>
+);
+const Input    = (props) => <input    {...props} className={`w-full max-w-xl border border-gray-300 rounded-lg px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 ${props.className||''}`} />;
+const Textarea = (props) => <textarea {...props} className={`w-full border border-gray-300 rounded-lg px-3.5 py-3 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-purple-500 resize-y ${props.className||''}`} />;
 const Toggle   = ({checked, onChange, label, hint}) => (
-  <label className="flex items-start gap-2 cursor-pointer select-none">
+  <label className="flex items-start gap-3 cursor-pointer select-none">
     <div className="relative mt-0.5 flex-shrink-0">
       <input type="checkbox" className="sr-only" checked={checked} onChange={e=>onChange(e.target.checked)} />
       <div className={`w-9 h-5 rounded-full transition-colors ${checked?'bg-purple-600':'bg-gray-300'}`} />
@@ -42,12 +50,12 @@ const Toggle   = ({checked, onChange, label, hint}) => (
     </div>
     <div>
       <span className="text-sm font-medium text-gray-700">{label}</span>
-      {hint && <p className="text-xs text-gray-500 mt-0.5">{hint}</p>}
+      {hint && <p className="text-xs text-gray-500 mt-1">{hint}</p>}
     </div>
   </label>
 );
 const Toast = ({toast}) => toast ? (
-  <div className={`mb-4 px-4 py-3 rounded text-sm font-medium ${toast.type==='error'?'bg-red-100 text-red-800':'bg-green-100 text-green-800'}`}>{toast.msg}</div>
+  <div className={`mb-5 px-4 py-3 rounded-lg text-sm font-medium ${toast.type==='error'?'bg-red-100 text-red-800':'bg-green-100 text-green-800'}`}>{toast.msg}</div>
 ) : null;
 
 // ─── Level badge ─────────────────────────────────────────────────────────────
@@ -104,21 +112,21 @@ function ProfileSearch({ value, onChange, excludeIds=[] }) {
         placeholder="Search registered bands, artists, festivals…" />
       {loading && <div className="absolute right-3 top-2.5 text-xs text-gray-500">Searching…</div>}
       {open && results.length > 0 && (
-        <ul className="absolute z-30 w-full bg-white border border-gray-200 rounded shadow-lg mt-1 max-h-48 overflow-y-auto">
+        <ul className="absolute z-30 w-full max-w-xl bg-white border border-gray-200 rounded-lg shadow-lg mt-2 max-h-48 overflow-y-auto">
           {results.map(p => (
             <li key={p.id} onClick={() => select(p)}
-              className="px-3 py-2 text-sm cursor-pointer hover:bg-purple-50 border-b border-gray-50 last:border-0">
+              className="px-3.5 py-2.5 text-sm cursor-pointer hover:bg-purple-50 border-b border-gray-50 last:border-0">
               {labelFor(p)}
             </li>
           ))}
         </ul>
       )}
       {open && !loading && results.length === 0 && (
-        <div className="absolute z-30 w-full bg-white border border-gray-200 rounded shadow-lg mt-1 px-3 py-2 text-sm text-gray-500">
+        <div className="absolute z-30 w-full max-w-xl bg-white border border-gray-200 rounded-lg shadow-lg mt-2 px-3.5 py-2.5 text-sm text-gray-500">
           No results — profile must be registered in the system
         </div>
       )}
-      {value && <p className="mt-1 text-xs text-purple-700 font-medium">✓ {value.label}</p>}
+      {value && <p className="mt-2 text-xs text-purple-700 font-medium">✓ {value.label}</p>}
     </div>
   );
 }
@@ -152,112 +160,123 @@ function SupporterForm({ existingIds, initial, onSave, onCancel, saving }) {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="bg-white border-2 border-purple-200 rounded-xl p-6 space-y-5 shadow-sm">
-      <div className="flex items-center justify-between">
-        <h3 className="font-bold text-gray-900">{initial ? 'Edit Supporter' : 'Grant Founding Supporter Status'}</h3>
+    <form onSubmit={handleSubmit} className="bg-white border-2 border-purple-200 rounded-xl p-8 shadow-sm">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="font-bold text-gray-900 text-base">{initial ? 'Edit Supporter' : 'Grant Founding Supporter Status'}</h3>
         <button type="button" onClick={onCancel} className="text-gray-500 hover:text-gray-600 text-xl leading-none">×</button>
       </div>
 
-      {/* Profile (only on create) */}
-      {!initial && (
-        <div>
-          <Label required>Profile</Label>
-          <ProfileSearch value={form.profile} onChange={v => set('profile', v)} excludeIds={existingIds} />
+      {/* 1. Subject & Level */}
+      <FormSection title="Subject & Level" first>
+        {!initial && (
+          <Field>
+            <Label required>Profile</Label>
+            <ProfileSearch value={form.profile} onChange={v => set('profile', v)} excludeIds={existingIds} />
+          </Field>
+        )}
+
+        <Field>
+          <Label required>Supporter level</Label>
+          <select value={form.supporter_level} onChange={e => set('supporter_level', e.target.value)}
+            className="w-full max-w-xl border border-gray-300 rounded-lg px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500">
+            {SUPPORTER_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
+          </select>
+          <HelpText>Level is for display and filtering only — no automated privileges.</HelpText>
+        </Field>
+
+        <Field className="mb-0">
+          <Label>Website URL</Label>
+          <Input type="url" value={form.website_url} onChange={e => set('website_url', e.target.value)}
+            placeholder="https://…" />
+          <HelpText>Shown as an external link on the supporters page.</HelpText>
+        </Field>
+      </FormSection>
+
+      {/* 2. Content */}
+      <FormSection title="Content">
+        <Field>
+          <Label>Headline / tagline</Label>
+          <Input type="text" value={form.headline} onChange={e => set('headline', e.target.value)}
+            placeholder={`e.g. "Supporting live music in Southampton since 2020"`} />
+        </Field>
+        <Field>
+          <Label>Description / bio</Label>
+          <Textarea rows={4} value={form.body_text} onChange={e => set('body_text', e.target.value)}
+            placeholder="Short description or biography for the supporters page." />
+        </Field>
+        <Field className={form.image_url ? '' : 'mb-0'}>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+            <div>
+              <Label>Logo / image URL</Label>
+              <Input type="url" value={form.image_url} onChange={e => set('image_url', e.target.value)} placeholder="https://…" />
+              <HelpText>Replaces profile photo on supporters page.</HelpText>
+            </div>
+            <div>
+              <Label>Image alt text</Label>
+              <Input type="text" value={form.image_alt} onChange={e => set('image_alt', e.target.value)} placeholder="e.g. Company logo" />
+            </div>
+          </div>
+        </Field>
+        {form.image_url && (
+          <Field className="mb-0">
+            <img src={form.image_url} alt={form.image_alt||''} className="h-20 w-auto rounded-lg border border-gray-200 object-contain bg-gray-50 p-1" onError={e=>e.target.style.display='none'} />
+          </Field>
+        )}
+      </FormSection>
+
+      {/* 3. Schedule */}
+      <FormSection title="Schedule">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-6">
+          <div>
+            <Label>Publish date / time</Label>
+            <Input type="datetime-local" value={form.published_at} onChange={e => set('published_at', e.target.value)} />
+            <HelpText>Blank = publish immediately.</HelpText>
+          </div>
+          <div>
+            <Label>Expiry date / time</Label>
+            <Input type="datetime-local" value={form.expires_at} onChange={e => set('expires_at', e.target.value)} />
+            <HelpText>Blank = no expiry.</HelpText>
+          </div>
         </div>
-      )}
+      </FormSection>
 
-      {/* Supporter level */}
-      <div>
-        <Label required>Supporter level</Label>
-        <select value={form.supporter_level} onChange={e => set('supporter_level', e.target.value)}
-          className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500">
-          {SUPPORTER_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
-        </select>
-        <p className="mt-1 text-xs text-gray-500">Level is for display and filtering only — no automated privileges.</p>
-      </div>
-
-      {/* Website URL */}
-      <div>
-        <Label>Website URL</Label>
-        <Input type="url" value={form.website_url} onChange={e => set('website_url', e.target.value)}
-          placeholder="https://…" />
-        <p className="mt-1 text-xs text-gray-500">Shown as an external link on the supporters page.</p>
-      </div>
-
-      {/* Headline + Body */}
-      <div>
-        <Label>Headline / tagline</Label>
-        <Input type="text" value={form.headline} onChange={e => set('headline', e.target.value)}
-          placeholder={`e.g. "Supporting live music in Southampton since 2020"`} />
-      </div>
-      <div>
-        <Label>Description / bio</Label>
-        <Textarea rows={4} value={form.body_text} onChange={e => set('body_text', e.target.value)}
-          placeholder="Short description or biography for the supporters page." />
-      </div>
-
-      {/* Logo / image */}
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <Label>Logo / image URL</Label>
-          <Input type="url" value={form.image_url} onChange={e => set('image_url', e.target.value)} placeholder="https://…" />
-          <p className="mt-1 text-xs text-gray-500">Replaces profile photo on supporters page.</p>
+      {/* 4. Display Options */}
+      <FormSection title="Display Options">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-6">
+          <div>
+            <Label>Display order</Label>
+            <Input type="number" value={form.display_order} min="0"
+              onChange={e => set('display_order', parseInt(e.target.value)||0)} />
+            <HelpText>Lower = higher position.</HelpText>
+          </div>
+          <div className="space-y-4 sm:pt-1">
+            <Toggle checked={form.is_pinned} onChange={v => set('is_pinned', v)} label="Pin to top" hint="Overrides display order" />
+            <Toggle checked={form.archive_visible} onChange={v => set('archive_visible', v)} label="Show publicly" />
+          </div>
         </div>
-        <div>
-          <Label>Image alt text</Label>
-          <Input type="text" value={form.image_alt} onChange={e => set('image_alt', e.target.value)} placeholder="e.g. Company logo" />
-        </div>
-      </div>
-      {form.image_url && (
-        <img src={form.image_url} alt={form.image_alt||''} className="h-20 w-auto rounded border border-gray-200 object-contain bg-gray-50 p-1" onError={e=>e.target.style.display='none'} />
-      )}
+      </FormSection>
 
-      {/* Dates */}
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <Label>Publish date / time</Label>
-          <Input type="datetime-local" value={form.published_at} onChange={e => set('published_at', e.target.value)} />
-          <p className="mt-1 text-xs text-gray-500">Blank = publish immediately.</p>
-        </div>
-        <div>
-          <Label>Expiry date / time</Label>
-          <Input type="datetime-local" value={form.expires_at} onChange={e => set('expires_at', e.target.value)} />
-          <p className="mt-1 text-xs text-gray-500">Blank = no expiry.</p>
-        </div>
-      </div>
+      {/* 5. Internal/Admin Notes */}
+      <FormSection title="Internal / Admin Notes">
+        <Field className="mb-0">
+          <Label>Internal notes</Label>
+          <Textarea rows={3} value={form.notes} onChange={e => set('notes', e.target.value)}
+            placeholder="Admin-only notes — not shown publicly" />
+        </Field>
+      </FormSection>
 
-      {/* Display controls */}
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <Label>Display order</Label>
-          <Input type="number" value={form.display_order} min="0"
-            onChange={e => set('display_order', parseInt(e.target.value)||0)} />
-          <p className="mt-1 text-xs text-gray-500">Lower = higher position.</p>
-        </div>
-        <div className="space-y-3 pt-5">
-          <Toggle checked={form.is_pinned} onChange={v => set('is_pinned', v)} label="Pin to top" hint="Overrides display order" />
-          <Toggle checked={form.archive_visible} onChange={v => set('archive_visible', v)} label="Show publicly" />
-        </div>
-      </div>
-
-      {/* Internal notes */}
-      <div>
-        <Label>Internal notes</Label>
-        <Textarea rows={2} value={form.notes} onChange={e => set('notes', e.target.value)}
-          placeholder="Admin-only notes — not shown publicly" />
-      </div>
-
-      <div className="p-3 bg-purple-50 border border-purple-100 rounded-lg text-xs text-purple-800">
+      <div className="p-4 bg-purple-50 border border-purple-100 rounded-lg text-xs text-purple-800 leading-relaxed mb-2">
         Founding Supporter status is community recognition only. It cannot be purchased and is separate from editorial awards and commercial listings.
       </div>
 
-      <div className="flex gap-3 pt-2 border-t border-gray-100">
+      {/* 6. Actions */}
+      <div className="flex gap-4 pt-6 border-t border-gray-100">
         <button type="submit" disabled={saving || (!initial && !form.profile)}
-          className="px-5 py-2 bg-purple-700 hover:bg-purple-800 text-white text-sm font-semibold rounded-lg disabled:opacity-50">
+          className="px-6 py-2.5 bg-purple-700 hover:bg-purple-800 text-white text-sm font-semibold rounded-lg disabled:opacity-50">
           {saving ? 'Saving…' : initial ? 'Save changes' : 'Grant status'}
         </button>
         <button type="button" onClick={onCancel}
-          className="px-5 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">
+          className="px-6 py-2.5 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">
           Cancel
         </button>
       </div>
@@ -386,30 +405,30 @@ export default function AdminSupporters() {
   const revokedCount = supporters.filter(s => !s.active).length;
 
   return (
-    <div className="max-w-5xl mx-auto py-8 px-4">
-      <div className="flex items-center justify-between mb-2">
+    <div className="max-w-5xl mx-auto py-8 px-4 sm:px-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Founding Supporters</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Community recognition — non-purchasable</p>
+          <p className="text-sm text-gray-500 mt-1">Community recognition — non-purchasable</p>
         </div>
         {!showForm && (
           <button onClick={() => { setShowForm(true); setEditItem(null); }}
-            className="px-4 py-2 bg-purple-700 hover:bg-purple-800 text-white text-sm font-semibold rounded-lg shadow-sm">
+            className="px-4 py-2.5 bg-purple-700 hover:bg-purple-800 text-white text-sm font-semibold rounded-lg shadow-sm self-start sm:self-auto">
             + Grant status
           </button>
         )}
       </div>
 
-      <div className="mb-5 p-3 bg-purple-50 border border-purple-200 rounded-lg text-xs text-purple-800">
+      <div className="mb-6 p-4 bg-purple-50 border border-purple-200 rounded-lg text-xs text-purple-800 leading-relaxed">
         <strong>COMMUNITY SYSTEM</strong> — Supporter status cannot be purchased. Separate from editorial awards and commercial listings.
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-3 gap-3 mb-5">
+      <div className="grid grid-cols-3 gap-4 mb-8">
         {[{l:'Total',v:supporters.length},{l:'Active',v:activeCount},{l:'Revoked',v:revokedCount}].map(s => (
-          <div key={s.l} className="p-3 bg-white border border-gray-200 rounded-lg text-center">
+          <div key={s.l} className="p-5 bg-white border border-gray-200 rounded-xl text-center">
             <p className="text-2xl font-bold text-gray-900">{s.v}</p>
-            <p className="text-xs text-gray-500">{s.l}</p>
+            <p className="text-xs text-gray-500 mt-1.5">{s.l}</p>
           </div>
         ))}
       </div>
@@ -417,7 +436,7 @@ export default function AdminSupporters() {
       <Toast toast={toast} />
 
       {showForm && (
-        <div className="mb-6">
+        <div className="mb-8">
           <SupporterForm
             existingIds={grantedIds}
             initial={editItem ? toForm(editItem) : null}
@@ -428,19 +447,19 @@ export default function AdminSupporters() {
         </div>
       )}
 
-      {/* Filters */}
-      <div className="flex flex-wrap gap-2 mb-4 items-center">
-        <div className="flex gap-1">
+      {/* Filters -- visually separated from the results below */}
+      <div className="flex flex-wrap gap-3 items-center mb-5 pb-5 border-b border-gray-200">
+        <div className="flex gap-2">
           {[['all','All'],['active','Active'],['revoked','Revoked']].map(([v,l]) => (
             <button key={v} onClick={() => setFilterStatus(v)}
-              className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
+              className={`px-3.5 py-2 text-xs font-medium rounded-lg border transition-colors ${
                 filterStatus===v ? 'bg-purple-700 border-purple-700 text-white' : 'bg-white border-gray-300 text-gray-600 hover:border-purple-400'
               }`}>{l}</button>
           ))}
         </div>
         {levels.length > 0 && (
           <select value={filterLevel} onChange={e => setFilterLevel(e.target.value)}
-            className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500">
+            className="border border-gray-300 rounded-lg px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500">
             <option value="all">All levels</option>
             {levels.map(l => <option key={l} value={l}>{l}</option>)}
           </select>
@@ -457,9 +476,9 @@ export default function AdminSupporters() {
           <p className="text-gray-500 text-sm">No supporters found. Grant status above.</p>
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-4">
           {filtered.map((s, i) => (
-            <div key={s.id} className={`bg-white border rounded-xl p-4 transition-all ${s.active?'border-purple-100 shadow-sm':'border-gray-200 opacity-60'}`}>
+            <div key={s.id} className={`bg-white border rounded-xl p-5 transition-all ${s.active?'border-purple-100 shadow-sm':'border-gray-200 opacity-60'}`}>
               <div className="flex items-start gap-4">
                 {/* Logo / avatar */}
                 <div className="flex-shrink-0">
@@ -475,21 +494,21 @@ export default function AdminSupporters() {
                 </div>
 
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-start justify-between gap-2">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                      <div className="flex items-center gap-2 mb-0.5">
+                      <div className="flex flex-wrap items-center gap-2 mb-1.5">
                         {s.is_pinned && <span className="text-yellow-500 text-xs">📌</span>}
                         <p className="font-bold text-gray-900">{s.profile_name}</p>
                         {s.supporter_level && (
-                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${levelColour(s.supporter_level)}`}>
+                          <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${levelColour(s.supporter_level)}`}>
                             {s.supporter_level}
                           </span>
                         )}
-                        {!s.active && <span className="text-xs text-red-600 bg-red-50 px-2 py-0.5 rounded-full">Revoked</span>}
+                        {!s.active && <span className="text-xs text-red-600 bg-red-50 px-2.5 py-1 rounded-full">Revoked</span>}
                       </div>
-                      {s.headline && <p className="text-sm text-purple-700 font-medium">{s.headline}</p>}
-                      {s.body_text && <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{s.body_text}</p>}
-                      <div className="flex items-center gap-3 mt-1">
+                      {s.headline && <p className="text-sm text-purple-700 font-medium mt-0.5">{s.headline}</p>}
+                      {s.body_text && <p className="text-xs text-gray-500 mt-1.5 line-clamp-2">{s.body_text}</p>}
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2">
                         {s.website_url && (
                           <a href={s.website_url} target="_blank" rel="noopener noreferrer"
                             className="text-xs text-blue-600 hover:underline truncate max-w-[200px]">
@@ -501,14 +520,14 @@ export default function AdminSupporters() {
                       </div>
                     </div>
 
-                    <div className="flex gap-1.5 flex-wrap flex-shrink-0">
+                    <div className="flex gap-2 flex-wrap flex-shrink-0">
                       <button onClick={() => openEdit(s)}
-                        className="text-xs px-2 py-1 rounded border border-gray-300 hover:bg-gray-100 text-gray-600">Edit</button>
+                        className="text-xs px-2.5 py-1.5 rounded-md border border-gray-300 hover:bg-gray-100 text-gray-600">Edit</button>
                       <button onClick={() => togglePin(s.id, s.is_pinned)}
-                        className={`text-xs px-2 py-1 rounded border transition-colors ${s.is_pinned?'border-yellow-300 bg-yellow-50 text-yellow-700':'border-gray-300 hover:bg-gray-100 text-gray-600'}`}>
+                        className={`text-xs px-2.5 py-1.5 rounded-md border transition-colors ${s.is_pinned?'border-yellow-300 bg-yellow-50 text-yellow-700':'border-gray-300 hover:bg-gray-100 text-gray-600'}`}>
                         {s.is_pinned?'Unpin':'Pin'}</button>
                       <button onClick={() => toggleActive(s.id, s.profile_name, s.active)}
-                        className={`text-xs px-2 py-1 rounded border transition-colors ${s.active?'border-red-200 text-red-600 hover:bg-red-50':'border-green-200 text-green-700 hover:bg-green-50'}`}>
+                        className={`text-xs px-2.5 py-1.5 rounded-md border transition-colors ${s.active?'border-red-200 text-red-600 hover:bg-red-50':'border-green-200 text-green-700 hover:bg-green-50'}`}>
                         {s.active?'Revoke':'Restore'}</button>
                     </div>
                   </div>
