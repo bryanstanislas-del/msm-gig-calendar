@@ -153,6 +153,7 @@ import AdminFeatured    from './components/admin/AdminFeatured';
 import AdminEditorial   from './components/admin/AdminEditorial';
 import AdminSupporters  from './components/admin/AdminSupporters';
 import AdminHallOfFame  from './components/admin/AdminHallOfFame';
+import AdminFestivals   from './components/admin/AdminFestivals';
 import ClaimDirectoryPage from './components/ClaimDirectoryPage';
 
 // ── DB abstraction (mock or real) ──────────────────────────────────
@@ -517,6 +518,23 @@ const DB = {
       .from("gigs")
       .select("*")
       .eq("venue_id", venueId)
+      .eq("status", "approved")
+      .order("date", { ascending: true });
+    if (error) return [];
+    return data;
+  },
+
+  // Public Lineup / Performances section on a festival profile. Reads
+  // gigs.festival_profile_id -- independent of band_profile_id (the
+  // performing artist) -- so this never touches or depends on the older
+  // "festival name as the gig's own band_name" pattern some legacy gigs
+  // still use.
+  async getGigsByFestival(festivalProfileId) {
+    if (USE_MOCK) return [];
+    const { data, error } = await supabase
+      .from("gigs")
+      .select("*")
+      .eq("festival_profile_id", festivalProfileId)
       .eq("status", "approved")
       .order("date", { ascending: true });
     if (error) return [];
@@ -1029,19 +1047,36 @@ export const EditorialAwardStrip = ({ awards, style={} }) => {
 };
 
 // Fuller card used inside the MSM Coverage section: image, award type,
-// headline, date and a clear Read Review button through to the full
-// article on musicscenemagazine.co.uk (review_url). Never renders
-// body_text as a substitute for the WordPress article.
+// headline, date and a clear link through to the full article on
+// musicscenemagazine.co.uk (review_url). Never renders body_text as a
+// substitute for the WordPress article.
+//
+// When a review_url is present, the ENTIRE card is clickable (not just a
+// small button) -- this is a system-wide behaviour driven purely by
+// whether this specific award row has a URL, so it applies identically to
+// every award type (Record of the Week, MSM Essential Artist, MSM
+// Feature, Editor's Choice, MSM Recommended, Hall of Fame) with no
+// per-type or per-artist special-casing. When review_url is absent, the
+// card renders as a plain (non-clickable) div exactly as before -- no
+// dead/empty links.
 const EditorialCoverageCard = ({ award }) => {
   const type  = award.editorial_award_types || {};
   const color = awardColor(type);
   const image = award.image_url || type.image_url;
-  return (
-    <div style={{
-      display:"flex", gap:16, padding:18, background:C.surface,
-      border:`1px solid ${C.border}`, borderLeft:`3px solid ${color}`,
-      borderRadius:8, flexWrap:"wrap",
-    }}>
+  const hasLink = !!award.review_url;
+  const [hover, setHover] = useState(false);
+
+  const cardStyle = {
+    display:"flex", gap:16, padding:18, background:C.surface,
+    border:`1px solid ${hover && hasLink ? color : C.border}`, borderLeft:`3px solid ${color}`,
+    borderRadius:8, flexWrap:"wrap",
+    textDecoration:"none", color:"inherit",
+    transition:"border-color 0.15s",
+    cursor: hasLink ? "pointer" : "default",
+  };
+
+  const content = (
+    <>
       {image && (
         <img src={image} alt={award.image_alt || type.label || ""}
           style={{ width:72, height:72, borderRadius:6, objectFit:"cover", flexShrink:0 }}
@@ -1057,14 +1092,27 @@ const EditorialCoverageCard = ({ award }) => {
             {award.headline}
           </div>
         )}
-        {award.review_url && (
-          <a href={award.review_url} target="_blank" rel="noopener noreferrer"
-            style={{ display:"inline-block", marginTop:4, padding:"8px 16px", background:color, color:"#fff", textDecoration:"none", borderRadius:5, fontFamily:F.display, fontSize:11, letterSpacing:2 }}
-          >READ REVIEW →</a>
+        {hasLink && (
+          <span style={{ display:"inline-block", marginTop:4, padding:"8px 16px", background:color, color:"#fff", borderRadius:5, fontFamily:F.display, fontSize:11, letterSpacing:2 }}>
+            READ REVIEW →
+          </span>
         )}
       </div>
-    </div>
+    </>
   );
+
+  if (hasLink) {
+    return (
+      <a href={award.review_url} target="_blank" rel="noopener noreferrer"
+        style={cardStyle}
+        onMouseEnter={()=>setHover(true)} onMouseLeave={()=>setHover(false)}
+      >
+        {content}
+      </a>
+    );
+  }
+
+  return <div style={cardStyle}>{content}</div>;
 };
 
 // Small uppercase sub-heading used to separate Current Recognition from
@@ -1783,6 +1831,9 @@ function AdminPanel({ allGigs, onRefresh, bands=[] }) {
   const [editForm, setEditForm] = useState({});
   const [saving,  setSaving]  = useState(false);
   const [editMsg, setEditMsg] = useState("");
+  const [festivalOptions, setFestivalOptions] = useState([]); // for "Part of a festival?" picker
+
+  useEffect(() => { DB.getFestivals(true).then(setFestivalOptions); }, []);
 
   const visible = allGigs.filter(g => filter === "all" ? true : g.status === filter);
   const counts  = { all:allGigs.length, pending:allGigs.filter(g=>g.status==="pending").length, approved:allGigs.filter(g=>g.status==="approved").length, rejected:allGigs.filter(g=>g.status==="rejected").length };
@@ -1820,6 +1871,7 @@ function AdminPanel({ allGigs, onRefresh, bands=[] }) {
       poster_url:   g.poster_url   || "",
       featured:     g.featured     || false,
       spotify:      g.spotify      || "",
+      festival_profile_id: g.festival_profile_id || "",
     });
     setEditMsg("");
   };
@@ -1834,7 +1886,7 @@ function AdminPanel({ allGigs, onRefresh, bands=[] }) {
         extra.band_profile_id = bp?.[0]?.id || null;
       }
       // venue_id handled by trigger on venue/city update
-      await DB.updateGig(editing.id, { ...editForm, ...extra });
+      await DB.updateGig(editing.id, { ...editForm, ...extra, festival_profile_id: editForm.festival_profile_id || null });
       await logActivity("gig_edited", "gig", editForm.band_name, editing.id);
       setEditMsg("✓ Gig updated");
       await onRefresh();
@@ -1872,6 +1924,13 @@ function AdminPanel({ allGigs, onRefresh, bands=[] }) {
           <div style={{ gridColumn:"1/-1" }}><Input label="TICKET LINK" type="url" value={editForm.tickets} onChange={e=>setEditForm(f=>({...f,tickets:e.target.value}))} placeholder="https://..." /></div>
           <div style={{ gridColumn:"1/-1" }}><Input label="POSTER URL"  type="url" value={editForm.poster_url} onChange={e=>setEditForm(f=>({...f,poster_url:e.target.value}))} placeholder="https://..." /></div>
           <div style={{ gridColumn:"1/-1" }}><Input label="SPOTIFY URL" type="url" value={editForm.spotify} onChange={e=>setEditForm(f=>({...f,spotify:e.target.value}))} placeholder="https://open.spotify.com/artist/..." /></div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <Select label="PART OF A FESTIVAL? (OPTIONAL)" value={editForm.festival_profile_id}
+              onChange={e=>setEditForm(f=>({...f,festival_profile_id:e.target.value}))}
+              options={[{value:"",label:"— Not part of a festival —"}, ...festivalOptions.map(fe=>({value:fe.id,label:fe.band_name}))]}
+            />
+            <div style={{ fontSize:11, color:C.dim, marginTop:4 }}>Independent of the performing artist above — a gig can have both.</div>
+          </div>
           <div style={{ gridColumn:"1/-1" }}>
             <label style={{ display:"block", fontSize:13, color:C.white, letterSpacing:2, marginBottom:6, fontFamily:F.display }}>NOTES</label>
             <textarea value={editForm.notes} onChange={e=>setEditForm(f=>({...f,notes:e.target.value}))} rows={3} style={{ ...inputCss, resize:"vertical" }} />
@@ -2514,7 +2573,7 @@ function AdminDashboard({ bands, festivals=[], allGigs, venues, onNav, onEditGig
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(150px,1fr))", gap:12, marginBottom:24 }}>
         {/* FIX 2: Count uses profile_type to separate bands from festivals */}
         <StatCard icon="🎸" label="TOTAL BANDS"     val={bands.filter(b=>!b.disabled).length}   color={C.red}   onClick={()=>onNav("bands")}  sub={`${disabledBands.length} disabled`} />
-        <StatCard icon="🎪" label="TOTAL FESTIVALS"  val={festivals ? festivals.filter(f=>!f.disabled).length : 0} color="#9b5de5" sub="festival profiles" />
+        <StatCard icon="🎪" label="TOTAL FESTIVALS"  val={festivals ? festivals.filter(f=>!f.disabled).length : 0} color="#9b5de5" onClick={()=>onNav("festivals")} sub="festival profiles" />
         <StatCard icon="📍" label="TOTAL VENUES" val={venues.length}  color={C.amber} onClick={()=>onNav("venues")} sub={`${incompleteVenues.length} need info`} />
         <StatCard icon="📅" label="TOTAL GIGS"   val={allGigs.length} color={C.red}   sub={`${approvedGigs.length} approved`} />
         <StatCard icon="⏳" label="PENDING"       val={pendingGigs.length}
@@ -3424,6 +3483,7 @@ function GigDetailPage() {
   const [gig,      setGig]      = useState(null);
   const [band,     setBand]     = useState(null);
   const [venue,    setVenue]    = useState(null);
+  const [festival, setFestival] = useState(null);
   const [venueGigs,setVenueGigs]= useState([]);
   const [prevNext, setPrevNext] = useState({ prev:null, next:null });
   const [awards,   setAwards]   = useState([]);
@@ -3467,12 +3527,15 @@ function GigDetailPage() {
       // single call (getActiveAwards de-dupes internally) so a gig with
       // its own award and an artist with their own award never double up,
       // and this doesn't need to wait for the band/venue fetch above.
-      const [bandData, venueData, pn, aw] = await Promise.all([
+      const [bandData, venueData, festivalData, pn, aw] = await Promise.all([
         g.band_profile_id
           ? supabase.from("profiles").select("*").eq("id", g.band_profile_id).then(r => r.data?.[0] || null)
           : Promise.resolve(null),
         g.venue_id
           ? supabase.from("venues").select("*").eq("id", g.venue_id).then(r => r.data?.[0] || null)
+          : Promise.resolve(null),
+        g.festival_profile_id
+          ? supabase.from("profiles").select("*").eq("id", g.festival_profile_id).then(r => r.data?.[0] || null)
           : Promise.resolve(null),
         DB.getPrevNextGigs(g.date, g.time, g.id),
         DB.getActiveAwards({ profileId: g.band_profile_id || null, gigId: g.id }),
@@ -3480,6 +3543,7 @@ function GigDetailPage() {
 
       setBand(bandData);
       setVenue(venueData);
+      setFestival(festivalData);
       setPrevNext(pn);
       setAwards(aw);
 
@@ -3605,6 +3669,15 @@ function GigDetailPage() {
             <span>📍 {gig.venue}, {gig.city}</span>
             <span>🕐 {gig.time}</span>
           </div>
+          {festival?.band_slug && (
+            <div style={{ marginBottom:20 }}>
+              <Link to={`/festival/${festival.band_slug}`}
+                style={{ fontSize:13, color:C.muted, textDecoration:"none", border:`1px solid ${C.border}`, borderRadius:5, padding:"6px 12px", display:"inline-flex", alignItems:"center", gap:6 }}
+                onMouseEnter={e=>e.currentTarget.style.color=C.white}
+                onMouseLeave={e=>e.currentTarget.style.color=C.muted}
+              >🎪 Part of {festival.band_name}</Link>
+            </div>
+          )}
           {/* Action buttons */}
           <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
             {gig.tickets && (
@@ -4392,6 +4465,7 @@ function FestivalProfilePage() {
   const navigate    = useNavigate();
   const [entity,    setEntity]  = useState(null);
   const [awards,    setAwards]  = useState([]);
+  const [lineup,    setLineup]  = useState([]);
   const [loading,   setLoading] = useState(true);
 
   useEffect(() => {
@@ -4400,7 +4474,17 @@ function FestivalProfilePage() {
       const b = await DB.getBandBySlug(slug);
       const e = b && b.profile_type === "festival" ? b : null;
       setEntity(e);
-      setAwards(e ? await DB.getActiveAwards({ profileId: e.id }) : []);
+      if (e) {
+        const [aw, lu] = await Promise.all([
+          DB.getActiveAwards({ profileId: e.id }),
+          DB.getGigsByFestival(e.id),
+        ]);
+        setAwards(aw);
+        setLineup(lu);
+      } else {
+        setAwards([]);
+        setLineup([]);
+      }
       setLoading(false);
     }
     load();
@@ -4455,7 +4539,15 @@ function FestivalProfilePage() {
           </div>
           <EditorialAwardStrip awards={awards} style={{ marginBottom:14 }} />
           <div style={{ display:"flex", gap:16, alignItems:"center", flexWrap:"wrap", marginBottom:20 }}>
-            {entity.city && <span style={{ fontSize:15, color:"#cccccc" }}>📍 {entity.city}</span>}
+            {(entity.festival_start_date || entity.festival_end_date) && (
+              <span style={{ fontSize:15, color:"#cccccc" }}>
+                📅 {fmtDate(entity.festival_start_date)}{entity.festival_end_date && entity.festival_end_date !== entity.festival_start_date ? ` – ${fmtDate(entity.festival_end_date)}` : ""}
+              </span>
+            )}
+            {entity.city && <span style={{ fontSize:15, color:"#cccccc" }}>📍 {entity.city}{entity.postcode ? `, ${entity.postcode}` : ""}</span>}
+            {entity.what3words && (
+              <span style={{ fontSize:13, color:C.muted }}>///{entity.what3words.replace(/^\/+/, "")}</span>
+            )}
             <ClaimStatusBadge claimStatus={entity.claim_status} entityType="festival" />
           </div>
           {socialLinks.length > 0 && (
@@ -4482,6 +4574,34 @@ function FestivalProfilePage() {
             <div style={{ fontSize:16, color:"#dddddd", lineHeight:1.8, maxWidth:700 }}>{entity.bio}</div>
           </div>
         )}
+
+        {/* Lineup / Performances -- gigs linked via festival_profile_id */}
+        {lineup.length > 0 && (
+          <div style={{ marginBottom:48 }}>
+            <SectionLabel>LINEUP</SectionLabel>
+            <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+              {lineup.map(g => (
+                <div key={g.id}
+                  onClick={()=>navigate(`/gig/${g.slug}`)}
+                  style={{
+                    display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10,
+                    padding:"14px 16px", background:C.surface, border:`1px solid ${C.border}`, borderRadius:8,
+                    cursor: g.slug ? "pointer" : "default",
+                  }}
+                >
+                  <div>
+                    <div style={{ fontSize:16, color:C.white, fontWeight:600 }}>{g.band_name}</div>
+                    <div style={{ fontSize:13, color:C.muted, marginTop:2 }}>{g.venue}{g.city ? `, ${g.city}` : ""}</div>
+                  </div>
+                  <div style={{ fontSize:13, color:color, fontFamily:F.display, letterSpacing:1 }}>
+                    {fmtDate(g.date)}{g.time ? ` · ${g.time}` : ""}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* MSM Coverage -- Editorial Awards (Stage 4) */}
         <MSMCoverageSection awards={awards} subjectLabel={entity.band_name} />
 
@@ -6093,6 +6213,7 @@ function MainApp() {
       { id:"editorial",     label:"EDITORIAL" },
       { id:"supporters",    label:"SUPPORTERS" },
       { id:"hall-of-fame",  label:"HALL OF FAME" },
+      { id:"festivals",     label:"FESTIVALS" },
     ] : []),
   ];
 
@@ -6212,6 +6333,11 @@ function MainApp() {
         {/* HALL OF FAME */}
         {tab==="hall-of-fame" && isAdmin && (
           <AdminHallOfFame />
+        )}
+
+        {/* FESTIVALS */}
+        {tab==="festivals" && isAdmin && (
+          <AdminFestivals />
         )}
 
         {/* MY PROFILE */}
