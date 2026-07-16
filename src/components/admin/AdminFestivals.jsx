@@ -169,6 +169,8 @@ export default function AdminFestivals() {
   const [editItem, setEditItem]   = useState(null);
   const [saving, setSaving]       = useState(false);
   const [toast, setToast]         = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null); // festival pending confirmation
+  const [deleting, setDeleting]         = useState(false); // guards against double submission
 
   const showToast = (msg, type='success') => { setToast({msg,type}); setTimeout(()=>setToast(null),4000); };
 
@@ -224,6 +226,50 @@ export default function AdminFestivals() {
   };
 
   const openEdit = (f) => { setEditItem(f); setShowForm(true); };
+
+  // Deletion is intentionally NOT cascaded onto gigs. gigs.festival_profile_id
+  // has no ON DELETE CASCADE/SET NULL at the database level (confirmed by
+  // inspecting the live foreign key: confdeltype = 'a', i.e. NO ACTION) --
+  // Postgres itself will reject the delete if any gig still references this
+  // festival that way. gigs.band_profile_id, however, IS ON DELETE SET NULL
+  // -- which matters here because the 2 pre-existing legacy gigs (from
+  // before this feature existed) link to their festival via band_profile_id,
+  // not festival_profile_id. That FK would silently null the link rather
+  // than block deletion, so both columns are checked here proactively --
+  // the DB constraint alone isn't enough to protect the legacy pattern.
+  const confirmDelete = async () => {
+    if (!deleteTarget || deleting) return;
+    setDeleting(true);
+    try {
+      const { count, error: countError } = await supabase
+        .from('gigs')
+        .select('id', { count: 'exact', head: true })
+        .or(`festival_profile_id.eq.${deleteTarget.id},band_profile_id.eq.${deleteTarget.id}`);
+      if (countError) throw countError;
+
+      if (count > 0) {
+        showToast(
+          `Cannot delete "${deleteTarget.band_name}" — it is still linked to ${count} gig${count!==1?'s':''}. Unlink or reassign ${count!==1?'those gigs':'that gig'} first, then try again.`,
+          'error'
+        );
+        setDeleteTarget(null);
+        return;
+      }
+
+      const { error: deleteError } = await supabase.from('profiles').delete().eq('id', deleteTarget.id);
+      if (deleteError) throw deleteError;
+
+      showToast(`"${deleteTarget.band_name}" deleted.`);
+      setFestivals(fs => fs.filter(f => f.id !== deleteTarget.id)); // instant UI update
+      setDeleteTarget(null);
+      await load(); // resync with server
+    } catch(e) {
+      showToast(e.message, 'error');
+      setDeleteTarget(null);
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   const toForm = (f) => ({
     band_name:           f.band_name || '',
@@ -312,6 +358,7 @@ export default function AdminFestivals() {
                       </div>
                       <div style={{ display:'flex', gap:8, flexShrink:0 }}>
                         <SmallActionButton onClick={() => openEdit(f)}>Edit</SmallActionButton>
+                        <SmallActionButton tone="danger" onClick={() => setDeleteTarget(f)}>Delete</SmallActionButton>
                         {f.band_slug && (
                           <SmallActionButton tone="accent" accent={ACCENT} onClick={() => window.open(`/festival/${f.band_slug}`, '_blank', 'noopener,noreferrer')}>
                             View page ↗
@@ -326,6 +373,35 @@ export default function AdminFestivals() {
           </div>
         )}
       </ResultsPanel>
+
+      {deleteTarget && (
+        <div
+          style={{
+            position:'fixed', inset:0, background:'rgba(0,0,0,0.6)',
+            display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000, padding:20,
+          }}
+          onClick={() => !deleting && setDeleteTarget(null)}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background:'#141414', border:'1px solid rgba(248,113,113,0.4)', borderTop:'3px solid #f87171',
+              borderRadius:16, padding:28, maxWidth:440, width:'100%', boxShadow:'0 8px 30px rgba(0,0,0,0.5)',
+            }}
+          >
+            <h3 style={{ fontSize:18, fontWeight:700, color:'#fff', margin:'0 0 14px' }}>Delete festival?</h3>
+            <p style={{ fontSize:14, color:'#cfcfcf', lineHeight:1.6, margin:'0 0 24px' }}>
+              Are you sure you want to delete "{deleteTarget.band_name}"? This action cannot be undone.
+            </p>
+            <div style={{ display:'flex', gap:14 }}>
+              <PrimaryButton accent="#f87171" onClick={confirmDelete} disabled={deleting}>
+                {deleting ? 'Deleting…' : 'Delete festival'}
+              </PrimaryButton>
+              <SecondaryButton onClick={() => setDeleteTarget(null)} disabled={deleting}>Cancel</SecondaryButton>
+            </div>
+          </div>
+        </div>
+      )}
     </AdminPage>
   );
 }
