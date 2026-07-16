@@ -38,6 +38,7 @@ export const ACCENTS = {
   featured:   '#fbbf24', // amber  -- Featured Listings (commercial)
   hallOfFame: '#eab308', // gold   -- MSM Hall of Fame
   supporters: '#a78bfa', // violet -- Founding Supporters
+  festivals:  '#22d3ee', // cyan   -- Festivals
 };
 
 const hex2rgba = (hex, alpha) => {
