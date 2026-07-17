@@ -31,7 +31,7 @@ export default async function handler(req, res) {
           <p style="margin:4px 0 0;color:#fff;font-size:16px;font-weight:bold;">${email}</p>
         </div>
         <div style="margin-top:24px;">
-          <a href="https://msm-gig-calendar.vercel.app" style="background:#e8203a;color:#fff;padding:12px 24px;border-radius:5px;text-decoration:none;font-weight:bold;">
+          <a href="https://calendar.musicscenemagazine.co.uk" style="background:#e8203a;color:#fff;padding:12px 24px;border-radius:5px;text-decoration:none;font-weight:bold;">
             VIEW BAND DIRECTORY →
           </a>
         </div>
@@ -57,7 +57,7 @@ export default async function handler(req, res) {
           ${notes   ? `<tr><td style="padding:8px 0;color:#888;">Notes</td><td style="padding:8px 0;color:#fff;">${notes}</td></tr>` : ""}
         </table>
         <div style="margin-top:32px;padding-top:20px;border-top:1px solid #333;">
-          <a href="https://msm-gig-calendar.vercel.app" style="background:#e8203a;color:#fff;padding:12px 24px;border-radius:5px;text-decoration:none;font-weight:bold;">
+          <a href="https://calendar.musicscenemagazine.co.uk" style="background:#e8203a;color:#fff;padding:12px 24px;border-radius:5px;text-decoration:none;font-weight:bold;">
             GO TO ADMIN PANEL →
           </a>
         </div>
