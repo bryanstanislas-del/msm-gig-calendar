@@ -50,11 +50,21 @@ function isCrawler(ua) {
   return /facebookexternalhit|Twitterbot|LinkedInBot|WhatsApp|Slackbot|TelegramBot|Discordbot|Pinterest|Googlebot|bingbot/i.test(ua || "");
 }
 
+// JSON.stringify handles all escaping of the data itself; the extra
+// </script> -> \u003c/script> style escape here guards specifically
+// against a data value prematurely closing the surrounding <script> tag
+// once this is embedded in an HTML string (an HTML-parsing hazard, not a
+// JSON one -- JSON.stringify alone doesn't protect against it).
+function jsonLdScriptTag(data) {
+  const json = JSON.stringify(data).replace(/</g, "\\u003c");
+  return `<script type="application/ld+json">${json}</script>`;
+}
+
 // Crawler-facing HTML only -- deliberately NO <meta http-equiv="refresh">
 // here (unlike the old version of this file). A refresh back to the
 // canonical URL would loop, since the canonical URL for band/venue/
 // festival is the exact path this handler is reached from.
-function buildHtml({ title, description, url, image }) {
+function buildHtml({ title, description, url, image, jsonLd }) {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -79,6 +89,7 @@ function buildHtml({ title, description, url, image }) {
   <meta name="twitter:image"       content="${escapeHtml(image)}">
 
   <link rel="canonical" href="${escapeHtml(url)}">
+  ${jsonLd || ""}
 </head>
 <body>
   <p><a href="${escapeHtml(url)}">${escapeHtml(title)}</a></p>
@@ -154,11 +165,30 @@ module.exports = async function handler(req, res) {
         data.notes ? data.notes : "",
         `Find gig details, band info and tickets on Music Scene Magazine.`,
       ].filter(Boolean).join(" ");
+      const image = data.poster_url || FALLBACK_IMAGE;
+
+      const jsonLdData = {
+        "@context": "https://schema.org",
+        "@type": "MusicEvent",
+        name: `${data.band_name} at ${data.venue}`,
+        startDate: (data.time && /^\d{2}:\d{2}$/.test(data.time)) ? `${data.date}T${data.time}:00` : data.date,
+        eventStatus: "https://schema.org/EventScheduled",
+        eventAttendanceMode: "https://schema.org/OfflineEventAttendanceMode",
+        url: canonicalUrl,
+        location: {
+          "@type": "MusicVenue",
+          name: data.venue,
+          ...(data.city ? { address: { "@type": "PostalAddress", addressLocality: data.city } } : {}),
+        },
+        performer: { "@type": "MusicGroup", name: data.band_name },
+      };
+      if (data.notes) jsonLdData.description = data.notes;
+      if (data.poster_url) jsonLdData.image = data.poster_url;
 
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate");
       return res.status(200).send(buildHtml({
-        title, description, url: canonicalUrl, image: data.poster_url || FALLBACK_IMAGE,
+        title, description, url: canonicalUrl, image, jsonLd: jsonLdScriptTag(jsonLdData),
       }));
     }
 
@@ -169,7 +199,7 @@ module.exports = async function handler(req, res) {
     if (type === "band") {
       const { data, error } = await supabase
         .from("profiles")
-        .select("band_name, city, bio, photo_url, band_slug, profile_type")
+        .select("band_name, city, bio, photo_url, band_slug, profile_type, primary_genre, genre, website, facebook, instagram, twitter, tiktok_url")
         .eq("band_slug", slug)
         .in("profile_type", ["band", "solo_artist"])
         .single();
@@ -181,11 +211,27 @@ module.exports = async function handler(req, res) {
       const description  = data.bio
         ? data.bio.slice(0, 200) + (data.bio.length > 200 ? "…" : "")
         : `${data.band_name}${data.city ? ` from ${data.city}` : ""}. Find upcoming gigs and more on Music Scene Magazine.`;
+      const image = data.photo_url || FALLBACK_IMAGE;
+
+      // Person for a genuine solo artist, MusicGroup otherwise -- never
+      // decided by the old `role` column.
+      const sameAs = [data.website, data.facebook, data.instagram, data.twitter, data.tiktok_url].filter(Boolean);
+      const jsonLdData = {
+        "@context": "https://schema.org",
+        "@type": data.profile_type === "solo_artist" ? "Person" : "MusicGroup",
+        name: data.band_name,
+        url: canonicalUrl,
+      };
+      if (data.bio) jsonLdData.description = data.bio;
+      if (data.photo_url) jsonLdData.image = data.photo_url;
+      const genre = data.primary_genre || data.genre;
+      if (genre) jsonLdData.genre = genre;
+      if (sameAs.length) jsonLdData.sameAs = sameAs;
 
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate");
       return res.status(200).send(buildHtml({
-        title, description, url: canonicalUrl, image: data.photo_url || FALLBACK_IMAGE,
+        title, description, url: canonicalUrl, image, jsonLd: jsonLdScriptTag(jsonLdData),
       }));
     }
 
@@ -193,7 +239,7 @@ module.exports = async function handler(req, res) {
     if (type === "venue") {
       const { data, error } = await supabase
         .from("venues")
-        .select("name, city, description, photo_url, slug")
+        .select("name, city, description, photo_url, slug, address, postcode, website, facebook, instagram, twitter")
         .eq("slug", slug)
         .single();
 
@@ -204,11 +250,35 @@ module.exports = async function handler(req, res) {
       const description  = data.description
         ? data.description.slice(0, 200)
         : `${data.name} in ${data.city}. See upcoming gigs and events on Music Scene Magazine.`;
+      const image = data.photo_url || FALLBACK_IMAGE;
+
+      // MusicVenue is a genuine, current schema.org type (Thing > Place >
+      // CivicStructure > MusicVenue), verified before use.
+      const sameAs = [data.website, data.facebook, data.instagram, data.twitter].filter(Boolean);
+      const jsonLdData = {
+        "@context": "https://schema.org",
+        "@type": "MusicVenue",
+        name: data.name,
+        url: canonicalUrl,
+      };
+      if (data.description) jsonLdData.description = data.description;
+      if (data.photo_url) jsonLdData.image = data.photo_url;
+      // Address built only from fields that actually exist -- never
+      // invented (e.g. no country is stored anywhere, so none is added).
+      if (data.address || data.city || data.postcode) {
+        jsonLdData.address = {
+          "@type": "PostalAddress",
+          ...(data.address  ? { streetAddress:   data.address }  : {}),
+          ...(data.city     ? { addressLocality: data.city }     : {}),
+          ...(data.postcode ? { postalCode:      data.postcode } : {}),
+        };
+      }
+      if (sameAs.length) jsonLdData.sameAs = sameAs;
 
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate");
       return res.status(200).send(buildHtml({
-        title, description, url: canonicalUrl, image: data.photo_url || FALLBACK_IMAGE,
+        title, description, url: canonicalUrl, image, jsonLd: jsonLdScriptTag(jsonLdData),
       }));
     }
 
@@ -216,7 +286,7 @@ module.exports = async function handler(req, res) {
     if (type === "festival") {
       const { data, error } = await supabase
         .from("profiles")
-        .select("band_name, city, postcode, bio, photo_url, band_slug, festival_start_date, festival_end_date")
+        .select("band_name, city, postcode, bio, photo_url, band_slug, festival_start_date, festival_end_date, website, facebook, instagram, twitter, tiktok_url")
         .eq("band_slug", slug)
         .eq("profile_type", "festival")
         .single();
@@ -236,11 +306,38 @@ module.exports = async function handler(req, res) {
       const description = data.bio
         ? data.bio.slice(0, 200) + (data.bio.length > 200 ? "…" : "")
         : `${data.band_name}${dateRange ? `, ${dateRange}` : ""}${locationBits ? ` at ${locationBits}` : ""}. Find festival details and line-up on Music Scene Magazine.`;
+      const image = data.photo_url || FALLBACK_IMAGE;
+
+      // Festival is a genuine, current schema.org type (subtype of
+      // Event), verified before use -- not assumed.
+      const sameAs = [data.website, data.facebook, data.instagram, data.twitter, data.tiktok_url].filter(Boolean);
+      const jsonLdData = {
+        "@context": "https://schema.org",
+        "@type": "Festival",
+        name: data.band_name,
+        url: canonicalUrl,
+      };
+      if (data.festival_start_date) jsonLdData.startDate = data.festival_start_date;
+      if (data.festival_end_date)   jsonLdData.endDate   = data.festival_end_date;
+      if (data.bio) jsonLdData.description = data.bio;
+      if (data.photo_url) jsonLdData.image = data.photo_url;
+      if (data.city || data.postcode) {
+        jsonLdData.location = {
+          "@type": "Place",
+          name: data.band_name,
+          address: {
+            "@type": "PostalAddress",
+            ...(data.city     ? { addressLocality: data.city }     : {}),
+            ...(data.postcode ? { postalCode:      data.postcode } : {}),
+          },
+        };
+      }
+      if (sameAs.length) jsonLdData.sameAs = sameAs;
 
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate");
       return res.status(200).send(buildHtml({
-        title, description, url: canonicalUrl, image: data.photo_url || FALLBACK_IMAGE,
+        title, description, url: canonicalUrl, image, jsonLd: jsonLdScriptTag(jsonLdData),
       }));
     }
 
