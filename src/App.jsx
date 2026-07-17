@@ -841,6 +841,124 @@ function resetPageMeta() {
     if (el) el.remove();
   });
 }
+
+// Shared client-side Schema.org JSON-LD management -- one identifiable
+// <script id="msm-jsonld"> element, found-or-created and never
+// duplicated. Its content is fully replaced (not appended) on every call,
+// so navigating between profiles can never accumulate stale blocks, and
+// removeJsonLd() (called from every page's cleanup, alongside
+// resetPageMeta()) deletes it entirely when navigating away.
+function applyJsonLd(data) {
+  let el = document.getElementById("msm-jsonld");
+  if (!el) {
+    el = document.createElement("script");
+    el.type = "application/ld+json";
+    el.id = "msm-jsonld";
+    document.head.appendChild(el);
+  }
+  // textContent (not innerHTML) is used deliberately -- the browser never
+  // HTML-parses it, so a literal "</script>" inside a data value poses no
+  // injection risk here, unlike the server-rendered HTML-string case in
+  // api/og.js / api/gig.js, which needs its own separate escaping.
+  el.textContent = JSON.stringify(data);
+}
+function removeJsonLd() {
+  const el = document.getElementById("msm-jsonld");
+  if (el) el.remove();
+}
+
+// Entity-to-JSON-LD builders, deliberately mirroring api/og.js / api/gig.js
+// field-for-field so crawler and human-facing structured data describe
+// the same entity consistently. Never fabricates a property that isn't
+// actually present in the loaded data.
+function buildArtistJsonLd(b) {
+  const canonicalUrl = `${BASE_URL}/artist/${b.band_slug}`;
+  const sameAs = [b.website, b.facebook, b.instagram, b.twitter, b.tiktok_url].filter(Boolean);
+  const data = {
+    "@context": "https://schema.org",
+    "@type": b.profile_type === "solo_artist" ? "Person" : "MusicGroup",
+    name: b.band_name,
+    url: canonicalUrl,
+  };
+  if (b.bio) data.description = b.bio;
+  if (b.photo_url) data.image = b.photo_url;
+  const genre = b.primary_genre || b.genre;
+  if (genre) data.genre = genre;
+  if (sameAs.length) data.sameAs = sameAs;
+  return data;
+}
+function buildVenueJsonLd(v) {
+  const canonicalUrl = `${BASE_URL}/venue/${v.slug}`;
+  const sameAs = [v.website, v.facebook, v.instagram, v.twitter].filter(Boolean);
+  const data = { "@context": "https://schema.org", "@type": "MusicVenue", name: v.name, url: canonicalUrl };
+  if (v.description) data.description = v.description;
+  if (v.photo_url) data.image = v.photo_url;
+  if (v.address || v.city || v.postcode) {
+    data.address = {
+      "@type": "PostalAddress",
+      ...(v.address  ? { streetAddress:   v.address }  : {}),
+      ...(v.city     ? { addressLocality: v.city }     : {}),
+      ...(v.postcode ? { postalCode:      v.postcode } : {}),
+    };
+  }
+  if (sameAs.length) data.sameAs = sameAs;
+  return data;
+}
+function buildFestivalJsonLd(e) {
+  const canonicalUrl = `${BASE_URL}/festival/${e.band_slug}`;
+  const sameAs = [e.website, e.facebook, e.instagram, e.twitter, e.tiktok_url].filter(Boolean);
+  const data = { "@context": "https://schema.org", "@type": "Festival", name: e.band_name, url: canonicalUrl };
+  if (e.festival_start_date) data.startDate = e.festival_start_date;
+  if (e.festival_end_date)   data.endDate   = e.festival_end_date;
+  if (e.bio) data.description = e.bio;
+  if (e.photo_url) data.image = e.photo_url;
+  if (e.city || e.postcode) {
+    data.location = {
+      "@type": "Place",
+      name: e.band_name,
+      address: {
+        "@type": "PostalAddress",
+        ...(e.city     ? { addressLocality: e.city }     : {}),
+        ...(e.postcode ? { postalCode:      e.postcode } : {}),
+      },
+    };
+  }
+  if (sameAs.length) data.sameAs = sameAs;
+  return data;
+}
+// MusicGroup covers a solo musician too (schema.org's own definition:
+// "such as a band, an orchestra, or a choir... can also be a solo
+// musician"), so the gig's performer sub-object doesn't need to know
+// band vs solo_artist -- only the artist's own /artist/:slug page does.
+function buildGigJsonLd(g, band, venue) {
+  const canonicalUrl = `${BASE_URL}/gig/${g.slug}`;
+  const isoTime = (g.time && /^\d{2}:\d{2}$/.test(g.time)) ? `${g.date}T${g.time}:00` : g.date;
+  const data = {
+    "@context": "https://schema.org",
+    "@type": "MusicEvent",
+    name: `${g.band_name} at ${g.venue}`,
+    startDate: isoTime,
+    eventStatus: "https://schema.org/EventScheduled",
+    eventAttendanceMode: "https://schema.org/OfflineEventAttendanceMode",
+    url: canonicalUrl,
+    location: {
+      "@type": "MusicVenue",
+      name: g.venue,
+      ...(venue?.slug ? { url: `${BASE_URL}/venue/${venue.slug}` } : {}),
+      ...(g.city ? { address: { "@type": "PostalAddress", addressLocality: g.city } } : {}),
+    },
+    performer: {
+      "@type": "MusicGroup",
+      name: g.band_name,
+      ...(band?.band_slug ? { url: `${BASE_URL}/artist/${band.band_slug}` } : {}),
+    },
+  };
+  if (g.description || g.notes) data.description = g.description || g.notes;
+  if (g.end_date) data.endDate = g.end_date;
+  if (g.poster_url) data.image = g.poster_url;
+  if (g.tickets && /^https?:\/\//i.test(g.tickets)) data.offers = { "@type": "Offer", url: g.tickets };
+  return data;
+}
 // FIX 4: Type-aware completion scoring.
 // Band/solo_artist fields include genre and Spotify (music-specific).
 // Festival, venue, promoter, organisation scored on universal fields only.
@@ -3642,6 +3760,8 @@ function GigDetailPage() {
       setPrevNext(pn);
       setAwards(aw);
 
+      applyJsonLd(buildGigJsonLd(g, bandData, venueData));
+
       // Load other gigs at this venue
       if (g.venue_id) {
         const vg = await DB.getGigsByVenue(g.venue_id);
@@ -3651,7 +3771,7 @@ function GigDetailPage() {
       setLoading(false);
     }
     load();
-    return () => { resetPageMeta(); };
+    return () => { resetPageMeta(); removeJsonLd(); };
   }, [slug]);
 
   if (loading) return (
@@ -4108,6 +4228,7 @@ function VenueProfilePage() {
         canonicalUrl: `${BASE_URL}/venue/${v.slug}`,
         image: v.photo_url || FALLBACK_IMAGE,
       });
+      applyJsonLd(buildVenueJsonLd(v));
       // NOTE: editorial_features.profile_id is FK'd to public.profiles.id
       // only -- venues live in a separate public.venues table with its own
       // id space, and the current Admin Editorial subject-search only
@@ -4124,7 +4245,7 @@ function VenueProfilePage() {
       setLoading(false);
     }
     load();
-    return () => { resetPageMeta(); };
+    return () => { resetPageMeta(); removeJsonLd(); };
   }, [slug]);
 
   if (loading) return (
@@ -4313,6 +4434,7 @@ function BandProfilePage() {
         canonicalUrl: `${BASE_URL}/artist/${b.band_slug}`,
         image: b.photo_url || FALLBACK_IMAGE,
       });
+      applyJsonLd(buildArtistJsonLd(b));
       // Gigs and awards are independent reads once we have the profile id --
       // fetch them in parallel rather than one after the other.
       const [g, aw] = await Promise.all([
@@ -4324,7 +4446,7 @@ function BandProfilePage() {
       setLoading(false);
     }
     load();
-    return () => { resetPageMeta(); };
+    return () => { resetPageMeta(); removeJsonLd(); };
   }, [slug]);
 
   if (loading) return (
@@ -4609,6 +4731,7 @@ function FestivalProfilePage() {
           canonicalUrl: `${BASE_URL}/festival/${e.band_slug}`,
           image: e.photo_url || FALLBACK_IMAGE,
         });
+        applyJsonLd(buildFestivalJsonLd(e));
       } else {
         setAwards([]);
         setLineup([]);
@@ -4616,7 +4739,7 @@ function FestivalProfilePage() {
       setLoading(false);
     }
     load();
-    return () => { resetPageMeta(); };
+    return () => { resetPageMeta(); removeJsonLd(); };
   }, [slug]);
 
   if (loading) return (
