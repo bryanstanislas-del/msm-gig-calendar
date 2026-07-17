@@ -11,6 +11,8 @@
   ],
   "rewrites": [
     { "source": "/api/(.*)",     "destination": "/api/$1" },
+    { "source": "/sitemap.xml",  "destination": "/api/sitemap" },
+    { "source": "/robots.txt",   "destination": "/api/robots" },
     { "source": "/gig/:slug",    "destination": "/api/gig" },
     { "source": "/artist/:slug", "destination": "/api/og?type=band&slug=:slug" },
     { "source": "/venue/:slug",  "destination": "/api/og?type=venue&slug=:slug" },
