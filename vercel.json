@@ -10,10 +10,11 @@
     }
   ],
   "rewrites": [
-    { "source": "/api/(.*)",    "destination": "/api/$1" },
-    { "source": "/gig/:slug",   "destination": "/api/gig" },
-    { "source": "/artist/:slug","destination": "/api/artist" },
-    { "source": "/venue/:slug", "destination": "/api/venue" },
-    { "source": "/(.*)",        "destination": "/index.html" }
+    { "source": "/api/(.*)",     "destination": "/api/$1" },
+    { "source": "/gig/:slug",    "destination": "/api/gig" },
+    { "source": "/artist/:slug", "destination": "/api/og?type=band&slug=:slug" },
+    { "source": "/venue/:slug",  "destination": "/api/og?type=venue&slug=:slug" },
+    { "source": "/festival/:slug","destination": "/api/og?type=festival&slug=:slug" },
+    { "source": "/(.*)",         "destination": "/index.html" }
   ]
 }
