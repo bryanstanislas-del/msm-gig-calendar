@@ -83,6 +83,7 @@ const GENRE_COLORS = {
   "Dance":             "#00e5ff",
   "Electronic":        "#9b5de5",
   "Experimental":      "#78909c",
+  "Festival":          "#22d3ee",
   "Folk":              "#f4a261",
   "Folk Rock":         "#ffb74d",
   "Funk":              "#ff6f00",
@@ -2052,7 +2053,49 @@ function FiltersBar({ gigs, filters, setFilters, onExport }) {
 // ════════════════════════════════════════════════════════════════════
 //  CALENDAR VIEW
 // ════════════════════════════════════════════════════════════════════
+// Maps active, dated festival profiles into the same shape CalendarView/
+// ListView already expect for gigs, WITHOUT ever creating a gigs row.
+// Duplicate suppression against legacy festival-as-gig rows (New Forest
+// Folk Festival, Hampshire Bowman Beer Festival) uses the safest match
+// first: either relationship column pointing at the festival's own
+// profile id (this is exactly how those two legacy rows are already
+// linked -- band_profile_id was set to the festival's own profile id
+// before festival_profile_id existed). Only if no UUID match exists does
+// it fall back to a conservative normalised-name + overlapping-date-range
+// check, so a festival is never silently hidden just because no gig
+// happens to reference it directly.
+const normaliseFestivalName = s => (s||"").toLowerCase().trim().replace(/[^a-z0-9]+/g," ").replace(/\s+/g," ").trim();
+
+function buildFestivalCalendarItems(festivalProfiles, gigs) {
+  return festivalProfiles
+    .filter(f => !f.disabled && f.festival_start_date && f.festival_end_date)
+    .filter(f => {
+      const hasUuidMatch = gigs.some(g => g.festival_profile_id === f.id || g.band_profile_id === f.id);
+      if (hasUuidMatch) return false;
+
+      const fName = normaliseFestivalName(f.band_name);
+      const hasNameDateMatch = gigs.some(g => {
+        if (normaliseFestivalName(g.band_name) !== fName) return false;
+        const gStart = g.date, gEnd = g.end_date || g.date;
+        return gStart <= f.festival_end_date && f.festival_start_date <= gEnd;
+      });
+      return !hasNameDateMatch;
+    })
+    .map(f => ({
+      id: `festival-${f.id}`,
+      band_name: f.band_name,
+      date: f.festival_start_date,
+      end_date: f.festival_end_date,
+      genre: "Festival",
+      venue: "", city: "", time: "",
+      status: "approved",
+      isFestivalItem: true,
+      festival_slug: f.band_slug,
+    }));
+}
+
 function CalendarView({ gigs, onGigClick, bands=[] }) {
+  const navigate = useNavigate();
   const todayStr = today();
   const [y, setY] = useState(new Date().getFullYear());
   const [m, setM] = useState(new Date().getMonth());
@@ -2118,7 +2161,7 @@ function CalendarView({ gigs, onGigClick, bands=[] }) {
               <div className="msm-cal-day" style={{ fontSize:13, color:isToday?C.red:C.dim, fontFamily:F.display, letterSpacing:1, marginBottom:3 }}>{day}</div>
               <div style={{ display:"flex", flexDirection:"column", gap:2, marginTop:4 }}>
                 {dayGigs.map(g=>(
-                  <div key={g.id} onClick={()=>onGigClick(g)}
+                  <div key={g.id} onClick={()=> g.isFestivalItem ? navigate(`/festival/${g.festival_slug}`) : onGigClick(g)}
                     className="msm-gig-label"
                     style={{
                       display:"flex", alignItems:"center", gap:4,
@@ -2185,6 +2228,7 @@ function CalendarView({ gigs, onGigClick, bands=[] }) {
 //  LIST VIEW
 // ════════════════════════════════════════════════════════════════════
 function ListView({ gigs, onGigClick, bands=[] }) {
+  const navigate = useNavigate();
   const sorted = [...gigs].sort((a,b)=>a.date.localeCompare(b.date));
   if (!sorted.length) return <div style={{ color:C.dim, fontSize:13, padding:"24px 0" }}>No gigs match your filters.</div>;
   return (
@@ -2192,7 +2236,7 @@ function ListView({ gigs, onGigClick, bands=[] }) {
       {sorted.map(g => {
         const color = GENRE_COLORS[g.genre]||"#888";
         return (
-          <div key={g.id} onClick={()=>onGigClick(g)} style={{
+          <div key={g.id} onClick={()=> g.isFestivalItem ? navigate(`/festival/${g.festival_slug}`) : onGigClick(g)} style={{
             display:"flex", alignItems:"center", gap:14, padding:"13px 16px",
             background:"rgba(255,255,255,0.02)", border:`1px solid ${C.border}`,
             borderLeft:`3px solid ${color}`, borderRadius:6, cursor:"pointer",
@@ -6174,7 +6218,12 @@ function MainApp() {
   };
 
   // Apply filters to public gigs
-  const filteredGigs = useMemo(() => gigs.filter(g => {
+  const calendarSource = useMemo(
+    () => [...gigs, ...buildFestivalCalendarItems(festivals, gigs)],
+    [gigs, festivals]
+  );
+
+  const filteredGigs = useMemo(() => calendarSource.filter(g => {
     if (filters.city  !== "All" && g.city  !== filters.city)  return false;
     if (filters.venue !== "All" && g.venue !== filters.venue) return false;
     if (filters.genre !== "All" && g.genre !== filters.genre) return false;
@@ -6187,7 +6236,7 @@ function MainApp() {
           !g.city.toLowerCase().includes(q)) return false;
     }
     return true;
-  }), [gigs, filters, search]);
+  }), [calendarSource, filters, search]);
 
   // If user clicked Submit Gig or Admin tab and isn't logged in, show auth panel
   if (!auth && (tab === "submit" || tab === "admin")) {
