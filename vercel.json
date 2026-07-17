@@ -1,4 +1,14 @@
 {
+  "redirects": [
+    {
+      "source": "/:path*",
+      "has": [
+        { "type": "host", "value": "msm-gig-calendar.vercel.app" }
+      ],
+      "destination": "https://calendar.musicscenemagazine.co.uk/:path*",
+      "permanent": true
+    }
+  ],
   "rewrites": [
     { "source": "/api/(.*)",    "destination": "/api/$1" },
     { "source": "/gig/:slug",   "destination": "/api/gig" },
