@@ -11,7 +11,7 @@ const { createClient } = require("@supabase/supabase-js");
 
 const SUPABASE_URL      = process.env.VITE_SUPABASE_URL      || "https://fmlaaiolqwknowhtdeue.supabase.co";
 const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";
-const BASE_URL          = process.env.VITE_BASE_URL           || "https://msm-gig-calendar.vercel.app";
+const BASE_URL          = process.env.VITE_BASE_URL           || "https://calendar.musicscenemagazine.co.uk";
 const FALLBACK_IMAGE    = "https://musicscenemagazine.co.uk/wp-content/uploads/msm-share.jpg";
 
 const MONTHS = [
