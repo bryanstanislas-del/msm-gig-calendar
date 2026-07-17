@@ -1,13 +1,24 @@
-// api/og.js — Server-rendered Open Graph tags for social sharing
-// Deployed as a Vercel serverless function.
-// Facebook/Twitter crawlers hit this endpoint and receive a full HTML page
-// with correct OG meta tags, then follow the canonical URL to the SPA.
+// api/og.js — Server-rendered SEO/Open Graph metadata for crawlers,
+// real SPA served directly to human visitors.
+// Deployed as a Vercel serverless function, reached via vercel.json
+// rewrites for /artist/:slug, /venue/:slug and /festival/:slug.
 //
-// Usage: /api/og?type=gig&slug=band-name-venue-2026-01-01
-//        /api/og?type=band&slug=band-slug
-//        /api/og?type=venue&slug=venue-slug
+// IMPORTANT: this file's canonical URL for each type is the SAME path the
+// request arrived on (e.g. /artist/:slug rewrites here, and this file's
+// canonical for that band is also /artist/:slug). That means a
+// meta-refresh redirect back to the canonical URL would create an
+// infinite loop -- so, like api/gig.js, real human visitors are served
+// the actual built index.html directly (no redirect at all), and only
+// detected crawlers get the metadata-only HTML below (no refresh tag).
+//
+// Usage (via vercel.json rewrites):
+//   /artist/:slug   -> /api/og?type=band&slug=:slug
+//   /venue/:slug    -> /api/og?type=venue&slug=:slug
+//   /festival/:slug -> /api/og?type=festival&slug=:slug
 
 const { createClient } = require("@supabase/supabase-js");
+const fs   = require("fs");
+const path = require("path");
 
 const SUPABASE_URL      = process.env.VITE_SUPABASE_URL      || "https://fmlaaiolqwknowhtdeue.supabase.co";
 const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";
@@ -33,7 +44,17 @@ function escapeHtml(str) {
     .replace(/"/g, "&quot;");
 }
 
-function buildHtml({ title, description, url, image, canonicalUrl }) {
+// Same crawler allow-list api/gig.js already uses -- kept identical on
+// purpose so both files agree on what counts as a crawler.
+function isCrawler(ua) {
+  return /facebookexternalhit|Twitterbot|LinkedInBot|WhatsApp|Slackbot|TelegramBot|Discordbot|Pinterest|Googlebot|bingbot/i.test(ua || "");
+}
+
+// Crawler-facing HTML only -- deliberately NO <meta http-equiv="refresh">
+// here (unlike the old version of this file). A refresh back to the
+// canonical URL would loop, since the canonical URL for band/venue/
+// festival is the exact path this handler is reached from.
+function buildHtml({ title, description, url, image }) {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -57,26 +78,52 @@ function buildHtml({ title, description, url, image, canonicalUrl }) {
   <meta name="twitter:description" content="${escapeHtml(description)}">
   <meta name="twitter:image"       content="${escapeHtml(image)}">
 
-  <!-- Redirect non-crawlers to the SPA immediately -->
-  <meta http-equiv="refresh" content="0; url=${escapeHtml(canonicalUrl)}">
-  <link rel="canonical" href="${escapeHtml(canonicalUrl)}">
+  <link rel="canonical" href="${escapeHtml(url)}">
 </head>
 <body>
-  <p>Redirecting to <a href="${escapeHtml(canonicalUrl)}">${escapeHtml(title)}</a>...</p>
+  <p><a href="${escapeHtml(url)}">${escapeHtml(title)}</a></p>
 </body>
 </html>`;
 }
 
+// Serves the real built SPA shell directly -- no redirect at all, so
+// React Router renders the correct page client-side from the URL already
+// in the browser. Identical technique to api/gig.js's human path.
+function serveSpaShell(res, fallbackCanonicalUrl) {
+  try {
+    const indexPath = path.join(process.cwd(), "dist", "index.html");
+    const html = fs.readFileSync(indexPath, "utf8");
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    return res.status(200).send(html);
+  } catch (e) {
+    // If the built file can't be found for any reason, a plain redirect
+    // is still safe here -- it's a genuine fallback path, not the normal
+    // route, so no loop risk in practice.
+    res.setHeader("Location", fallbackCanonicalUrl);
+    return res.status(302).end();
+  }
+}
+
 module.exports = async function handler(req, res) {
   const { type, slug } = req.query || {};
+  const ua = req.headers["user-agent"] || "";
 
-  // Default / fallback response
+  const canonicalFallback = (!type || !slug)
+    ? BASE_URL
+    : `${BASE_URL}/${ type === "band" ? "artist" : type }/${slug}`;
+
+  // Real human visitor: serve the actual SPA directly, every type,
+  // including when type/slug are missing -- no redirect needed or issued.
+  if (!isCrawler(ua)) {
+    return serveSpaShell(res, canonicalFallback);
+  }
+
+  // From here on: a detected crawler only.
   const defaultMeta = {
-    title:        "Music Scene Magazine — Gig Calendar",
-    description:  "Find live music events across the South Coast UK. Discover gigs, bands and venues.",
-    url:          BASE_URL,
-    image:        FALLBACK_IMAGE,
-    canonicalUrl: BASE_URL,
+    title:       "Music Scene Magazine — Gig Calendar",
+    description: "Find live music events across the South Coast UK. Discover gigs, bands and venues.",
+    url:         BASE_URL,
+    image:       FALLBACK_IMAGE,
   };
 
   if (!slug || !type) {
@@ -88,7 +135,8 @@ module.exports = async function handler(req, res) {
   try {
     const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-    // ── GIG ──
+    // ── GIG (kept for completeness / direct query-string use; /gig/:slug
+    //    itself continues to be routed to api/gig.js, unchanged) ──
     if (type === "gig") {
       const { data, error } = await supabase
         .from("gigs")
@@ -107,28 +155,26 @@ module.exports = async function handler(req, res) {
         `Find gig details, band info and tickets on Music Scene Magazine.`,
       ].filter(Boolean).join(" ");
 
-      return res.status(200)
-        .setHeader("Content-Type", "text/html; charset=utf-8")
-        .setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate")
-        .send(buildHtml({
-          title,
-          description,
-          url:          canonicalUrl,
-          image:        data.poster_url || FALLBACK_IMAGE,
-          canonicalUrl,
-        }));
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate");
+      return res.status(200).send(buildHtml({
+        title, description, url: canonicalUrl, image: data.poster_url || FALLBACK_IMAGE,
+      }));
     }
 
-    // ── BAND ──
+    // ── BAND / SOLO ARTIST ──
+    // Fixed: previously filtered on role = 'band', which is a different
+    // column to profile_type and doesn't cover solo_artist profiles at
+    // all. /artist/:slug must serve both.
     if (type === "band") {
       const { data, error } = await supabase
         .from("profiles")
-        .select("band_name, city, primary_genre, bio, photo_url, band_slug")
+        .select("band_name, city, bio, photo_url, band_slug, profile_type")
         .eq("band_slug", slug)
-        .eq("role", "band")
+        .in("profile_type", ["band", "solo_artist"])
         .single();
 
-      if (error || !data) throw new Error("Band not found");
+      if (error || !data) throw new Error("Artist not found");
 
       const canonicalUrl = `${BASE_URL}/artist/${data.band_slug}`;
       const title        = `${data.band_name} | Music Scene Magazine`;
@@ -136,16 +182,11 @@ module.exports = async function handler(req, res) {
         ? data.bio.slice(0, 200) + (data.bio.length > 200 ? "…" : "")
         : `${data.band_name}${data.city ? ` from ${data.city}` : ""}. Find upcoming gigs and more on Music Scene Magazine.`;
 
-      return res.status(200)
-        .setHeader("Content-Type", "text/html; charset=utf-8")
-        .setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate")
-        .send(buildHtml({
-          title,
-          description,
-          url:          canonicalUrl,
-          image:        data.photo_url || FALLBACK_IMAGE,
-          canonicalUrl,
-        }));
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate");
+      return res.status(200).send(buildHtml({
+        title, description, url: canonicalUrl, image: data.photo_url || FALLBACK_IMAGE,
+      }));
     }
 
     // ── VENUE ──
@@ -164,16 +205,43 @@ module.exports = async function handler(req, res) {
         ? data.description.slice(0, 200)
         : `${data.name} in ${data.city}. See upcoming gigs and events on Music Scene Magazine.`;
 
-      return res.status(200)
-        .setHeader("Content-Type", "text/html; charset=utf-8")
-        .setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate")
-        .send(buildHtml({
-          title,
-          description,
-          url:          canonicalUrl,
-          image:        data.photo_url || FALLBACK_IMAGE,
-          canonicalUrl,
-        }));
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate");
+      return res.status(200).send(buildHtml({
+        title, description, url: canonicalUrl, image: data.photo_url || FALLBACK_IMAGE,
+      }));
+    }
+
+    // ── FESTIVAL ──
+    if (type === "festival") {
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("band_name, city, postcode, bio, photo_url, band_slug, festival_start_date, festival_end_date")
+        .eq("band_slug", slug)
+        .eq("profile_type", "festival")
+        .single();
+
+      if (error || !data) throw new Error("Festival not found");
+
+      const canonicalUrl = `${BASE_URL}/festival/${data.band_slug}`;
+      const dateRange = data.festival_start_date
+        ? (data.festival_end_date && data.festival_end_date !== data.festival_start_date
+            ? `${fmtDate(data.festival_start_date)} \u2013 ${fmtDate(data.festival_end_date)}`
+            : fmtDate(data.festival_start_date))
+        : "";
+      const locationBits = [data.city, data.postcode].filter(Boolean).join(", ");
+      const title = dateRange
+        ? `${data.band_name} | ${dateRange} | Music Scene Magazine`
+        : `${data.band_name} | Music Scene Magazine`;
+      const description = data.bio
+        ? data.bio.slice(0, 200) + (data.bio.length > 200 ? "…" : "")
+        : `${data.band_name}${dateRange ? `, ${dateRange}` : ""}${locationBits ? ` at ${locationBits}` : ""}. Find festival details and line-up on Music Scene Magazine.`;
+
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate");
+      return res.status(200).send(buildHtml({
+        title, description, url: canonicalUrl, image: data.photo_url || FALLBACK_IMAGE,
+      }));
     }
 
     // Unknown type
