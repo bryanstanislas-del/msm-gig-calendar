@@ -6337,7 +6337,7 @@ function MainApp() {
 
         {/* FESTIVALS */}
         {tab==="festivals" && isAdmin && (
-          <AdminFestivals />
+          <AdminFestivals onRefresh={refreshAdmin} />
         )}
 
         {/* MY PROFILE */}
