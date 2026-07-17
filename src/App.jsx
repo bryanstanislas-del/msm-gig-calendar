@@ -2345,14 +2345,15 @@ function CalendarView({ gigs, onGigClick, bands=[] }) {
               <div className="msm-cal-day" style={{ fontSize:13, color:isToday?C.red:C.dim, fontFamily:F.display, letterSpacing:1, marginBottom:3 }}>{day}</div>
               <div style={{ display:"flex", flexDirection:"column", gap:2, marginTop:4 }}>
                 {dayGigs.map(g=>(
-                  <div key={g.id} onClick={()=> g.isFestivalItem ? navigate(`/festival/${g.festival_slug}`) : onGigClick(g)}
+                  <Link key={g.id} to={g.isFestivalItem ? `/festival/${g.festival_slug}` : `/gig/${g.slug}`}
+                    onClick={e=>{ if (!g.isFestivalItem) { e.preventDefault(); onGigClick(g); } }}
                     className="msm-gig-label"
                     style={{
                       display:"flex", alignItems:"center", gap:4,
                       background:`${GENRE_COLORS[g.genre]||"#888"}40`,
                       borderLeft:`3px solid ${GENRE_COLORS[g.genre]||"#888"}`,
                       borderRadius:2, padding:"3px 6px",
-                      cursor:"pointer",
+                      cursor:"pointer", textDecoration:"none",
                     }}
                     onMouseEnter={e=>e.currentTarget.style.background=`${GENRE_COLORS[g.genre]||"#888"}65`}
                     onMouseLeave={e=>e.currentTarget.style.background=`${GENRE_COLORS[g.genre]||"#888"}40`}
@@ -2366,7 +2367,7 @@ function CalendarView({ gigs, onGigClick, bands=[] }) {
                       fontSize:13, color:"#ffffff", fontFamily:F.display,
                       letterSpacing:1, lineHeight:1.2, fontWeight:"bold",
                     }}>{g.is_recurring ? "↻ " : ""}{g.band_name}</span>
-                  </div>
+                  </Link>
                 ))}
               </div>
             </div>
@@ -2420,16 +2421,19 @@ function ListView({ gigs, onGigClick, bands=[] }) {
       {sorted.map(g => {
         const color = GENRE_COLORS[g.genre]||"#888";
         return (
-          <div key={g.id} onClick={()=> g.isFestivalItem ? navigate(`/festival/${g.festival_slug}`) : onGigClick(g)} style={{
-            display:"flex", alignItems:"center", gap:14, padding:"13px 16px",
-            background:"rgba(255,255,255,0.02)", border:`1px solid ${C.border}`,
-            borderLeft:`3px solid ${color}`, borderRadius:6, cursor:"pointer",
-          }}
+          <Link key={g.id} to={g.isFestivalItem ? `/festival/${g.festival_slug}` : `/gig/${g.slug}`}
+            onClick={e=>{ if (!g.isFestivalItem) { e.preventDefault(); onGigClick(g); } }}
+            style={{
+              display:"flex", alignItems:"center", gap:14, padding:"13px 16px",
+              background:"rgba(255,255,255,0.02)", border:`1px solid ${C.border}`,
+              borderLeft:`3px solid ${color}`, borderRadius:6, cursor:"pointer",
+              textDecoration:"none", color:"inherit",
+            }}
             onMouseEnter={e=>e.currentTarget.style.background=C.redDim}
             onMouseLeave={e=>e.currentTarget.style.background="rgba(255,255,255,0.02)"}
           >
             <div style={{ flex:1 }}>
-              {(() => { const bp = g.band_profile_id ? bands.find(b=>b.id===g.band_profile_id) : bands.find(b=>b.band_name?.toLowerCase()===g.band_name?.toLowerCase()); return bp?.band_slug ? <Link to={`/artist/${bp.band_slug}`} style={{ fontFamily:F.display, fontSize:15, letterSpacing:1.5, color:C.white, textDecoration:"none", display:"block" }} onMouseEnter={e=>e.currentTarget.style.color=C.red} onMouseLeave={e=>e.currentTarget.style.color=C.white}>{g.band_name}</Link> : <div style={{ fontFamily:F.display, fontSize:15, letterSpacing:1.5, color:C.white }}>{g.band_name}</div>; })()}
+              <div style={{ fontFamily:F.display, fontSize:15, letterSpacing:1.5, color:C.white }}>{g.band_name}</div>
               <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>{g.venue} · {g.city}</div>
             </div>
             <Badge label={g.genre} color={color} />
@@ -2439,7 +2443,7 @@ function ListView({ gigs, onGigClick, bands=[] }) {
               </div>
               <div style={{ fontSize:11, color:C.dim }}>{g.time}</div>
             </div>
-          </div>
+          </Link>
         );
       })}
     </div>
@@ -4359,11 +4363,13 @@ function VenueProfilePage() {
                     background:C.surface, border:`1px solid ${C.border}`,
                     borderLeft:`3px solid ${color}`, borderRadius:8, flexWrap:"wrap",
                   }}>
-                    <div style={{ fontFamily:F.display, fontSize:16, color:C.red, letterSpacing:1, minWidth:120 }}>{fmtDate(g.date)}</div>
-                    <div style={{ flex:1 }}>
-                      <div style={{ fontSize:15, color:C.white }}>{g.band_name}</div>
-                      <div style={{ fontSize:12, color:C.muted }}>{g.genre} · {g.time}</div>
-                    </div>
+                    <Link to={`/gig/${g.slug}`} style={{ display:"flex", alignItems:"center", gap:16, flex:1, minWidth:180, textDecoration:"none", color:"inherit" }}>
+                      <div style={{ fontFamily:F.display, fontSize:16, color:C.red, letterSpacing:1, minWidth:120 }}>{fmtDate(g.date)}</div>
+                      <div style={{ flex:1 }}>
+                        <div style={{ fontSize:15, color:C.white }}>{g.band_name}</div>
+                        <div style={{ fontSize:12, color:C.muted }}>{g.genre} · {g.time}</div>
+                      </div>
+                    </Link>
                     <div style={{ display:"flex", gap:8 }}>
                       {g.tickets && (
                         <a href={g.tickets} target="_blank" rel="noreferrer"
@@ -4384,17 +4390,19 @@ function VenueProfilePage() {
             <SectionLabel>PAST GIGS</SectionLabel>
             <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
               {pastGigs.slice(0,10).map(g => (
-                <div key={g.id} style={{
-                  display:"flex", alignItems:"center", gap:16, padding:"10px 18px",
-                  background:"rgba(255,255,255,0.02)", border:`1px solid ${C.border}`,
-                  borderRadius:6, opacity:0.7, flexWrap:"wrap",
-                }}>
-                  <div style={{ fontFamily:F.display, fontSize:14, color:C.dim, minWidth:120 }}>{fmtDate(g.date)}</div>
-                  <div style={{ flex:1 }}>
-                    <span style={{ fontSize:14, color:"#aaa" }}>{g.band_name}</span>
-                    <span style={{ fontSize:12, color:C.dim, marginLeft:8 }}>{g.genre}</span>
+                <Link key={g.id} to={`/gig/${g.slug}`} style={{ textDecoration:"none", color:"inherit" }}>
+                  <div style={{
+                    display:"flex", alignItems:"center", gap:16, padding:"10px 18px",
+                    background:"rgba(255,255,255,0.02)", border:`1px solid ${C.border}`,
+                    borderRadius:6, opacity:0.7, flexWrap:"wrap",
+                  }}>
+                    <div style={{ fontFamily:F.display, fontSize:14, color:C.dim, minWidth:120 }}>{fmtDate(g.date)}</div>
+                    <div style={{ flex:1 }}>
+                      <span style={{ fontSize:14, color:"#aaa" }}>{g.band_name}</span>
+                      <span style={{ fontSize:12, color:C.dim, marginLeft:8 }}>{g.genre}</span>
+                    </div>
                   </div>
-                </div>
+                </Link>
               ))}
             </div>
           </div>
@@ -4640,11 +4648,13 @@ function BandProfilePage() {
                   borderLeft:`3px solid ${color}`, borderRadius:8,
                   flexWrap:"wrap",
                 }}>
-                  <div style={{ fontFamily:F.display, fontSize:16, color:C.red, letterSpacing:1, minWidth:120 }}>{fmtDate(g.date)}</div>
-                  <div style={{ flex:1 }}>
-                    <div style={{ fontSize:15, color:"#ffffff" }}>{g.venue}</div>
-                    <div style={{ fontSize:13, color:"#aaaaaa" }}>{g.city}</div>
-                  </div>
+                  <Link to={`/gig/${g.slug}`} style={{ display:"flex", alignItems:"center", gap:16, flex:1, minWidth:180, textDecoration:"none", color:"inherit" }}>
+                    <div style={{ fontFamily:F.display, fontSize:16, color:C.red, letterSpacing:1, minWidth:120 }}>{fmtDate(g.date)}</div>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontSize:15, color:"#ffffff" }}>{g.venue}</div>
+                      <div style={{ fontSize:13, color:"#aaaaaa" }}>{g.city}</div>
+                    </div>
+                  </Link>
                   <div style={{ display:"flex", gap:8 }}>
                     {g.tickets && (
                       <a href={g.tickets} target="_blank" rel="noreferrer"
@@ -4664,17 +4674,19 @@ function BandProfilePage() {
             <SectionLabel>PAST GIGS</SectionLabel>
             <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
               {pastGigs.slice(0,10).map(g => (
-                <div key={g.id} style={{
-                  display:"flex", alignItems:"center", gap:16, padding:"10px 18px",
-                  background:"rgba(255,255,255,0.02)", border:`1px solid ${C.border}`,
-                  borderRadius:6, opacity:0.7, flexWrap:"wrap",
-                }}>
-                  <div style={{ fontFamily:F.display, fontSize:14, color:C.dim, minWidth:120 }}>{fmtDate(g.date)}</div>
-                  <div style={{ flex:1 }}>
-                    <span style={{ fontSize:14, color:"#aaa" }}>{g.venue}</span>
-                    <span style={{ fontSize:12, color:C.dim, marginLeft:8 }}>{g.city}</span>
+                <Link key={g.id} to={`/gig/${g.slug}`} style={{ textDecoration:"none", color:"inherit" }}>
+                  <div style={{
+                    display:"flex", alignItems:"center", gap:16, padding:"10px 18px",
+                    background:"rgba(255,255,255,0.02)", border:`1px solid ${C.border}`,
+                    borderRadius:6, opacity:0.7, flexWrap:"wrap",
+                  }}>
+                    <div style={{ fontFamily:F.display, fontSize:14, color:C.dim, minWidth:120 }}>{fmtDate(g.date)}</div>
+                    <div style={{ flex:1 }}>
+                      <span style={{ fontSize:14, color:"#aaa" }}>{g.venue}</span>
+                      <span style={{ fontSize:12, color:C.dim, marginLeft:8 }}>{g.city}</span>
+                    </div>
                   </div>
-                </div>
+                </Link>
               ))}
             </div>
           </div>
@@ -4833,12 +4845,11 @@ function FestivalProfilePage() {
             <SectionLabel>LINEUP</SectionLabel>
             <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
               {lineup.map(g => (
-                <div key={g.id}
-                  onClick={()=>navigate(`/gig/${g.slug}`)}
+                <Link key={g.id} to={`/gig/${g.slug}`}
                   style={{
                     display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10,
                     padding:"14px 16px", background:C.surface, border:`1px solid ${C.border}`, borderRadius:8,
-                    cursor: g.slug ? "pointer" : "default",
+                    textDecoration:"none", color:"inherit", cursor: g.slug ? "pointer" : "default",
                   }}
                 >
                   <div>
@@ -4848,7 +4859,7 @@ function FestivalProfilePage() {
                   <div style={{ fontSize:13, color:color, fontFamily:F.display, letterSpacing:1 }}>
                     {fmtDate(g.date)}{g.time ? ` · ${g.time}` : ""}
                   </div>
-                </div>
+                </Link>
               ))}
             </div>
           </div>
