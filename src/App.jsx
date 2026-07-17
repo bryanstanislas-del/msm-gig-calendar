@@ -782,6 +782,65 @@ async function logActivity(action, entityType, entityName, entityId) {
 // functions, so one value covers all three. Falls back to the correct
 // canonical domain if the env var isn't set.
 const BASE_URL = import.meta.env.VITE_BASE_URL || "https://calendar.musicscenemagazine.co.uk";
+
+// Shared fallback share image, used wherever a profile/gig has no photo of
+// its own -- matches the same URL api/og.js and api/gig.js already use.
+const FALLBACK_IMAGE = "https://musicscenemagazine.co.uk/wp-content/uploads/msm-share.jpg";
+
+// Shared client-side SEO metadata management for public profile/gig
+// pages (gig, artist, venue, festival) -- keeps human-facing metadata in
+// sync with the crawler-facing api/og.js / api/gig.js patterns. Always
+// finds and updates an existing tag rather than creating a new one, so
+// repeated calls (e.g. re-running on slug change) never produce
+// duplicates. resetPageMeta() fully removes everything this sets and
+// restores the generic site title, and is called from every page's
+// effect cleanup so navigating away (to another profile, or back to the
+// calendar) never leaves stale metadata behind.
+function applyPageMeta({ title, description, canonicalUrl, image }) {
+  document.title = title;
+
+  const setMeta = (attr, key, val) => {
+    let el = document.querySelector(`meta[${attr}="${key}"]`);
+    if (!el) { el = document.createElement("meta"); el.setAttribute(attr, key); document.head.appendChild(el); }
+    el.setAttribute("content", val);
+  };
+  const setLink = (rel, href) => {
+    let el = document.querySelector(`link[rel="${rel}"]`);
+    if (!el) { el = document.createElement("link"); el.setAttribute("rel", rel); document.head.appendChild(el); }
+    el.setAttribute("href", href);
+  };
+
+  setMeta("name", "description", description);
+  setLink("canonical", canonicalUrl);
+
+  setMeta("property", "og:title",       title);
+  setMeta("property", "og:description", description);
+  setMeta("property", "og:url",         canonicalUrl);
+  setMeta("property", "og:image",       image);
+  setMeta("property", "og:type",        "website");
+  setMeta("property", "og:site_name",   "Music Scene Magazine");
+
+  setMeta("name", "twitter:card",        "summary_large_image");
+  setMeta("name", "twitter:title",       title);
+  setMeta("name", "twitter:description", description);
+  setMeta("name", "twitter:image",       image);
+}
+
+function resetPageMeta() {
+  document.title = "Music Scene Magazine";
+  const metaDesc = document.querySelector('meta[name="description"]');
+  if (metaDesc) metaDesc.remove();
+  const canonical = document.querySelector('link[rel="canonical"]');
+  if (canonical) canonical.remove();
+  ["og:title","og:description","og:url","og:image","og:type","og:site_name"].forEach(prop => {
+    const el = document.querySelector(`meta[property="${prop}"]`);
+    if (el) el.remove();
+  });
+  ["twitter:card","twitter:title","twitter:description","twitter:image"].forEach(name => {
+    const el = document.querySelector(`meta[name="${name}"]`);
+    if (el) el.remove();
+  });
+}
 // FIX 4: Type-aware completion scoring.
 // Band/solo_artist fields include genre and Spotify (music-specific).
 // Festival, venue, promoter, organisation scored on universal fields only.
@@ -3549,29 +3608,14 @@ function GigDetailPage() {
       if (!g) { setLoading(false); return; }
       setGig(g);
 
-      // Set SEO title + OG meta tags for social sharing
+      // SEO title + meta tags, kept in sync with the crawler-facing
+      // api/gig.js response for this same gig.
       const pageTitle = `${g.band_name} at ${g.venue}, ${g.city} | ${fmtDate(g.date)} | Music Scene Magazine`;
       const pageDesc  = `See ${g.band_name} live at ${g.venue}, ${g.city} on ${fmtDate(g.date)}. ${g.notes ? g.notes + " " : ""}Find venue details, band info and upcoming gigs on Music Scene Magazine.`;
       const pageUrl   = `${BASE_URL}/gig/${g.slug}`;
-      const pageImg   = g.poster_url || "https://musicscenemagazine.co.uk/wp-content/uploads/msm-share.jpg";
+      const pageImg   = g.poster_url || FALLBACK_IMAGE;
 
-      document.title = pageTitle;
-
-      const setMeta = (prop, val, attr="property") => {
-        let el = document.querySelector(`meta[${attr}="${prop}"]`);
-        if (!el) { el = document.createElement("meta"); el.setAttribute(attr, prop); document.head.appendChild(el); }
-        el.setAttribute("content", val);
-      };
-      setMeta("og:title",       pageTitle);
-      setMeta("og:description", pageDesc);
-      setMeta("og:url",         pageUrl);
-      setMeta("og:image",       pageImg);
-      setMeta("og:type",        "website");
-      setMeta("og:site_name",   "Music Scene Magazine");
-      setMeta("twitter:card",        "summary_large_image", "name");
-      setMeta("twitter:title",       pageTitle,             "name");
-      setMeta("twitter:description", pageDesc,              "name");
-      setMeta("twitter:image",       pageImg,               "name");
+      applyPageMeta({ title: pageTitle, description: pageDesc, canonicalUrl: pageUrl, image: pageImg });
 
       // Load band, venue, prev/next and Editorial Awards in parallel.
       // Awards are looked up by gig_id AND the artist's profile_id in a
@@ -3607,17 +3651,7 @@ function GigDetailPage() {
       setLoading(false);
     }
     load();
-    return () => {
-      document.title = "Music Scene Magazine";
-      ["og:title","og:description","og:url","og:image","og:type","og:site_name"].forEach(prop => {
-        const el = document.querySelector(`meta[property="${prop}"]`);
-        if (el) el.remove();
-      });
-      ["twitter:card","twitter:title","twitter:description","twitter:image"].forEach(name => {
-        const el = document.querySelector(`meta[name="${name}"]`);
-        if (el) el.remove();
-      });
-    };
+    return () => { resetPageMeta(); };
   }, [slug]);
 
   if (loading) return (
@@ -4062,6 +4096,18 @@ function VenueProfilePage() {
       const v = await DB.getVenueBySlug(slug);
       if (!v) { setLoading(false); return; }
       setVenue(v);
+
+      // SEO metadata, kept in sync with api/og.js's type=venue crawler
+      // response, including the same fallback text/image when a venue
+      // has no description or photo set.
+      applyPageMeta({
+        title: `${v.name}, ${v.city} | Music Scene Magazine`,
+        description: v.description
+          ? v.description.slice(0, 200)
+          : `${v.name} in ${v.city}. See upcoming gigs and events on Music Scene Magazine.`,
+        canonicalUrl: `${BASE_URL}/venue/${v.slug}`,
+        image: v.photo_url || FALLBACK_IMAGE,
+      });
       // NOTE: editorial_features.profile_id is FK'd to public.profiles.id
       // only -- venues live in a separate public.venues table with its own
       // id space, and the current Admin Editorial subject-search only
@@ -4078,6 +4124,7 @@ function VenueProfilePage() {
       setLoading(false);
     }
     load();
+    return () => { resetPageMeta(); };
   }, [slug]);
 
   if (loading) return (
@@ -4254,6 +4301,18 @@ function BandProfilePage() {
       const b = await DB.getBandBySlug(slug);
       if (!b) { setLoading(false); return; }
       setBand(b);
+
+      // SEO metadata, kept in sync with api/og.js's type=band crawler
+      // response. Works identically for profile_type 'band' or
+      // 'solo_artist' -- never keyed on role.
+      applyPageMeta({
+        title: `${b.band_name} | Music Scene Magazine`,
+        description: b.bio
+          ? (b.bio.length > 200 ? b.bio.slice(0, 200) + "…" : b.bio)
+          : `${b.band_name}${b.city ? ` from ${b.city}` : ""}. Find upcoming gigs and more on Music Scene Magazine.`,
+        canonicalUrl: `${BASE_URL}/artist/${b.band_slug}`,
+        image: b.photo_url || FALLBACK_IMAGE,
+      });
       // Gigs and awards are independent reads once we have the profile id --
       // fetch them in parallel rather than one after the other.
       const [g, aw] = await Promise.all([
@@ -4265,6 +4324,7 @@ function BandProfilePage() {
       setLoading(false);
     }
     load();
+    return () => { resetPageMeta(); };
   }, [slug]);
 
   if (loading) return (
@@ -4532,6 +4592,23 @@ function FestivalProfilePage() {
         ]);
         setAwards(aw);
         setLineup(lu);
+
+        // SEO metadata, kept in sync with api/og.js's type=festival
+        // crawler response, including the same date-range formatting.
+        const dateRange = e.festival_start_date
+          ? (e.festival_end_date && e.festival_end_date !== e.festival_start_date
+              ? `${fmtDate(e.festival_start_date)} – ${fmtDate(e.festival_end_date)}`
+              : fmtDate(e.festival_start_date))
+          : "";
+        const locationBits = [e.city, e.postcode].filter(Boolean).join(", ");
+        applyPageMeta({
+          title: dateRange ? `${e.band_name} | ${dateRange} | Music Scene Magazine` : `${e.band_name} | Music Scene Magazine`,
+          description: e.bio
+            ? (e.bio.length > 200 ? e.bio.slice(0, 200) + "…" : e.bio)
+            : `${e.band_name}${dateRange ? `, ${dateRange}` : ""}${locationBits ? ` at ${locationBits}` : ""}. Find festival details and line-up on Music Scene Magazine.`,
+          canonicalUrl: `${BASE_URL}/festival/${e.band_slug}`,
+          image: e.photo_url || FALLBACK_IMAGE,
+        });
       } else {
         setAwards([]);
         setLineup([]);
@@ -4539,6 +4616,7 @@ function FestivalProfilePage() {
       setLoading(false);
     }
     load();
+    return () => { resetPageMeta(); };
   }, [slug]);
 
   if (loading) return (
