@@ -774,7 +774,14 @@ async function logActivity(action, entityType, entityName, entityId) {
 // ── Canonical base URL ─────────────────────────────────────────────
 // Uses Vercel deployment URL so shared links and OG tags work correctly.
 // When a custom domain is pointed at this Vercel app, update this value.
-const BASE_URL = "https://msm-gig-calendar.vercel.app";
+// Public base URL for canonical links, OG/share URLs and (future) SEO
+// generation. Single source of truth: set VITE_BASE_URL in Vercel's
+// project environment variables to change this everywhere at once,
+// across the React app and both api/gig.js and api/og.js -- Vercel
+// exposes the same env var to the Vite build and to serverless
+// functions, so one value covers all three. Falls back to the correct
+// canonical domain if the env var isn't set.
+const BASE_URL = import.meta.env.VITE_BASE_URL || "https://calendar.musicscenemagazine.co.uk";
 // FIX 4: Type-aware completion scoring.
 // Band/solo_artist fields include genre and Spotify (music-specific).
 // Festival, venue, promoter, organisation scored on universal fields only.
