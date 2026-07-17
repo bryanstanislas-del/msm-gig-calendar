@@ -160,7 +160,7 @@ function FestivalForm({ initial, onSave, onCancel, saving }) {
   );
 }
 
-export default function AdminFestivals() {
+export default function AdminFestivals({ onRefresh }) {
   const [festivals, setFestivals] = useState([]);
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState(null);
@@ -237,6 +237,15 @@ export default function AdminFestivals() {
   // not festival_profile_id. That FK would silently null the link rather
   // than block deletion, so both columns are checked here proactively --
   // the DB constraint alone isn't enough to protect the legacy pattern.
+  //
+  // The delete itself uses .select() and verifies the returned row count.
+  // profiles previously had NO DELETE policy at all -- a delete matching
+  // zero rows returns error:null, not an error, so error-only checking
+  // silently reported "deleted" while nothing was actually removed. A
+  // DELETE policy now exists (admin-only, matching the same is_admin()
+  // standard already used for INSERT/UPDATE on this table), but this check
+  // stays regardless as the correct, permanent defence against that whole
+  // class of "silent no-op" bug -- including any future RLS change.
   const confirmDelete = async () => {
     if (!deleteTarget || deleting) return;
     setDeleting(true);
@@ -256,13 +265,29 @@ export default function AdminFestivals() {
         return;
       }
 
-      const { error: deleteError } = await supabase.from('profiles').delete().eq('id', deleteTarget.id);
+      const { data: deletedRows, error: deleteError } = await supabase
+        .from('profiles')
+        .delete()
+        .eq('id', deleteTarget.id)
+        .select('id, band_name');
       if (deleteError) throw deleteError;
+
+      const deletedOne = deletedRows?.length === 1 && deletedRows[0].id === deleteTarget.id;
+      if (!deletedOne) {
+        showToast(
+          `Delete failed — "${deleteTarget.band_name}" was not removed (0 rows affected). It may have already been deleted, or you may not have permission.`,
+          'error'
+        );
+        setDeleteTarget(null);
+        await load(); // resync the directory either way, in case it's already stale
+        return;
+      }
 
       showToast(`"${deleteTarget.band_name}" deleted.`);
       setFestivals(fs => fs.filter(f => f.id !== deleteTarget.id)); // instant UI update
       setDeleteTarget(null);
-      await load(); // resync with server
+      await load();       // resync the festival directory
+      await onRefresh?.(); // resync dashboard totals (AdminDashboard's own festivals list)
     } catch(e) {
       showToast(e.message, 'error');
       setDeleteTarget(null);
