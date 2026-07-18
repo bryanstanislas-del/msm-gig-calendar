@@ -271,11 +271,32 @@ const DB = {
   // for legacy pre-migration rows). The only caller passes the logged-in
   // user's auth id, so match on user_id instead -- otherwise this silently
   // updates 0 rows for every post-migration band/solo_artist account.
+  //
+  // SEO Step 7 hardening: this is the ordinary owner/manager-facing update
+  // path (its only caller is EditProfile) -- RLS already correctly scopes
+  // WHICH row can be touched (own profile, or a managed one), but RLS is
+  // row-level, not column-level, so it doesn't stop an owner from sending
+  // an unexpected key. Confirmed by searching the whole codebase: nothing
+  // admin-facing calls this function -- AdminFestivals and AdminVenues
+  // both already use their own separate, admin-gated update calls, so
+  // restricting this allow-list cannot break anything admin-side.
   async updateProfile(userId, updates) {
     if (USE_MOCK) return updates;
+    const allowedFields = [
+      "band_name","city","genre","primary_genre","secondary_genre","tertiary_genre",
+      "formation_year","bio","photo_url","website","spotify","instagram","facebook",
+      "twitter","tiktok_url","youtube_channel_url","youtube_featured_url",
+      "apple_music_url","bandcamp_url","soundcloud_url","booking_email",
+      "management_contact","press_contact","phone",
+      "seo_title","seo_description","seo_search_phrases",
+    ];
+    const safeUpdates = {};
+    for (const key of allowedFields) {
+      if (Object.prototype.hasOwnProperty.call(updates, key)) safeUpdates[key] = updates[key];
+    }
     const { data, error } = await supabase
       .from("profiles")
-      .update(updates)
+      .update(safeUpdates)
       .eq("user_id", userId)
       .select();
     if (error) throw new Error(error.message);
@@ -3550,6 +3571,9 @@ function EditProfile({ user, profile, onSaved }) {
     management_contact:  profile?.management_contact  || "",
     press_contact:       profile?.press_contact       || "",
     phone:               profile?.phone               || "",
+    seo_title:           profile?.seo_title            || "",
+    seo_description:     profile?.seo_description       || "",
+    seo_search_phrases:  profile?.seo_search_phrases    || "",
   });
   const [status, setStatus] = useState("idle");
   const [msg,    setMsg]    = useState("");
@@ -3656,6 +3680,38 @@ function EditProfile({ user, profile, onSaved }) {
               userId={user.id}
               currentUrl={form.photo_url}
               onUploaded={(url) => setForm(f => ({ ...f, photo_url: url }))}
+            />
+          </div>
+
+          {/* SEARCH ENGINE LISTING */}
+          <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8 }}>SEARCH ENGINE LISTING</div>
+          <div style={{ gridColumn:"1/-1", fontSize:13, color:C.muted, lineHeight:1.6, marginTop:-8, marginBottom:4 }}>
+            These are optional. If you leave them blank, we'll automatically generate a good title and description for you from the rest of your profile.
+          </div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <label style={{ display:"block", fontSize:13, color:C.white, letterSpacing:2, marginBottom:6, fontFamily:F.display }}>SEO TITLE</label>
+            <div style={{ fontSize:12, color:C.muted, marginBottom:6 }}>The title that may appear for your page in search engines. Recommended length: around 60 characters.</div>
+            <input type="text" value={form.seo_title} onChange={set("seo_title")}
+              placeholder="Leave blank to use our automatic title"
+              style={inputCss}
+            />
+            <div style={{ fontSize:11, color: form.seo_title.length > 60 ? C.amber : C.dim, marginTop:4 }}>{form.seo_title.length}/60</div>
+          </div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <label style={{ display:"block", fontSize:13, color:C.white, letterSpacing:2, marginBottom:6, fontFamily:F.display }}>SEO DESCRIPTION</label>
+            <div style={{ fontSize:12, color:C.muted, marginBottom:6 }}>The short description that may appear beneath your title in search results. Recommended length: around 155–160 characters.</div>
+            <textarea value={form.seo_description} onChange={set("seo_description")} rows={3}
+              placeholder="Leave blank to use our automatic description"
+              style={{ ...inputCss, resize:"vertical" }}
+            />
+            <div style={{ fontSize:11, color: form.seo_description.length > 160 ? C.amber : C.dim, marginTop:4 }}>{form.seo_description.length}/160</div>
+          </div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <label style={{ display:"block", fontSize:13, color:C.white, letterSpacing:2, marginBottom:6, fontFamily:F.display }}>SEARCH PHRASES</label>
+            <div style={{ fontSize:12, color:C.muted, marginBottom:6 }}>How might people search for you? For example: blues band Southampton, live folk music Hampshire.</div>
+            <textarea value={form.seo_search_phrases} onChange={set("seo_search_phrases")} rows={2}
+              placeholder="Optional — a few phrases, separated by commas"
+              style={{ ...inputCss, resize:"vertical" }}
             />
           </div>
 
@@ -4223,12 +4279,13 @@ function VenueProfilePage() {
 
       // SEO metadata, kept in sync with api/og.js's type=venue crawler
       // response, including the same fallback text/image when a venue
-      // has no description or photo set.
+      // has no description or photo set. SEO Step 7: owner/manager
+      // override, title/description display only.
       applyPageMeta({
-        title: `${v.name}, ${v.city} | Music Scene Magazine`,
-        description: v.description
+        title: v.seo_title?.trim() || `${v.name}, ${v.city} | Music Scene Magazine`,
+        description: v.seo_description?.trim() || (v.description
           ? v.description.slice(0, 200)
-          : `${v.name} in ${v.city}. See upcoming gigs and events on Music Scene Magazine.`,
+          : `${v.name} in ${v.city}. See upcoming gigs and events on Music Scene Magazine.`),
         canonicalUrl: `${BASE_URL}/venue/${v.slug}`,
         image: v.photo_url || FALLBACK_IMAGE,
       });
@@ -4433,12 +4490,15 @@ function BandProfilePage() {
 
       // SEO metadata, kept in sync with api/og.js's type=band crawler
       // response. Works identically for profile_type 'band' or
-      // 'solo_artist' -- never keyed on role.
+      // 'solo_artist' -- never keyed on role. SEO Step 7: an
+      // owner/manager-supplied seo_title/seo_description, when present,
+      // overrides only these two display strings -- canonical URL and
+      // Schema.org (applyJsonLd below) are untouched by either field.
       applyPageMeta({
-        title: `${b.band_name} | Music Scene Magazine`,
-        description: b.bio
+        title: b.seo_title?.trim() || `${b.band_name} | Music Scene Magazine`,
+        description: b.seo_description?.trim() || (b.bio
           ? (b.bio.length > 200 ? b.bio.slice(0, 200) + "…" : b.bio)
-          : `${b.band_name}${b.city ? ` from ${b.city}` : ""}. Find upcoming gigs and more on Music Scene Magazine.`,
+          : `${b.band_name}${b.city ? ` from ${b.city}` : ""}. Find upcoming gigs and more on Music Scene Magazine.`),
         canonicalUrl: `${BASE_URL}/artist/${b.band_slug}`,
         image: b.photo_url || FALLBACK_IMAGE,
       });
@@ -4736,10 +4796,10 @@ function FestivalProfilePage() {
           : "";
         const locationBits = [e.city, e.postcode].filter(Boolean).join(", ");
         applyPageMeta({
-          title: dateRange ? `${e.band_name} | ${dateRange} | Music Scene Magazine` : `${e.band_name} | Music Scene Magazine`,
-          description: e.bio
+          title: e.seo_title?.trim() || (dateRange ? `${e.band_name} | ${dateRange} | Music Scene Magazine` : `${e.band_name} | Music Scene Magazine`),
+          description: e.seo_description?.trim() || (e.bio
             ? (e.bio.length > 200 ? e.bio.slice(0, 200) + "…" : e.bio)
-            : `${e.band_name}${dateRange ? `, ${dateRange}` : ""}${locationBits ? ` at ${locationBits}` : ""}. Find festival details and line-up on Music Scene Magazine.`,
+            : `${e.band_name}${dateRange ? `, ${dateRange}` : ""}${locationBits ? ` at ${locationBits}` : ""}. Find festival details and line-up on Music Scene Magazine.`),
           canonicalUrl: `${BASE_URL}/festival/${e.band_slug}`,
           image: e.photo_url || FALLBACK_IMAGE,
         });
@@ -5713,6 +5773,9 @@ function AdminVenues({ venues, allGigs, onRefresh, filterMode="all", onFilterMod
       instagram:     venue.instagram     || "",
       twitter:       venue.twitter       || "",
       photo_url:     venue.photo_url     || "",
+      seo_title:          venue.seo_title          || "",
+      seo_description:    venue.seo_description    || "",
+      seo_search_phrases: venue.seo_search_phrases  || "",
     });
     setView("edit");
   };
@@ -5890,6 +5953,31 @@ function AdminVenues({ venues, allGigs, onRefresh, filterMode="all", onFilterMod
                 style={{ marginTop:10, width:"100%", maxHeight:200, objectFit:"cover", borderRadius:6, border:`1px solid ${C.border}` }}
               />
             )}
+          </div>
+
+          <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8 }}>SEARCH ENGINE LISTING</div>
+          <div style={{ gridColumn:"1/-1", fontSize:13, color:C.muted, lineHeight:1.6, marginTop:-8, marginBottom:4 }}>
+            Optional. Leave blank to use the automatically generated title/description.
+          </div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <Input label="SEO TITLE" value={editForm.seo_title} onChange={setE("seo_title")} placeholder="Leave blank to use the automatic title" />
+            <div style={{ fontSize:11, color: (editForm.seo_title||"").length > 60 ? C.amber : C.dim, marginTop:4 }}>{(editForm.seo_title||"").length}/60</div>
+          </div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <label style={{ display:"block", fontSize:13, color:C.white, letterSpacing:2, marginBottom:6, fontFamily:F.display }}>SEO DESCRIPTION</label>
+            <textarea value={editForm.seo_description} onChange={setE("seo_description")} rows={3}
+              placeholder="Leave blank to use the automatic description"
+              style={{ ...inputCss, resize:"vertical" }}
+            />
+            <div style={{ fontSize:11, color: (editForm.seo_description||"").length > 160 ? C.amber : C.dim, marginTop:4 }}>{(editForm.seo_description||"").length}/160</div>
+          </div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <label style={{ display:"block", fontSize:13, color:C.white, letterSpacing:2, marginBottom:6, fontFamily:F.display }}>SEARCH PHRASES</label>
+            <div style={{ fontSize:12, color:C.muted, marginBottom:6 }}>How might people search for this venue? For example: live music venue Southampton, gig venue Hampshire.</div>
+            <textarea value={editForm.seo_search_phrases} onChange={setE("seo_search_phrases")} rows={2}
+              placeholder="Optional — a few phrases, separated by commas"
+              style={{ ...inputCss, resize:"vertical" }}
+            />
           </div>
 
           <div style={{ gridColumn:"1/-1", padding:"12px 14px", background:"rgba(255,255,255,0.02)", border:`1px solid ${C.border}`, borderRadius:6, fontSize:11, color:C.dim }}>
