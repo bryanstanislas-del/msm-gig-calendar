@@ -222,6 +222,17 @@ const DB = {
   // pending-placeholder fallback chain either way, covering bands, solo
   // artists, festivals, promoters, venues and admins identically (role
   // comes straight off the profiles row, same as before).
+  // Self-service auth: resolves which entity (if any) the signed-in user
+  // can edit, in priority order:
+  //   1. A profiles row they directly own (band/solo_artist/festival/
+  //      promoter/organisation)
+  //   2. A venue they directly own
+  //   3. A scoped manager role (user_roles.role like '%_manager') for any
+  //      of the above entity types -- venue managed_entity_type maps to
+  //      the venues table, every other type maps to profiles
+  // Tier 3 is new: previously a manager (as opposed to the literal owner)
+  // had no representation here at all, even though RLS has always
+  // permitted their updates -- they simply had no way to reach the row.
   async buildAuthFromSession(session) {
     const user = session.user;
     let profile = { role:"band", band_name:"", profile_type:null, pending:true };
@@ -233,6 +244,23 @@ const DB = {
         const { data: venues } = await supabase.from("venues").select("*").eq("user_id", user.id);
         if (venues && venues.length > 0) {
           profile = { ...venues[0], profile_type: "venue", band_name: venues[0].name, role: "band" };
+        } else {
+          const { data: managerRoles } = await supabase
+            .from("user_roles")
+            .select("managed_entity_type, managed_entity_id")
+            .eq("user_id", user.id)
+            .like("role", "%_manager")
+            .limit(1);
+          if (managerRoles && managerRoles.length > 0) {
+            const { managed_entity_type, managed_entity_id } = managerRoles[0];
+            if (managed_entity_type === "venue") {
+              const { data: managedVenue } = await supabase.from("venues").select("*").eq("id", managed_entity_id).single();
+              if (managedVenue) profile = { ...managedVenue, profile_type: "venue", band_name: managedVenue.name, role: "band" };
+            } else {
+              const { data: managedProfile } = await supabase.from("profiles").select("*").eq("id", managed_entity_id).single();
+              if (managedProfile) profile = managedProfile;
+            }
+          }
         }
       }
     } catch(e) { console.warn("Profile fetch failed", e); }
@@ -267,10 +295,14 @@ const DB = {
     return data[0];
   },
 
-  // PHASE 4 FIX: was matching on profiles.id (only equal to the auth user id
-  // for legacy pre-migration rows). The only caller passes the logged-in
-  // user's auth id, so match on user_id instead -- otherwise this silently
-  // updates 0 rows for every post-migration band/solo_artist account.
+  // Fixed: previously matched on user_id, which only ever equals the
+  // literal owner's own auth id -- a manager's auth.uid() is never equal
+  // to the profile's user_id column, so this always matched zero rows
+  // for a manager even though RLS already permits their update. Matching
+  // on the profile's own id (its actual identity) works correctly for
+  // both the owner and a scoped manager, since RLS independently gates
+  // which rows are reachable either way -- the match column itself
+  // doesn't need to encode who's allowed to touch it.
   //
   // SEO Step 7 hardening: this is the ordinary owner/manager-facing update
   // path (its only caller is EditProfile) -- RLS already correctly scopes
@@ -280,7 +312,7 @@ const DB = {
   // admin-facing calls this function -- AdminFestivals and AdminVenues
   // both already use their own separate, admin-gated update calls, so
   // restricting this allow-list cannot break anything admin-side.
-  async updateProfile(userId, updates) {
+  async updateProfile(profileId, updates) {
     if (USE_MOCK) return updates;
     const allowedFields = [
       "band_name","city","genre","primary_genre","secondary_genre","tertiary_genre",
@@ -297,9 +329,10 @@ const DB = {
     const { data, error } = await supabase
       .from("profiles")
       .update(safeUpdates)
-      .eq("user_id", userId)
+      .eq("id", profileId)
       .select();
     if (error) throw new Error(error.message);
+    if (!data || data.length !== 1) throw new Error("Update failed — profile not found or you don't have permission to edit it.");
     return data[0];
   },
 
@@ -523,6 +556,10 @@ const DB = {
     return data[0];
   },
 
+  // Admin-only privileged update path (AdminVenues is the sole caller,
+  // gated by isAdmin). Deliberately left unrestricted, exactly as before
+  // -- kept entirely separate from updateVenueSelfService below so admin
+  // access is never affected by the self-service allow-list.
   async updateVenue(venueId, updates) {
     if (USE_MOCK) return updates;
     const { data, error } = await supabase
@@ -531,6 +568,35 @@ const DB = {
       .eq("id", venueId)
       .select();
     if (error) throw new Error(error.message);
+    return data[0];
+  },
+
+  // Ordinary owner/manager-facing update path (EditVenue is the sole
+  // caller) -- separate function, separate allow-list, from updateVenue
+  // above. RLS ("Venue owner can update own venue" / "Venue manager can
+  // update assigned venue") already gates WHICH row can be touched; this
+  // allow-list gates WHICH COLUMNS, the same defence-in-depth pattern
+  // already applied to updateProfile. Matches by the venue's own id, not
+  // user_id, so it works correctly for both the literal owner and a
+  // scoped manager (the same fix applied to updateProfile).
+  async updateVenueSelfService(venueId, updates) {
+    if (USE_MOCK) return updates;
+    const allowedFields = [
+      "name","city","description","address","postcode","capacity",
+      "contact_email","phone","website","facebook","instagram","twitter",
+      "photo_url","seo_title","seo_description","seo_search_phrases",
+    ];
+    const safeUpdates = {};
+    for (const key of allowedFields) {
+      if (Object.prototype.hasOwnProperty.call(updates, key)) safeUpdates[key] = updates[key];
+    }
+    const { data, error } = await supabase
+      .from("venues")
+      .update(safeUpdates)
+      .eq("id", venueId)
+      .select();
+    if (error) throw new Error(error.message);
+    if (!data || data.length !== 1) throw new Error("Update failed — venue not found or you don't have permission to edit it.");
     return data[0];
   },
 
@@ -3588,7 +3654,14 @@ function EditProfile({ user, profile, onSaved }) {
       // PHASE 4 FIX: previously forced claimed:true on every save. Claimed
       // status now comes exclusively from the claim_requests approval
       // workflow (approve_claim_request / approve_new_entity_request).
-      const updated = await DB.updateProfile(user.id, { ...form });
+      //
+      // Fixed: was passing user.id (the signed-in user's own auth id),
+      // which only matches profiles.user_id for the literal owner. A
+      // manager's auth id is never equal to that column, so this silently
+      // failed for managers. profile.id (the row's own identity) works
+      // for both, since RLS -- not this match -- is what actually gates
+      // who's allowed to touch the row.
+      const updated = await DB.updateProfile(profile.id, { ...form });
       setStatus("success");
       setMsg("Profile updated successfully!");
       if (updated) {
@@ -3753,6 +3826,168 @@ function EditProfile({ user, profile, onSaved }) {
 
         <Btn onClick={save} disabled={status==="loading"} style={{ width:"100%", marginTop:24, padding:"14px" }}>
           {status==="loading" ? "SAVING..." : "SAVE PROFILE"}
+        </Btn>
+
+        {status==="success" && <div style={{ marginTop:12, color:C.green, fontSize:13 }}>✓ {msg}</div>}
+        {status==="error"   && <div style={{ marginTop:12, color:C.red,   fontSize:13 }}>{msg}</div>}
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  EDIT VENUE (self-service, for a claimed venue owner or scoped manager)
+// ════════════════════════════════════════════════════════════════════
+// Mirrors EditProfile's structure/styling exactly (same components, same
+// tokens) so it reads as part of the same product, not a separate system.
+// Reached the same way EditProfile is: whichever entity buildAuthFromSession
+// resolved for the signed-in user -- an unclaimed venue with no owner and
+// no manager role never resolves here at all, so there's nothing extra to
+// gate for that case.
+function EditVenue({ user, profile, onSaved }) {
+  const [form, setForm] = useState({
+    name:                profile?.name                 || "",
+    city:                profile?.city                 || "",
+    address:             profile?.address              || "",
+    postcode:            profile?.postcode             || "",
+    capacity:            profile?.capacity             || "",
+    contact_email:       profile?.contact_email        || "",
+    phone:               profile?.phone                || "",
+    description:         profile?.description          || "",
+    website:             profile?.website              || "",
+    facebook:            profile?.facebook             || "",
+    instagram:           profile?.instagram            || "",
+    twitter:             profile?.twitter              || "",
+    photo_url:           profile?.photo_url            || "",
+    seo_title:           profile?.seo_title            || "",
+    seo_description:     profile?.seo_description       || "",
+    seo_search_phrases:  profile?.seo_search_phrases     || "",
+  });
+  const [status, setStatus] = useState("idle");
+  const [msg,    setMsg]    = useState("");
+
+  const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }));
+
+  const save = async () => {
+    setStatus("loading");
+    try {
+      const updated = await DB.updateVenueSelfService(profile.id, { ...form });
+      setStatus("success");
+      setMsg("Venue updated successfully!");
+      if (updated) {
+        setForm(f => ({ ...f, ...updated }));
+        onSaved({ ...profile, ...updated, profile_type: "venue", band_name: updated.name });
+      } else {
+        onSaved({ ...profile, ...form });
+      }
+      setTimeout(() => setStatus("idle"), 3000);
+    } catch(e) {
+      setStatus("error");
+      setMsg(e.message);
+    }
+  };
+
+  const venueUrl = profile?.slug ? `${BASE_URL}/venue/${profile.slug}` : null;
+
+  return (
+    <div style={{ maxWidth:700 }}>
+      <SectionLabel>MY VENUE</SectionLabel>
+
+      {venueUrl && (
+        <div style={{ marginBottom:20, padding:14, background:"rgba(232,32,58,0.06)", border:`1px solid ${C.red}`, borderRadius:8 }}>
+          <div style={{ fontSize:10, color:C.muted, letterSpacing:2, marginBottom:6, fontFamily:F.display }}>YOUR PUBLIC VENUE URL</div>
+          <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+            <code style={{ fontSize:13, color:C.red, flex:1 }}>{venueUrl}</code>
+            <Btn variant="ghost" style={{ fontSize:11, padding:"6px 12px" }} onClick={()=>navigator.clipboard.writeText(venueUrl)}>COPY</Btn>
+            <a href={`/venue/${profile.slug}`} target="_blank" rel="noreferrer"
+              style={{ fontSize:11, fontFamily:F.display, letterSpacing:2, background:C.red, color:"#fff", textDecoration:"none", borderRadius:4, padding:"6px 12px" }}
+            >VIEW →</a>
+          </div>
+        </div>
+      )}
+
+      <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderTop:`3px solid ${C.red}`, borderRadius:8, padding:26 }}>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
+
+          <div style={{ gridColumn:"1/-1" }}>
+            <Input label="VENUE NAME" value={form.name} onChange={set("name")} required />
+          </div>
+          <Input label="CITY / TOWN" value={form.city} onChange={set("city")} />
+          <Input label="POSTCODE"    value={form.postcode} onChange={set("postcode")} placeholder="PO1 1AA" />
+          <div style={{ gridColumn:"1/-1" }}>
+            <Input label="ADDRESS" value={form.address} onChange={set("address")} placeholder="Street address" />
+          </div>
+          <Input label="CAPACITY"      type="number" value={form.capacity}      onChange={set("capacity")}      placeholder="e.g. 200" />
+          <Input label="CONTACT EMAIL" type="email"  value={form.contact_email} onChange={set("contact_email")} placeholder="info@venue.co.uk" />
+          <div style={{ gridColumn:"1/-1" }}>
+            <Input label="PHONE" type="tel" value={form.phone} onChange={set("phone")} placeholder="+44..." />
+          </div>
+
+          <div style={{ gridColumn:"1/-1" }}>
+            <label style={{ display:"block", fontSize:13, color:C.white, letterSpacing:2, marginBottom:6, fontFamily:F.display }}>ABOUT / DESCRIPTION</label>
+            <textarea value={form.description} onChange={set("description")} rows={5}
+              placeholder="Tell people about your venue — atmosphere, capacity, what makes it special..."
+              style={{ ...inputCss, resize:"vertical" }}
+            />
+          </div>
+
+          {/* PHOTO */}
+          <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8 }}>PHOTO</div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <PhotoUpload
+              userId={user.id}
+              currentUrl={form.photo_url}
+              onUploaded={(url) => setForm(f => ({ ...f, photo_url: url }))}
+            />
+          </div>
+
+          {/* SEARCH ENGINE LISTING -- same fields/guidance as EditProfile */}
+          <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8 }}>SEARCH ENGINE LISTING</div>
+          <div style={{ gridColumn:"1/-1", fontSize:13, color:C.muted, lineHeight:1.6, marginTop:-8, marginBottom:4 }}>
+            These are optional. If you leave them blank, we'll automatically generate a good title and description for you from the rest of your venue's profile.
+          </div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <label style={{ display:"block", fontSize:13, color:C.white, letterSpacing:2, marginBottom:6, fontFamily:F.display }}>SEO TITLE</label>
+            <div style={{ fontSize:12, color:C.muted, marginBottom:6 }}>The title that may appear for your page in search engines. Recommended length: around 60 characters.</div>
+            <input type="text" value={form.seo_title} onChange={set("seo_title")}
+              placeholder="Leave blank to use our automatic title"
+              style={inputCss}
+            />
+            <div style={{ fontSize:11, color: form.seo_title.length > 60 ? C.amber : C.dim, marginTop:4 }}>{form.seo_title.length}/60</div>
+          </div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <label style={{ display:"block", fontSize:13, color:C.white, letterSpacing:2, marginBottom:6, fontFamily:F.display }}>SEO DESCRIPTION</label>
+            <div style={{ fontSize:12, color:C.muted, marginBottom:6 }}>The short description that may appear beneath your title in search results. Recommended length: around 155–160 characters.</div>
+            <textarea value={form.seo_description} onChange={set("seo_description")} rows={3}
+              placeholder="Leave blank to use our automatic description"
+              style={{ ...inputCss, resize:"vertical" }}
+            />
+            <div style={{ fontSize:11, color: form.seo_description.length > 160 ? C.amber : C.dim, marginTop:4 }}>{form.seo_description.length}/160</div>
+          </div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <label style={{ display:"block", fontSize:13, color:C.white, letterSpacing:2, marginBottom:6, fontFamily:F.display }}>SEARCH PHRASES</label>
+            <div style={{ fontSize:12, color:C.muted, marginBottom:6 }}>How might people search for your venue? For example: live music venue Southampton, gig venue Hampshire.</div>
+            <textarea value={form.seo_search_phrases} onChange={set("seo_search_phrases")} rows={2}
+              placeholder="Optional — a few phrases, separated by commas"
+              style={{ ...inputCss, resize:"vertical" }}
+            />
+          </div>
+
+          {/* WEBSITE & SOCIAL */}
+          <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2, marginTop:8 }}>WEBSITE & SOCIAL</div>
+          <div style={{ gridColumn:"1/-1" }}>
+            <Input label="WEBSITE" type="url" value={form.website} onChange={set("website")} placeholder="https://..." />
+          </div>
+          <Input label="FACEBOOK"  type="url" value={form.facebook}  onChange={set("facebook")}  placeholder="https://facebook.com/..." />
+          <Input label="INSTAGRAM" type="url" value={form.instagram} onChange={set("instagram")} placeholder="https://instagram.com/..." />
+          <div style={{ gridColumn:"1/-1" }}>
+            <Input label="X / TWITTER" type="url" value={form.twitter} onChange={set("twitter")} placeholder="https://x.com/..." />
+          </div>
+
+        </div>
+
+        <Btn onClick={save} disabled={status==="loading"} style={{ width:"100%", marginTop:24, padding:"14px" }}>
+          {status==="loading" ? "SAVING..." : "SAVE VENUE"}
         </Btn>
 
         {status==="success" && <div style={{ marginTop:12, color:C.green, fontSize:13 }}>✓ {msg}</div>}
@@ -6555,7 +6790,7 @@ function MainApp() {
     { id:"list",     label:"LIST VIEW" },
     { id:"stats",    label:"STATS" },
     { id:"submit",   label:"SUBMIT GIG" },
-    ...(auth ? [{ id:"profile", label:"MY PROFILE" }] : []),
+    ...(auth ? [{ id:"profile", label: auth.profile?.profile_type === "venue" ? "MY VENUE" : "MY PROFILE" }] : []),
     ...(isAdmin ? [
       { id:"dashboard", label:"DASHBOARD" },
       { id:"admin",     label:`MODERATION (${allGigs.filter(g=>g.status==="pending").length})` },
@@ -6696,8 +6931,20 @@ function MainApp() {
           <AdminFestivals onRefresh={refreshAdmin} />
         )}
 
-        {/* MY PROFILE */}
-        {tab==="profile" && auth && (
+        {/* MY PROFILE / MY VENUE -- which component renders depends entirely
+            on what buildAuthFromSession resolved for this signed-in user:
+            a profiles-table entity (band/solo_artist/festival/promoter/
+            organisation, owned or managed) renders EditProfile; a venue
+            (owned or managed) renders EditVenue. An unclaimed venue with no
+            owner and no manager role never resolves to profile_type
+            "venue" at all, so there's nothing extra to gate here -- the
+            auth-resolution step already handles it. */}
+        {tab==="profile" && auth && auth.profile?.profile_type === "venue" && (
+          <EditVenue user={auth.user} profile={auth.profile} onSaved={(updatedProfile)=>{
+            setAuth(a => ({ ...a, profile: updatedProfile }));
+          }} />
+        )}
+        {tab==="profile" && auth && auth.profile?.profile_type !== "venue" && (
           <EditProfile user={auth.user} profile={auth.profile} onSaved={(updatedProfile)=>{
             setAuth(a => ({ ...a, profile: updatedProfile }));
           }} />
