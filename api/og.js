@@ -199,7 +199,7 @@ module.exports = async function handler(req, res) {
     if (type === "band") {
       const { data, error } = await supabase
         .from("profiles")
-        .select("band_name, city, bio, photo_url, band_slug, profile_type, primary_genre, genre, website, facebook, instagram, twitter, tiktok_url")
+        .select("band_name, city, bio, photo_url, band_slug, profile_type, primary_genre, genre, website, facebook, instagram, twitter, tiktok_url, seo_title, seo_description")
         .eq("band_slug", slug)
         .in("profile_type", ["band", "solo_artist"])
         .single();
@@ -207,10 +207,16 @@ module.exports = async function handler(req, res) {
       if (error || !data) throw new Error("Artist not found");
 
       const canonicalUrl = `${BASE_URL}/artist/${data.band_slug}`;
-      const title        = `${data.band_name} | Music Scene Magazine`;
-      const description  = data.bio
-        ? data.bio.slice(0, 200) + (data.bio.length > 200 ? "…" : "")
-        : `${data.band_name}${data.city ? ` from ${data.city}` : ""}. Find upcoming gigs and more on Music Scene Magazine.`;
+      // SEO Step 7: an owner/manager-supplied title or description, when
+      // present, overrides only these two display strings -- canonical
+      // URL, OG url, and every Schema.org property below are still built
+      // exactly as before and never read these fields.
+      const title       = data.seo_title?.trim()
+        || `${data.band_name} | Music Scene Magazine`;
+      const description = data.seo_description?.trim()
+        || (data.bio
+          ? data.bio.slice(0, 200) + (data.bio.length > 200 ? "…" : "")
+          : `${data.band_name}${data.city ? ` from ${data.city}` : ""}. Find upcoming gigs and more on Music Scene Magazine.`);
       const image = data.photo_url || FALLBACK_IMAGE;
 
       // Person for a genuine solo artist, MusicGroup otherwise -- never
@@ -239,17 +245,20 @@ module.exports = async function handler(req, res) {
     if (type === "venue") {
       const { data, error } = await supabase
         .from("venues")
-        .select("name, city, description, photo_url, slug, address, postcode, website, facebook, instagram, twitter")
+        .select("name, city, description, photo_url, slug, address, postcode, website, facebook, instagram, twitter, seo_title, seo_description")
         .eq("slug", slug)
         .single();
 
       if (error || !data) throw new Error("Venue not found");
 
       const canonicalUrl = `${BASE_URL}/venue/${data.slug}`;
-      const title        = `${data.name}, ${data.city} | Music Scene Magazine`;
-      const description  = data.description
-        ? data.description.slice(0, 200)
-        : `${data.name} in ${data.city}. See upcoming gigs and events on Music Scene Magazine.`;
+      // SEO Step 7: owner/manager override, title/description display only.
+      const title       = data.seo_title?.trim()
+        || `${data.name}, ${data.city} | Music Scene Magazine`;
+      const description = data.seo_description?.trim()
+        || (data.description
+          ? data.description.slice(0, 200)
+          : `${data.name} in ${data.city}. See upcoming gigs and events on Music Scene Magazine.`);
       const image = data.photo_url || FALLBACK_IMAGE;
 
       // MusicVenue is a genuine, current schema.org type (Thing > Place >
@@ -286,7 +295,7 @@ module.exports = async function handler(req, res) {
     if (type === "festival") {
       const { data, error } = await supabase
         .from("profiles")
-        .select("band_name, city, postcode, bio, photo_url, band_slug, festival_start_date, festival_end_date, website, facebook, instagram, twitter, tiktok_url")
+        .select("band_name, city, postcode, bio, photo_url, band_slug, festival_start_date, festival_end_date, website, facebook, instagram, twitter, tiktok_url, seo_title, seo_description")
         .eq("band_slug", slug)
         .eq("profile_type", "festival")
         .single();
@@ -300,12 +309,15 @@ module.exports = async function handler(req, res) {
             : fmtDate(data.festival_start_date))
         : "";
       const locationBits = [data.city, data.postcode].filter(Boolean).join(", ");
-      const title = dateRange
-        ? `${data.band_name} | ${dateRange} | Music Scene Magazine`
-        : `${data.band_name} | Music Scene Magazine`;
-      const description = data.bio
+      // SEO Step 7: owner/manager override, title/description display only.
+      const title = data.seo_title?.trim()
+        || (dateRange
+          ? `${data.band_name} | ${dateRange} | Music Scene Magazine`
+          : `${data.band_name} | Music Scene Magazine`);
+      const description = data.seo_description?.trim()
+        || (data.bio
         ? data.bio.slice(0, 200) + (data.bio.length > 200 ? "…" : "")
-        : `${data.band_name}${dateRange ? `, ${dateRange}` : ""}${locationBits ? ` at ${locationBits}` : ""}. Find festival details and line-up on Music Scene Magazine.`;
+        : `${data.band_name}${dateRange ? `, ${dateRange}` : ""}${locationBits ? ` at ${locationBits}` : ""}. Find festival details and line-up on Music Scene Magazine.`);
       const image = data.photo_url || FALLBACK_IMAGE;
 
       // Festival is a genuine, current schema.org type (subtype of
