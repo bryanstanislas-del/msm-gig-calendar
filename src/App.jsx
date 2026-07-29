@@ -6916,6 +6916,124 @@ export default function App() {
   );
 }
 
+// ════════════════════════════════════════════════════════════════════
+//  SPRINT 3: MY FOLLOWING
+// ════════════════════════════════════════════════════════════════════
+// One row per followed entity, linking straight to its profile page.
+// Used for all three groups (artists/venues/festivals) below.
+function FollowedGroup({ title, items, linkPrefix }) {
+  if (!items.length) return null;
+  return (
+    <div style={{ marginBottom:32 }}>
+      <SectionLabel>{title} ({items.length})</SectionLabel>
+      <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+        {items.map(item => (
+          <Link key={item.followId} to={`${linkPrefix}/${item.slug}`}
+            style={{
+              display:"flex", alignItems:"center", justifyContent:"space-between",
+              padding:"14px 18px", background:"rgba(255,255,255,0.02)",
+              border:`1px solid ${C.border}`, borderRadius:8,
+              textDecoration:"none", color:"inherit",
+            }}
+            onMouseEnter={e=>e.currentTarget.style.borderColor=C.red}
+            onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}
+          >
+            <span style={{ fontFamily:F.display, fontSize:16, letterSpacing:1, color:C.white }}>{item.name}</span>
+            <span style={{ fontSize:11, color:C.muted, letterSpacing:1 }}>VIEW →</span>
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Authenticated page listing everything the signed-in fan follows, grouped
+// by type (Task 2), plus "Upcoming From Following" (Task 3) -- upcoming
+// approved gigs from those followed artists/venues/festivals, filtered
+// client-side out of the same `gigs` array MainApp already loads for the
+// main Calendar/List views, which this is purely additive to and never
+// touches.
+function MyFollowingPage({ userId, allGigs }) {
+  const [follows, setFollows] = useState(null); // null = loading
+  const [error, setError]     = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    DB.getUserFollows(userId)
+      .then(f => { if (!cancelled) setFollows(f); })
+      .catch(e => { if (!cancelled) { setError(e.message); setFollows({ artists:[], festivals:[], venues:[] }); } });
+    return () => { cancelled = true; };
+  }, [userId]);
+
+  if (follows === null) {
+    return <div style={{ color:C.muted, fontSize:16 }}>Loading your follows...</div>;
+  }
+
+  const { artists, festivals, venues } = follows;
+  const totalFollowed = artists.length + festivals.length + venues.length;
+
+  const artistIds   = new Set(artists.map(a => a.id));
+  const festivalIds = new Set(festivals.map(f => f.id));
+  const venueIds    = new Set(venues.map(v => v.id));
+  const todayStr = today();
+  const upcoming = (allGigs || [])
+    .filter(g => g.date >= todayStr && (artistIds.has(g.band_profile_id) || venueIds.has(g.venue_id) || festivalIds.has(g.festival_profile_id)))
+    .sort((a,b) => a.date.localeCompare(b.date))
+    .slice(0, 20);
+
+  return (
+    <div>
+      <SectionLabel>MY FOLLOWING</SectionLabel>
+      {error && <div style={{ color:C.red, fontSize:13, marginBottom:16 }}>{error}</div>}
+
+      {totalFollowed === 0 ? (
+        <div style={{ color:C.dim, fontSize:14, padding:"24px 0" }}>
+          You're not following anyone yet. Visit an artist, venue or festival page and hit Follow to see them here.
+        </div>
+      ) : (
+        <>
+          <FollowedGroup title="ARTISTS"   items={artists}   linkPrefix="/artist" />
+          <FollowedGroup title="VENUES"    items={venues}    linkPrefix="/venue" />
+          <FollowedGroup title="FESTIVALS" items={festivals} linkPrefix="/festival" />
+        </>
+      )}
+
+      {totalFollowed > 0 && (
+        <div style={{ marginTop:16 }}>
+          <SectionLabel>UPCOMING FROM FOLLOWING</SectionLabel>
+          {upcoming.length === 0 ? (
+            <div style={{ color:C.dim, fontSize:13, padding:"12px 0" }}>No upcoming gigs from who you follow yet.</div>
+          ) : (
+            <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+              {upcoming.map(g => {
+                const color = GENRE_COLORS[g.genre] || "#888";
+                return (
+                  <Link key={g.id} to={g.slug ? `/gig/${g.slug}` : "#"} style={{
+                    display:"flex", alignItems:"center", gap:14, padding:"13px 16px",
+                    background:"rgba(255,255,255,0.02)", border:`1px solid ${C.border}`,
+                    borderLeft:`3px solid ${color}`, borderRadius:6,
+                    textDecoration:"none", color:"inherit",
+                  }}>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontFamily:F.display, fontSize:15, letterSpacing:1.5, color:C.white }}>{g.band_name}</div>
+                      <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>{g.venue} · {g.city}</div>
+                    </div>
+                    <Badge label={g.genre} color={color} />
+                    <div style={{ textAlign:"right", minWidth:90 }}>
+                      <div style={{ fontSize:12, color:C.red, fontFamily:F.display, letterSpacing:1 }}>{fmtDate(g.date)}</div>
+                      <div style={{ fontSize:11, color:C.dim }}>{g.time}</div>
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MainApp() {
   const [auth,    setAuth]    = useState(null); // { user, profile, token }
   const [gigs,    setGigs]    = useState([]);
@@ -7051,6 +7169,7 @@ function MainApp() {
     { id:"stats",    label:"STATS" },
     { id:"submit",   label:"SUBMIT GIG" },
     ...(auth ? [{ id:"profile", label: auth.profile?.profile_type === "venue" ? "MY VENUE" : "MY PROFILE" }] : []),
+    ...(auth ? [{ id:"following", label:"MY FOLLOWING" }] : []),
     ...(isAdmin ? [
       { id:"dashboard", label:"DASHBOARD" },
       { id:"admin",     label:`MODERATION (${allGigs.filter(g=>g.status==="pending").length})` },
@@ -7214,6 +7333,13 @@ function MainApp() {
           <EditProfile user={auth.user} profile={auth.profile} onSaved={(updatedProfile)=>{
             setAuth(a => ({ ...a, profile: updatedProfile }));
           }} />
+        )}
+
+        {/* SPRINT 3: MY FOLLOWING -- followed artists/venues/festivals plus
+            an "Upcoming From Following" section. Entirely additive: its
+            own tab, doesn't touch the CALENDAR/LIST views below. */}
+        {tab==="following" && auth && (
+          <MyFollowingPage userId={auth.user.id} allGigs={gigs} />
         )}
 
         {/* SUBMIT */}
