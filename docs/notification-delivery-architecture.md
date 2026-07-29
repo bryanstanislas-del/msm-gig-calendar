@@ -63,8 +63,13 @@ notification_event → determine followers → apply preferences → create noti
 
 ## Database objects introduced
 
-Migration: `supabase/migrations/20260729155347_sprint3_5_notification_delivery_architecture.sql`
-(+ hardening follow-up `20260729213817_sprint3_5_harden_notification_functions.sql`)
+Migrations (applied in order):
+1. `20260729155347_sprint3_5_notification_delivery_architecture.sql`
+2. `20260729213817_sprint3_5_harden_notification_functions.sql` — grant tightening + enumeration fix
+3. `20260729215555_sprint3_5_drop_redundant_admin_select_policy.sql` — final-review cleanup
+4. `20260729215646_sprint3_5_add_documentation_comments.sql` — catalog-level `COMMENT ON` + inline comments, no behavior change
+
+Tables/columns/indexes below reflect the state after all four migrations.
 
 ### Tables
 
@@ -117,8 +122,15 @@ Indexes:
 | user_notification_preferences | notification_preferences_insert_own | INSERT | `auth.uid() = user_id` |
 | user_notification_preferences | notification_preferences_update_own | UPDATE | `auth.uid() = user_id` |
 | notification_deliveries | notification_deliveries_select_own | SELECT | `auth.uid() = recipient_user_id` |
-| notification_deliveries | notification_deliveries_select_admin | SELECT | `is_admin()` |
 | notification_deliveries | notification_deliveries_admin_write | ALL | `is_admin()` |
+
+A separate `notification_deliveries_select_admin` (SELECT, `is_admin()`)
+policy existed briefly and was dropped during final review: a `FOR ALL`
+policy's `USING` clause already applies to SELECT, so it was a pure
+duplicate of the admin-read rule already granted by
+`notification_deliveries_admin_write`. Removing it changes no observable
+behavior (re-verified with the same rolled-back admin-read test) and
+removes one redundant policy for future maintainers to reason about.
 
 No non-admin INSERT/UPDATE/DELETE policy exists on `notification_deliveries`
 by design — the only way a row is created is via the SECURITY DEFINER
@@ -251,6 +263,59 @@ authenticated user who has ever created one, which isn't otherwise needed.
   diff step was available in this environment); verified immediately after
   with `get_advisors` and the full RLS test suite above, all in the same
   session, before any application code was touched.
+
+## Final production readiness review
+
+A lead-engineer pass over the whole PR before merge, looking specifically
+for unnecessary complexity, duplicated logic, maintenance risk, security
+weaknesses, naming inconsistencies, and missing documentation.
+
+**Found and fixed:**
+- **Duplicated logic** — `notification_deliveries_select_admin` (SELECT,
+  `is_admin()`) was fully subsumed by `notification_deliveries_admin_write`
+  (`FOR ALL USING (is_admin())`), which already covers SELECT for the
+  identical predicate. Dropped in
+  `20260729215555_sprint3_5_drop_redundant_admin_select_policy.sql`;
+  re-verified admin/unrelated-user visibility is unchanged.
+- **Missing documentation** — neither table nor either function had a
+  catalog-level `COMMENT ON`, and two genuinely non-obvious pieces of logic
+  had no inline explanation: (1) `fanout_notification_event` merging
+  "event not found" and "not authorized" into one check/one error (a
+  future maintainer could easily "improve" this into two error messages
+  and reintroduce the enumeration oracle fixed earlier), and (2) the
+  `category_enabled` CASE has an `artist_updates` branch that
+  `v_category` can never currently equal, which reads like dead code
+  unless you know it's reserved for a future event source. Both addressed,
+  comments-only, in
+  `20260729215646_sprint3_5_add_documentation_comments.sql`.
+
+**Reviewed and intentionally left as-is:**
+- The first migration's original (pre-fix) `fanout_notification_event`
+  body is "dead" the moment the second migration's `CREATE OR REPLACE`
+  runs — this reads as duplication across the two files, but rewriting
+  migration #1 after the fact would misrepresent what was actually applied
+  to the live database in what order. Migrations are an append-only log;
+  each file is left exactly as it was applied.
+- Naming: table/column/function/policy naming was checked against Sprint
+  3's existing conventions (`p_`-prefixed RPC params, snake_case
+  identifiers, `_idx` index suffix) and found consistent. `read_state`
+  (unread/read/dismissed) vs. `delivery_status`
+  (pending/processing/delivered/failed/skipped) are two different concepts
+  living on the same row by design (send status vs. recipient
+  interaction) and are documented as such in the new table comment.
+- No admin-read policy on `user_notification_preferences` — considered
+  and rejected as an addition here (least-privilege default; nothing
+  reads it yet); listed under follow-up below rather than added
+  speculatively.
+- Index set (4 indexes on `notification_deliveries`) reviewed for
+  redundancy: each serves a distinct query shape (own-feed, all-status
+  ops queries, recency, and the worker's pending-only hot path) — none
+  removed.
+
+**Verdict: APPROVE.** No unresolved security, correctness, or
+maintainability concerns. All fixes above were re-verified against the
+live schema (advisories re-checked, RLS re-tested) before this PR was
+updated.
 
 ## Remaining follow-up (out of scope for this sprint)
 
