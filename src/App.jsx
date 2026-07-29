@@ -6658,7 +6658,13 @@ export const GLOBAL_CSS = `
        sized in JS (MSMLogo height prop via useIsMobile), not here -- scaling
        only the <img> height through CSS would distort its aspect ratio
        since the wrapper div's width is computed from the height prop. */
-    .msm-header { height:60px !important; padding:0 14px !important; }
+    /* min-height, not height: a fixed height fights the safe-area
+       padding-top rule below on notched/Dynamic-Island devices (that
+       padding eats into a fixed box, squashing the header's content down
+       into -- and visually overlapping -- the bar below it). min-height
+       keeps a plain 60px box on devices with no inset while letting it
+       grow just enough to fit the status-bar inset on ones that have it. */
+    .msm-header { min-height:60px !important; height:auto !important; padding:0 14px !important; }
     /* Slogan swapped for the live gig counter alone -- minimises this bar's
        height since there's only one short line left to show. */
     .msm-tagline { padding:6px 14px !important; flex-wrap:nowrap; gap:0 !important; }
@@ -6666,7 +6672,7 @@ export const GLOBAL_CSS = `
     .msm-slogan { display:none !important; }
     .msm-gig-counter { margin-left:0 !important; }
     .msm-nav { padding:0 8px !important; gap:3px !important; overflow-x:auto; }
-    .msm-nav button { padding:14px 12px !important; font-size:13px !important; white-space:nowrap; }
+    .msm-nav button { padding:14px 12px !important; font-size:13px !important; font-weight:600 !important; white-space:nowrap; }
     .msm-main { padding:16px 10px !important; }
     .msm-filters { flex-direction:column !important; gap:8px !important; padding:12px !important; }
     .msm-filters > div { flex:unset !important; width:100% !important; }
@@ -6948,7 +6954,7 @@ function MainApp() {
       {/* ── Header ── */}
       <header className="msm-header" style={{ background:"#0a0a0a", borderBottom:`1px solid ${C.border}`, padding:"0 28px", display:"flex", alignItems:"center", justifyContent:"space-between", height:80, position:"sticky", top:0, zIndex:100 }}>
         <div style={{ display:"flex", alignItems:"center", gap:14 }}>
-          <MSMLogo height={isMobile ? 40 : 56} showWordmark={true} />
+          <MSMLogo height={isMobile ? 30 : 56} showWordmark={true} />
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:12 }}>
           {auth ? (
