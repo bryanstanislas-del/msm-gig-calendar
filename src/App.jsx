@@ -987,6 +987,30 @@ async function logActivity(action, entityType, entityName, entityId) {
   } catch(e) { console.warn("Activity log failed:", e); }
 }
 
+// SPRINT 3: fan-out helper for the notification foundation -- a single gig
+// mutation (approval, cancellation) is relevant to followers of up to
+// three different entities at once (the performing artist, the venue, and
+// -- if linked -- the festival), so this records one notification_events
+// row per entity actually present on the gig. DB.recordNotificationEvent
+// already never throws, so a logging hiccup can never block the real
+// admin action this is called from.
+async function recordGigNotificationEvents(gig, eventType) {
+  if (!gig) return;
+  const metadata = { band_name: gig.band_name, venue: gig.venue, city: gig.city, date: gig.date };
+  if (gig.band_profile_id) {
+    await DB.recordNotificationEvent({ eventType, entityType:"band", entityId:gig.band_profile_id, gigId:gig.id, metadata });
+  }
+  if (gig.venue_id) {
+    // "New gig added" (artist-facing) becomes "Venue adds event"
+    // (venue-facing) for the venue's own followers -- same underlying
+    // mutation, two different audiences per the Sprint 3 event list.
+    await DB.recordNotificationEvent({ eventType: eventType==="gig_added" ? "venue_event_added" : eventType, entityType:"venue", entityId:gig.venue_id, gigId:gig.id, metadata });
+  }
+  if (gig.festival_profile_id) {
+    await DB.recordNotificationEvent({ eventType, entityType:"festival", entityId:gig.festival_profile_id, gigId:gig.id, metadata });
+  }
+}
+
 // ── Canonical base URL ─────────────────────────────────────────────
 // Uses Vercel deployment URL so shared links and OG tags work correctly.
 // When a custom domain is pointed at this Vercel app, update this value.
@@ -2271,15 +2295,25 @@ function AdminPanel({ allGigs, onRefresh, bands=[] }) {
     const gig = allGigs.find(g=>g.id===gigId);
     await DB.updateGigStatus(gigId, status);
     await logActivity(`gig_${status}`, "gig", gig?.band_name, gigId);
+    // SPRINT 3 notification foundation: a gig going live is exactly the
+    // "New gig added" / "Venue adds event" moment for followers -- a
+    // pending gig isn't a real public event yet, so this fires on
+    // approval, not submission.
+    if (status === "approved") await recordGigNotificationEvents(gig, "gig_added");
     await onRefresh();
     setLoading(l=>({...l,[gigId]:false}));
   };
 
   const remove = async (gigId, bandName) => {
+    const gig = allGigs.find(g=>g.id===gigId);
     if (!confirm(`Delete "${bandName}" permanently? This cannot be undone.`)) return;
     setLoading(l=>({...l,[gigId]:true}));
     await DB.deleteGig(gigId);
     await logActivity("gig_deleted", "gig", bandName, gigId);
+    // SPRINT 3: only a gig that was actually live counts as a real
+    // cancellation for followers -- deleting a still-pending or
+    // already-rejected gig never went public, so there's nothing to notify.
+    if (gig?.status === "approved") await recordGigNotificationEvents(gig, "gig_cancelled");
     await onRefresh();
   };
 
@@ -3825,6 +3859,14 @@ function EditProfile({ user, profile, onSaved }) {
         onSaved({ ...profile, ...updated });
       } else {
         onSaved({ ...profile, ...form });
+      }
+      // SPRINT 3 notification foundation: a festival profile save is the
+      // "Festival updated" event followers would eventually be notified
+      // about. Band/solo_artist/promoter/organisation saves through this
+      // same form intentionally don't log anything -- only festival is in
+      // the Sprint 3 event list.
+      if (profile.profile_type === "festival") {
+        await DB.recordNotificationEvent({ eventType:"festival_updated", entityType:"festival", entityId:profile.id, metadata:{ band_name: form.band_name } });
       }
       setTimeout(() => setStatus("idle"), 3000);
     } catch(e) {
