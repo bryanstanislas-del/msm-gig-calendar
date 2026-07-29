@@ -853,13 +853,24 @@ const DB = {
   // email yet (see notification_events table comment). Best-effort and
   // never throws: recording an event must never break the real action
   // (gig approval, deletion, festival save) that triggered it.
-  async recordNotificationEvent({ eventType, entityType, entityId, gigId=null, metadata={} }) {
+  // createdBy is optional: pass it when the caller already knows the
+  // current user's id (EditProfile has it as a prop; recordGigNotification
+  // Events below fetches it once for its whole fan-out) to skip a redundant
+  // supabase.auth.getUser() network round trip -- getUser() (unlike
+  // getSession()) always re-validates against the auth server, so calling
+  // it 3x for one gig approval was 3x more network cost than necessary.
+  // Falls back to fetching it if the caller doesn't have it handy.
+  async recordNotificationEvent({ eventType, entityType, entityId, gigId=null, metadata={}, createdBy }) {
     if (USE_MOCK || !entityId) return;
     try {
-      const { data: userData } = await supabase.auth.getUser();
+      let userId = createdBy;
+      if (userId === undefined) {
+        const { data: userData } = await supabase.auth.getUser();
+        userId = userData?.user?.id || null;
+      }
       const { error } = await supabase.from("notification_events").insert({
         event_type: eventType, entity_type: entityType, entity_id: entityId,
-        gig_id: gigId, metadata, created_by: userData?.user?.id || null,
+        gig_id: gigId, metadata, created_by: userId,
       });
       if (error) console.warn("recordNotificationEvent failed", error);
     } catch(e) { console.warn("recordNotificationEvent failed", e); }
@@ -997,18 +1008,32 @@ async function logActivity(action, entityType, entityName, entityId) {
 async function recordGigNotificationEvents(gig, eventType) {
   if (!gig) return;
   const metadata = { band_name: gig.band_name, venue: gig.venue, city: gig.city, date: gig.date };
+  // Fetch the current user once for the whole fan-out (up to 3 inserts)
+  // instead of once per insert -- getUser() is a real network round trip,
+  // not a local read, so this was 3x more network cost than necessary for
+  // a single gig approval/cancellation.
+  let createdBy = null;
+  try {
+    const { data } = await supabase.auth.getUser();
+    createdBy = data?.user?.id || null;
+  } catch(e) { /* recordNotificationEvent already tolerates a missing user */ }
+
+  const writes = [];
   if (gig.band_profile_id) {
-    await DB.recordNotificationEvent({ eventType, entityType:"band", entityId:gig.band_profile_id, gigId:gig.id, metadata });
+    writes.push(DB.recordNotificationEvent({ eventType, entityType:"band", entityId:gig.band_profile_id, gigId:gig.id, metadata, createdBy }));
   }
   if (gig.venue_id) {
     // "New gig added" (artist-facing) becomes "Venue adds event"
     // (venue-facing) for the venue's own followers -- same underlying
     // mutation, two different audiences per the Sprint 3 event list.
-    await DB.recordNotificationEvent({ eventType: eventType==="gig_added" ? "venue_event_added" : eventType, entityType:"venue", entityId:gig.venue_id, gigId:gig.id, metadata });
+    writes.push(DB.recordNotificationEvent({ eventType: eventType==="gig_added" ? "venue_event_added" : eventType, entityType:"venue", entityId:gig.venue_id, gigId:gig.id, metadata, createdBy }));
   }
   if (gig.festival_profile_id) {
-    await DB.recordNotificationEvent({ eventType, entityType:"festival", entityId:gig.festival_profile_id, gigId:gig.id, metadata });
+    writes.push(DB.recordNotificationEvent({ eventType, entityType:"festival", entityId:gig.festival_profile_id, gigId:gig.id, metadata, createdBy }));
   }
+  // Independent writes to independent rows -- safe to run concurrently
+  // rather than serially awaiting each one.
+  await Promise.all(writes);
 }
 
 // ── Canonical base URL ─────────────────────────────────────────────
@@ -1686,11 +1711,12 @@ function InlineAuthPrompt({ accent = C.red, actionLabel = "CONTINUE", onAuthed, 
 }
 
 // SPRINT 3: per-entityType copy for the generalized FollowPanel below.
-// solo_artist intentionally shares band's copy -- both read as "artist" to
-// a fan and both route through band_follows (see followTableFor).
+// solo_artist has no entry -- FollowPanel's `FOLLOW_COPY[entityType] ||
+// FOLLOW_COPY.band` fallback already reads it as "artist", identically to
+// an explicit duplicate entry, since both route through band_follows
+// anyway (see followTableFor).
 const FOLLOW_COPY = {
   band:        { noun:"artist",   button:"FOLLOW THIS ARTIST",   prompt:n=>`🔔 Get notified about new ${n} gigs`,     successTail:"We'll email you when they announce a new gig." },
-  solo_artist: { noun:"artist",   button:"FOLLOW THIS ARTIST",   prompt:n=>`🔔 Get notified about new ${n} gigs`,     successTail:"We'll email you when they announce a new gig." },
   venue:       { noun:"venue",    button:"FOLLOW THIS VENUE",    prompt:n=>`🔔 Get notified about new gigs at ${n}`,  successTail:"We'll email you when they announce a new gig." },
   festival:    { noun:"festival", button:"FOLLOW THIS FESTIVAL", prompt:n=>`🔔 Get notified about ${n} updates`,      successTail:"We'll email you about festival updates." },
 };
@@ -3866,7 +3892,7 @@ function EditProfile({ user, profile, onSaved }) {
       // same form intentionally don't log anything -- only festival is in
       // the Sprint 3 event list.
       if (profile.profile_type === "festival") {
-        await DB.recordNotificationEvent({ eventType:"festival_updated", entityType:"festival", entityId:profile.id, metadata:{ band_name: form.band_name } });
+        await DB.recordNotificationEvent({ eventType:"festival_updated", entityType:"festival", entityId:profile.id, metadata:{ band_name: form.band_name }, createdBy: user.id });
       }
       setTimeout(() => setStatus("idle"), 3000);
     } catch(e) {
@@ -7010,21 +7036,28 @@ function MyFollowingPage({ userId, allGigs }) {
     return () => { cancelled = true; };
   }, [userId]);
 
+  // Computed above the loading early-return (Rules of Hooks -- a hook can't
+  // follow a conditional return), falling back to empty groups while
+  // `follows` is still null. Memoized the same way MainApp's filteredGigs
+  // already is: cheap at today's data volume, but this scan grows with
+  // gigs x follows, so it's worth not redoing on every unrelated re-render.
+  const { artists, festivals, venues } = follows || { artists:[], festivals:[], venues:[] };
+  const upcoming = useMemo(() => {
+    const artistIds   = new Set(artists.map(a => a.id));
+    const festivalIds = new Set(festivals.map(f => f.id));
+    const venueIds    = new Set(venues.map(v => v.id));
+    const todayStr = today();
+    return (allGigs || [])
+      .filter(g => g.date >= todayStr && (artistIds.has(g.band_profile_id) || venueIds.has(g.venue_id) || festivalIds.has(g.festival_profile_id)))
+      .sort((a,b) => a.date.localeCompare(b.date))
+      .slice(0, 20);
+  }, [artists, festivals, venues, allGigs]);
+
   if (follows === null) {
     return <div style={{ color:C.muted, fontSize:16 }}>Loading your follows...</div>;
   }
 
-  const { artists, festivals, venues } = follows;
   const totalFollowed = artists.length + festivals.length + venues.length;
-
-  const artistIds   = new Set(artists.map(a => a.id));
-  const festivalIds = new Set(festivals.map(f => f.id));
-  const venueIds    = new Set(venues.map(v => v.id));
-  const todayStr = today();
-  const upcoming = (allGigs || [])
-    .filter(g => g.date >= todayStr && (artistIds.has(g.band_profile_id) || venueIds.has(g.venue_id) || festivalIds.has(g.festival_profile_id)))
-    .sort((a,b) => a.date.localeCompare(b.date))
-    .slice(0, 20);
 
   return (
     <div>
