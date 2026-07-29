@@ -157,6 +157,13 @@ import AdminHallOfFame  from './components/admin/AdminHallOfFame';
 import AdminFestivals   from './components/admin/AdminFestivals';
 import ClaimDirectoryPage from './components/ClaimDirectoryPage';
 
+// SPRINT 3: generalized Follow -- table/column routing. entityType
+// "band" | "solo_artist" | "festival" (all rows in profiles --
+// band_follows.band_profile_id is really just "any followable
+// profiles.id") route to band_follows; "venue" routes to venue_follows.
+const followTableFor  = (entityType) => entityType === "venue" ? "venue_follows" : "band_follows";
+const followColumnFor = (entityType) => entityType === "venue" ? "venue_id" : "band_profile_id";
+
 // ── DB abstraction (mock or real) ──────────────────────────────────
 const DB = {
   // PHASE 4 FIX: signUp now passes profile_type in the auth metadata so
@@ -768,6 +775,106 @@ const DB = {
       .eq("band_profile_id", bandProfileId);
     if (error) throw new Error(error.message);
   },
+
+  // ── SPRINT 3: generalized Follow (Artists, Venues, Festivals) ──────
+  // Extends Phase 1 (band_follows) to venues via the parallel
+  // venue_follows table -- venues live in their own `venues` table, not
+  // `profiles`, so band_follows.band_profile_id genuinely can't reference
+  // one. isFollowingBand/followBand/unfollowBand above are untouched and
+  // still used directly by FollowBandPanel/BandProfilePage.
+
+  async isFollowing(userId, entityType, entityId) {
+    if (USE_MOCK || !userId || !entityId) return false;
+    const { data, error } = await supabase
+      .from(followTableFor(entityType))
+      .select("id")
+      .eq("user_id", userId)
+      .eq(followColumnFor(entityType), entityId)
+      .maybeSingle();
+    if (error) { console.warn("Follow status check failed", error); return false; }
+    return !!data;
+  },
+
+  async followEntity(userId, entityType, entityId) {
+    if (USE_MOCK) return;
+    const { error } = await supabase
+      .from(followTableFor(entityType))
+      .insert({ user_id: userId, [followColumnFor(entityType)]: entityId });
+    // 23505 = unique_violation -- a double-click/race against the unique
+    // constraint. Treat as success: the end state (following) is exactly
+    // what the user wanted.
+    if (error && error.code !== "23505") throw new Error(error.message);
+  },
+
+  async unfollowEntity(userId, entityType, entityId) {
+    if (USE_MOCK) return;
+    const { error } = await supabase
+      .from(followTableFor(entityType))
+      .delete()
+      .eq("user_id", userId)
+      .eq(followColumnFor(entityType), entityId);
+    if (error) throw new Error(error.message);
+  },
+
+  // Fetches everything a fan follows, grouped and joined with enough detail
+  // (name/slug) for "My Following" and "Upcoming From Following" to render
+  // links and filter gigs without a second round trip. Festivals come back
+  // out of band_follows (they're profiles rows) but are split into their
+  // own group by profile_type, same grouping "My Following" needs.
+  async getUserFollows(userId) {
+    if (USE_MOCK || !userId) return { artists: [], festivals: [], venues: [] };
+    const [bandRes, venueRes] = await Promise.all([
+      supabase.from("band_follows")
+        .select("id, created_at, profiles:band_profile_id(id, band_name, band_slug, profile_type)")
+        .eq("user_id", userId).order("created_at", { ascending:false }),
+      supabase.from("venue_follows")
+        .select("id, created_at, venues:venue_id(id, name, slug)")
+        .eq("user_id", userId).order("created_at", { ascending:false }),
+    ]);
+    if (bandRes.error)  throw new Error(bandRes.error.message);
+    if (venueRes.error) throw new Error(venueRes.error.message);
+
+    const artists = [], festivals = [];
+    (bandRes.data || []).forEach(row => {
+      const p = row.profiles;
+      if (!p) return; // followed profile since deleted -- nothing to show/link to
+      const item = { followId: row.id, id: p.id, entityType: p.profile_type, name: p.band_name, slug: p.band_slug, followedAt: row.created_at };
+      (p.profile_type === "festival" ? festivals : artists).push(item);
+    });
+    const venues = (venueRes.data || [])
+      .filter(row => row.venues)
+      .map(row => ({ followId: row.id, id: row.venues.id, entityType: "venue", name: row.venues.name, slug: row.venues.slug, followedAt: row.created_at }));
+
+    return { artists, festivals, venues };
+  },
+
+  // ── SPRINT 3: notification foundation ──────────────────────────────
+  // Append-only event log for future notifications -- no fan-out, push or
+  // email yet (see notification_events table comment). Best-effort and
+  // never throws: recording an event must never break the real action
+  // (gig approval, deletion, festival save) that triggered it.
+  // createdBy is optional: pass it when the caller already knows the
+  // current user's id (EditProfile has it as a prop; recordGigNotification
+  // Events below fetches it once for its whole fan-out) to skip a redundant
+  // supabase.auth.getUser() network round trip -- getUser() (unlike
+  // getSession()) always re-validates against the auth server, so calling
+  // it 3x for one gig approval was 3x more network cost than necessary.
+  // Falls back to fetching it if the caller doesn't have it handy.
+  async recordNotificationEvent({ eventType, entityType, entityId, gigId=null, metadata={}, createdBy }) {
+    if (USE_MOCK || !entityId) return;
+    try {
+      let userId = createdBy;
+      if (userId === undefined) {
+        const { data: userData } = await supabase.auth.getUser();
+        userId = userData?.user?.id || null;
+      }
+      const { error } = await supabase.from("notification_events").insert({
+        event_type: eventType, entity_type: entityType, entity_id: entityId,
+        gig_id: gigId, metadata, created_by: userId,
+      });
+      if (error) console.warn("recordNotificationEvent failed", error);
+    } catch(e) { console.warn("recordNotificationEvent failed", e); }
+  },
 };
 
 // ── MSM Logo ────────────────────────────────────────────────────────
@@ -889,6 +996,44 @@ async function logActivity(action, entityType, entityName, entityId) {
       entity_id: entityId || null, performed_by: userId, performed_by_name: performedByName,
     });
   } catch(e) { console.warn("Activity log failed:", e); }
+}
+
+// SPRINT 3: fan-out helper for the notification foundation -- a single gig
+// mutation (approval, cancellation) is relevant to followers of up to
+// three different entities at once (the performing artist, the venue, and
+// -- if linked -- the festival), so this records one notification_events
+// row per entity actually present on the gig. DB.recordNotificationEvent
+// already never throws, so a logging hiccup can never block the real
+// admin action this is called from.
+async function recordGigNotificationEvents(gig, eventType) {
+  if (!gig) return;
+  const metadata = { band_name: gig.band_name, venue: gig.venue, city: gig.city, date: gig.date };
+  // Fetch the current user once for the whole fan-out (up to 3 inserts)
+  // instead of once per insert -- getUser() is a real network round trip,
+  // not a local read, so this was 3x more network cost than necessary for
+  // a single gig approval/cancellation.
+  let createdBy = null;
+  try {
+    const { data } = await supabase.auth.getUser();
+    createdBy = data?.user?.id || null;
+  } catch(e) { /* recordNotificationEvent already tolerates a missing user */ }
+
+  const writes = [];
+  if (gig.band_profile_id) {
+    writes.push(DB.recordNotificationEvent({ eventType, entityType:"band", entityId:gig.band_profile_id, gigId:gig.id, metadata, createdBy }));
+  }
+  if (gig.venue_id) {
+    // "New gig added" (artist-facing) becomes "Venue adds event"
+    // (venue-facing) for the venue's own followers -- same underlying
+    // mutation, two different audiences per the Sprint 3 event list.
+    writes.push(DB.recordNotificationEvent({ eventType: eventType==="gig_added" ? "venue_event_added" : eventType, entityType:"venue", entityId:gig.venue_id, gigId:gig.id, metadata, createdBy }));
+  }
+  if (gig.festival_profile_id) {
+    writes.push(DB.recordNotificationEvent({ eventType, entityType:"festival", entityId:gig.festival_profile_id, gigId:gig.id, metadata, createdBy }));
+  }
+  // Independent writes to independent rows -- safe to run concurrently
+  // rather than serially awaiting each one.
+  await Promise.all(writes);
 }
 
 // ── Canonical base URL ─────────────────────────────────────────────
@@ -1565,7 +1710,26 @@ function InlineAuthPrompt({ accent = C.red, actionLabel = "CONTINUE", onAuthed, 
   );
 }
 
-function FollowBandPanel({ bandProfileId, bandName }) {
+// SPRINT 3: per-entityType copy for the generalized FollowPanel below.
+// solo_artist has no entry -- FollowPanel's `FOLLOW_COPY[entityType] ||
+// FOLLOW_COPY.band` fallback already reads it as "artist", identically to
+// an explicit duplicate entry, since both route through band_follows
+// anyway (see followTableFor).
+const FOLLOW_COPY = {
+  band:        { noun:"artist",   button:"FOLLOW THIS ARTIST",   prompt:n=>`🔔 Get notified about new ${n} gigs`,     successTail:"We'll email you when they announce a new gig." },
+  venue:       { noun:"venue",    button:"FOLLOW THIS VENUE",    prompt:n=>`🔔 Get notified about new gigs at ${n}`,  successTail:"We'll email you when they announce a new gig." },
+  festival:    { noun:"festival", button:"FOLLOW THIS FESTIVAL", prompt:n=>`🔔 Get notified about ${n} updates`,      successTail:"We'll email you about festival updates." },
+};
+
+// SPRINT 3: the one consistent Follow component used on every followable
+// profile page (artist, venue, festival). entityType/entityId/entityName
+// drive both the DB calls (via DB.isFollowing/followEntity/unfollowEntity,
+// which route to the right table per entityType) and the copy. Structure,
+// state machine and styling are unchanged from the Phase 1 band-only
+// version below -- FollowBandPanel is now a thin wrapper over this so
+// BandProfilePage's existing usage/behaviour is preserved exactly.
+function FollowPanel({ entityType, entityId, entityName }) {
+  const copy = FOLLOW_COPY[entityType] || FOLLOW_COPY.band;
   const [authUser, setAuthUser]   = useState(undefined); // undefined=checking, null=signed out
   const [following, setFollowing] = useState(null);       // null=checking/unknown
   const [uiMode, setUiMode]       = useState("idle");      // idle | auth
@@ -1583,21 +1747,21 @@ function FollowBandPanel({ bandProfileId, bandName }) {
         if (cancelled) return;
         setAuthUser(user);
         if (user) {
-          const isFollowing = await DB.isFollowingBand(user.id, bandProfileId);
+          const isFollowing = await DB.isFollowing(user.id, entityType, entityId);
           if (!cancelled) setFollowing(isFollowing);
         }
       } catch(e) { if (!cancelled) setAuthUser(null); }
     }
     load();
     return () => { cancelled = true; };
-  }, [bandProfileId]);
+  }, [entityType, entityId]);
 
   const doFollow = async (userId) => {
     setBusy(true); setError("");
     try {
-      await DB.followBand(userId, bandProfileId);
+      await DB.followEntity(userId, entityType, entityId);
       setFollowing(true);
-      setSuccess(`You're now following ${bandName}. We'll email you when they announce a new gig.`);
+      setSuccess(`You're now following ${entityName}. ${copy.successTail}`);
     } catch(e) { setError(e.message); }
     finally { setBusy(false); }
   };
@@ -1605,7 +1769,7 @@ function FollowBandPanel({ bandProfileId, bandName }) {
   const handleUnfollow = async () => {
     setBusy(true); setError(""); setSuccess("");
     try {
-      await DB.unfollowBand(authUser.id, bandProfileId);
+      await DB.unfollowEntity(authUser.id, entityType, entityId);
       setFollowing(false);
     } catch(e) { setError(e.message); }
     finally { setBusy(false); }
@@ -1622,12 +1786,12 @@ function FollowBandPanel({ bandProfileId, bandName }) {
     return wrap(<div style={{ fontSize:13, color:C.dim, letterSpacing:1 }}>LOADING...</div>);
   }
 
-  // Signed-out visitor
+  // Signed-out visitor -- registration nudge, encouraged not forced
   if (authUser === null) {
     if (uiMode === "idle") {
       return wrap(
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:12 }}>
-          <div style={{ fontSize:13, color:C.muted, letterSpacing:1 }}>🔔 Follow {bandName} to hear about new gigs</div>
+          <div style={{ fontSize:13, color:C.muted, letterSpacing:1 }}>🔔 Follow this {copy.noun} to receive future gig updates.</div>
           <Btn onClick={()=>setUiMode("auth")} style={{ fontSize:11, padding:"10px 18px" }}>
             SIGN IN TO FOLLOW
           </Btn>
@@ -1657,9 +1821,9 @@ function FollowBandPanel({ bandProfileId, bandName }) {
           </>
         ) : (
           <>
-            <div style={{ fontSize:13, color:C.muted, letterSpacing:1 }}>🔔 Get notified about new {bandName} gigs</div>
+            <div style={{ fontSize:13, color:C.muted, letterSpacing:1 }}>{copy.prompt(entityName)}</div>
             <Btn onClick={()=>doFollow(authUser.id)} disabled={busy} style={{ fontSize:11, padding:"10px 18px" }}>
-              {busy ? "..." : "FOLLOW THIS BAND"}
+              {busy ? "..." : copy.button}
             </Btn>
           </>
         )}
@@ -1668,6 +1832,15 @@ function FollowBandPanel({ bandProfileId, bandName }) {
       {success && <div style={{ color:C.green, fontSize:12, marginTop:10 }}>✓ {success}</div>}
     </div>
   );
+}
+
+// Thin wrapper preserving FollowBandPanel's exact original prop API
+// (bandProfileId, bandName) so BandProfilePage's existing usage is
+// untouched. entityType defaults to "band" but BandProfilePage passes the
+// real profile_type ("band" | "solo_artist") the same way it already does
+// for ClaimEntityBox just below it.
+function FollowBandPanel({ bandProfileId, bandName, entityType = "band" }) {
+  return <FollowPanel entityType={entityType} entityId={bandProfileId} entityName={bandName} />;
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -2148,15 +2321,25 @@ function AdminPanel({ allGigs, onRefresh, bands=[] }) {
     const gig = allGigs.find(g=>g.id===gigId);
     await DB.updateGigStatus(gigId, status);
     await logActivity(`gig_${status}`, "gig", gig?.band_name, gigId);
+    // SPRINT 3 notification foundation: a gig going live is exactly the
+    // "New gig added" / "Venue adds event" moment for followers -- a
+    // pending gig isn't a real public event yet, so this fires on
+    // approval, not submission.
+    if (status === "approved") await recordGigNotificationEvents(gig, "gig_added");
     await onRefresh();
     setLoading(l=>({...l,[gigId]:false}));
   };
 
   const remove = async (gigId, bandName) => {
+    const gig = allGigs.find(g=>g.id===gigId);
     if (!confirm(`Delete "${bandName}" permanently? This cannot be undone.`)) return;
     setLoading(l=>({...l,[gigId]:true}));
     await DB.deleteGig(gigId);
     await logActivity("gig_deleted", "gig", bandName, gigId);
+    // SPRINT 3: only a gig that was actually live counts as a real
+    // cancellation for followers -- deleting a still-pending or
+    // already-rejected gig never went public, so there's nothing to notify.
+    if (gig?.status === "approved") await recordGigNotificationEvents(gig, "gig_cancelled");
     await onRefresh();
   };
 
@@ -3703,6 +3886,14 @@ function EditProfile({ user, profile, onSaved }) {
       } else {
         onSaved({ ...profile, ...form });
       }
+      // SPRINT 3 notification foundation: a festival profile save is the
+      // "Festival updated" event followers would eventually be notified
+      // about. Band/solo_artist/promoter/organisation saves through this
+      // same form intentionally don't log anything -- only festival is in
+      // the Sprint 3 event list.
+      if (profile.profile_type === "festival") {
+        await DB.recordNotificationEvent({ eventType:"festival_updated", entityType:"festival", entityId:profile.id, metadata:{ band_name: form.band_name }, createdBy: user.id });
+      }
       setTimeout(() => setStatus("idle"), 3000);
     } catch(e) {
       setStatus("error");
@@ -4673,6 +4864,9 @@ function VenueProfilePage() {
         {/* PHASE 4: claim this venue if it's an unclaimed admin-created listing */}
         <ClaimEntityBox entityType="venue" entityId={venue.id} claimStatus={venue.claim_status} />
 
+        {/* SPRINT 3: Follow this venue */}
+        <FollowPanel entityType="venue" entityId={venue.id} entityName={venue.name} />
+
         {/* Upcoming Gigs */}
         <div style={{ marginBottom:48 }}>
           <SectionLabel>UPCOMING GIGS</SectionLabel>
@@ -4853,8 +5047,11 @@ function BandProfilePage() {
 
           {/* Info */}
           <div style={{ flex:1, minWidth:200 }}>
-            {/* Status badge */}
-            {band.band_status !== "active" && (
+            {/* Status badge -- band_status is nullable in the DB (only
+                defaults to 'active' for new rows), so this must also check
+                truthiness, not just inequality with "active" (matches the
+                same guard used for the AdminBands list badge below). */}
+            {band.band_status !== "active" && band.band_status && (
               <div style={{ display:"inline-block", fontSize:10, color:C.amber, border:`1px solid ${C.amber}`, borderRadius:3, padding:"2px 8px", letterSpacing:2, marginBottom:8, fontFamily:F.display }}>
                 {band.band_status.toUpperCase().replace("-"," ")}
               </div>
@@ -5021,7 +5218,7 @@ function BandProfilePage() {
         )}
 
         {/* Fan Features Phase 1: Follow this band */}
-        <FollowBandPanel bandProfileId={band.id} bandName={band.band_name} />
+        <FollowBandPanel bandProfileId={band.id} bandName={band.band_name} entityType={band.profile_type || "band"} />
       </div>
     </div>
   );
@@ -5197,6 +5394,9 @@ function FestivalProfilePage() {
         <MSMCoverageSection awards={awards} subjectLabel={entity.band_name} />
 
         <ClaimEntityBox entityType="festival" entityId={entity.id} claimStatus={entity.claim_status} />
+
+        {/* SPRINT 3: Follow this festival */}
+        <FollowPanel entityType="festival" entityId={entity.id} entityName={entity.band_name} />
       </div>
     </div>
   );
@@ -6787,6 +6987,131 @@ export default function App() {
   );
 }
 
+// ════════════════════════════════════════════════════════════════════
+//  SPRINT 3: MY FOLLOWING
+// ════════════════════════════════════════════════════════════════════
+// One row per followed entity, linking straight to its profile page.
+// Used for all three groups (artists/venues/festivals) below.
+function FollowedGroup({ title, items, linkPrefix }) {
+  if (!items.length) return null;
+  return (
+    <div style={{ marginBottom:32 }}>
+      <SectionLabel>{title} ({items.length})</SectionLabel>
+      <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+        {items.map(item => (
+          <Link key={item.followId} to={`${linkPrefix}/${item.slug}`}
+            style={{
+              display:"flex", alignItems:"center", justifyContent:"space-between",
+              padding:"14px 18px", background:"rgba(255,255,255,0.02)",
+              border:`1px solid ${C.border}`, borderRadius:8,
+              textDecoration:"none", color:"inherit",
+            }}
+            onMouseEnter={e=>e.currentTarget.style.borderColor=C.red}
+            onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}
+          >
+            <span style={{ fontFamily:F.display, fontSize:16, letterSpacing:1, color:C.white }}>{item.name}</span>
+            <span style={{ fontSize:11, color:C.muted, letterSpacing:1 }}>VIEW →</span>
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Authenticated page listing everything the signed-in fan follows, grouped
+// by type (Task 2), plus "Upcoming From Following" (Task 3) -- upcoming
+// approved gigs from those followed artists/venues/festivals, filtered
+// client-side out of the same `gigs` array MainApp already loads for the
+// main Calendar/List views, which this is purely additive to and never
+// touches.
+function MyFollowingPage({ userId, allGigs }) {
+  const [follows, setFollows] = useState(null); // null = loading
+  const [error, setError]     = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    DB.getUserFollows(userId)
+      .then(f => { if (!cancelled) setFollows(f); })
+      .catch(e => { if (!cancelled) { setError(e.message); setFollows({ artists:[], festivals:[], venues:[] }); } });
+    return () => { cancelled = true; };
+  }, [userId]);
+
+  // Computed above the loading early-return (Rules of Hooks -- a hook can't
+  // follow a conditional return), falling back to empty groups while
+  // `follows` is still null. Memoized the same way MainApp's filteredGigs
+  // already is: cheap at today's data volume, but this scan grows with
+  // gigs x follows, so it's worth not redoing on every unrelated re-render.
+  const { artists, festivals, venues } = follows || { artists:[], festivals:[], venues:[] };
+  const upcoming = useMemo(() => {
+    const artistIds   = new Set(artists.map(a => a.id));
+    const festivalIds = new Set(festivals.map(f => f.id));
+    const venueIds    = new Set(venues.map(v => v.id));
+    const todayStr = today();
+    return (allGigs || [])
+      .filter(g => g.date >= todayStr && (artistIds.has(g.band_profile_id) || venueIds.has(g.venue_id) || festivalIds.has(g.festival_profile_id)))
+      .sort((a,b) => a.date.localeCompare(b.date))
+      .slice(0, 20);
+  }, [artists, festivals, venues, allGigs]);
+
+  if (follows === null) {
+    return <div style={{ color:C.muted, fontSize:16 }}>Loading your follows...</div>;
+  }
+
+  const totalFollowed = artists.length + festivals.length + venues.length;
+
+  return (
+    <div>
+      <SectionLabel>MY FOLLOWING</SectionLabel>
+      {error && <div style={{ color:C.red, fontSize:13, marginBottom:16 }}>{error}</div>}
+
+      {totalFollowed === 0 ? (
+        <div style={{ color:C.dim, fontSize:14, padding:"24px 0" }}>
+          You're not following anyone yet. Visit an artist, venue or festival page and hit Follow to see them here.
+        </div>
+      ) : (
+        <>
+          <FollowedGroup title="ARTISTS"   items={artists}   linkPrefix="/artist" />
+          <FollowedGroup title="VENUES"    items={venues}    linkPrefix="/venue" />
+          <FollowedGroup title="FESTIVALS" items={festivals} linkPrefix="/festival" />
+        </>
+      )}
+
+      {totalFollowed > 0 && (
+        <div style={{ marginTop:16 }}>
+          <SectionLabel>UPCOMING FROM FOLLOWING</SectionLabel>
+          {upcoming.length === 0 ? (
+            <div style={{ color:C.dim, fontSize:13, padding:"12px 0" }}>No upcoming gigs from who you follow yet.</div>
+          ) : (
+            <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+              {upcoming.map(g => {
+                const color = GENRE_COLORS[g.genre] || "#888";
+                return (
+                  <Link key={g.id} to={g.slug ? `/gig/${g.slug}` : "#"} style={{
+                    display:"flex", alignItems:"center", gap:14, padding:"13px 16px",
+                    background:"rgba(255,255,255,0.02)", border:`1px solid ${C.border}`,
+                    borderLeft:`3px solid ${color}`, borderRadius:6,
+                    textDecoration:"none", color:"inherit",
+                  }}>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontFamily:F.display, fontSize:15, letterSpacing:1.5, color:C.white }}>{g.band_name}</div>
+                      <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>{g.venue} · {g.city}</div>
+                    </div>
+                    <Badge label={g.genre} color={color} />
+                    <div style={{ textAlign:"right", minWidth:90 }}>
+                      <div style={{ fontSize:12, color:C.red, fontFamily:F.display, letterSpacing:1 }}>{fmtDate(g.date)}</div>
+                      <div style={{ fontSize:11, color:C.dim }}>{g.time}</div>
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MainApp() {
   const [auth,    setAuth]    = useState(null); // { user, profile, token }
   const [gigs,    setGigs]    = useState([]);
@@ -6922,6 +7247,7 @@ function MainApp() {
     { id:"stats",    label:"STATS" },
     { id:"submit",   label:"SUBMIT GIG" },
     ...(auth ? [{ id:"profile", label: auth.profile?.profile_type === "venue" ? "MY VENUE" : "MY PROFILE" }] : []),
+    ...(auth ? [{ id:"following", label:"MY FOLLOWING" }] : []),
     ...(isAdmin ? [
       { id:"dashboard", label:"DASHBOARD" },
       { id:"admin",     label:`MODERATION (${allGigs.filter(g=>g.status==="pending").length})` },
@@ -7085,6 +7411,13 @@ function MainApp() {
           <EditProfile user={auth.user} profile={auth.profile} onSaved={(updatedProfile)=>{
             setAuth(a => ({ ...a, profile: updatedProfile }));
           }} />
+        )}
+
+        {/* SPRINT 3: MY FOLLOWING -- followed artists/venues/festivals plus
+            an "Upcoming From Following" section. Entirely additive: its
+            own tab, doesn't touch the CALENDAR/LIST views below. */}
+        {tab==="following" && auth && (
+          <MyFollowingPage userId={auth.user.id} allGigs={gigs} />
         )}
 
         {/* SUBMIT */}
