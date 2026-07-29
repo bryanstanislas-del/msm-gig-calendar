@@ -157,6 +157,13 @@ import AdminHallOfFame  from './components/admin/AdminHallOfFame';
 import AdminFestivals   from './components/admin/AdminFestivals';
 import ClaimDirectoryPage from './components/ClaimDirectoryPage';
 
+// SPRINT 3: generalized Follow -- table/column routing. entityType
+// "band" | "solo_artist" | "festival" (all rows in profiles --
+// band_follows.band_profile_id is really just "any followable
+// profiles.id") route to band_follows; "venue" routes to venue_follows.
+const followTableFor  = (entityType) => entityType === "venue" ? "venue_follows" : "band_follows";
+const followColumnFor = (entityType) => entityType === "venue" ? "venue_id" : "band_profile_id";
+
 // ── DB abstraction (mock or real) ──────────────────────────────────
 const DB = {
   // PHASE 4 FIX: signUp now passes profile_type in the auth metadata so
@@ -767,6 +774,95 @@ const DB = {
       .eq("user_id", userId)
       .eq("band_profile_id", bandProfileId);
     if (error) throw new Error(error.message);
+  },
+
+  // ── SPRINT 3: generalized Follow (Artists, Venues, Festivals) ──────
+  // Extends Phase 1 (band_follows) to venues via the parallel
+  // venue_follows table -- venues live in their own `venues` table, not
+  // `profiles`, so band_follows.band_profile_id genuinely can't reference
+  // one. isFollowingBand/followBand/unfollowBand above are untouched and
+  // still used directly by FollowBandPanel/BandProfilePage.
+
+  async isFollowing(userId, entityType, entityId) {
+    if (USE_MOCK || !userId || !entityId) return false;
+    const { data, error } = await supabase
+      .from(followTableFor(entityType))
+      .select("id")
+      .eq("user_id", userId)
+      .eq(followColumnFor(entityType), entityId)
+      .maybeSingle();
+    if (error) { console.warn("Follow status check failed", error); return false; }
+    return !!data;
+  },
+
+  async followEntity(userId, entityType, entityId) {
+    if (USE_MOCK) return;
+    const { error } = await supabase
+      .from(followTableFor(entityType))
+      .insert({ user_id: userId, [followColumnFor(entityType)]: entityId });
+    // 23505 = unique_violation -- a double-click/race against the unique
+    // constraint. Treat as success: the end state (following) is exactly
+    // what the user wanted.
+    if (error && error.code !== "23505") throw new Error(error.message);
+  },
+
+  async unfollowEntity(userId, entityType, entityId) {
+    if (USE_MOCK) return;
+    const { error } = await supabase
+      .from(followTableFor(entityType))
+      .delete()
+      .eq("user_id", userId)
+      .eq(followColumnFor(entityType), entityId);
+    if (error) throw new Error(error.message);
+  },
+
+  // Fetches everything a fan follows, grouped and joined with enough detail
+  // (name/slug) for "My Following" and "Upcoming From Following" to render
+  // links and filter gigs without a second round trip. Festivals come back
+  // out of band_follows (they're profiles rows) but are split into their
+  // own group by profile_type, same grouping "My Following" needs.
+  async getUserFollows(userId) {
+    if (USE_MOCK || !userId) return { artists: [], festivals: [], venues: [] };
+    const [bandRes, venueRes] = await Promise.all([
+      supabase.from("band_follows")
+        .select("id, created_at, profiles:band_profile_id(id, band_name, band_slug, profile_type)")
+        .eq("user_id", userId).order("created_at", { ascending:false }),
+      supabase.from("venue_follows")
+        .select("id, created_at, venues:venue_id(id, name, slug)")
+        .eq("user_id", userId).order("created_at", { ascending:false }),
+    ]);
+    if (bandRes.error)  throw new Error(bandRes.error.message);
+    if (venueRes.error) throw new Error(venueRes.error.message);
+
+    const artists = [], festivals = [];
+    (bandRes.data || []).forEach(row => {
+      const p = row.profiles;
+      if (!p) return; // followed profile since deleted -- nothing to show/link to
+      const item = { followId: row.id, id: p.id, entityType: p.profile_type, name: p.band_name, slug: p.band_slug, followedAt: row.created_at };
+      (p.profile_type === "festival" ? festivals : artists).push(item);
+    });
+    const venues = (venueRes.data || [])
+      .filter(row => row.venues)
+      .map(row => ({ followId: row.id, id: row.venues.id, entityType: "venue", name: row.venues.name, slug: row.venues.slug, followedAt: row.created_at }));
+
+    return { artists, festivals, venues };
+  },
+
+  // ── SPRINT 3: notification foundation ──────────────────────────────
+  // Append-only event log for future notifications -- no fan-out, push or
+  // email yet (see notification_events table comment). Best-effort and
+  // never throws: recording an event must never break the real action
+  // (gig approval, deletion, festival save) that triggered it.
+  async recordNotificationEvent({ eventType, entityType, entityId, gigId=null, metadata={} }) {
+    if (USE_MOCK || !entityId) return;
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      const { error } = await supabase.from("notification_events").insert({
+        event_type: eventType, entity_type: entityType, entity_id: entityId,
+        gig_id: gigId, metadata, created_by: userData?.user?.id || null,
+      });
+      if (error) console.warn("recordNotificationEvent failed", error);
+    } catch(e) { console.warn("recordNotificationEvent failed", e); }
   },
 };
 
