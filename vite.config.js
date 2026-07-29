@@ -2,16 +2,23 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
-// TODO (Sprint 1, blocked on revised ™ logo): the `icons` array below is
-// intentionally left empty. Do not add icon entries or generate any icon
-// files until the updated master artwork has been supplied -- see project
-// notes. Manifest is otherwise complete and ready.
 export default defineConfig({
   plugins: [
     react(),
     VitePWA({
       registerType: 'autoUpdate',
       injectRegister: null, // registered explicitly in src/main.jsx instead
+      // favicon.ico and apple-touch-icon.png aren't referenced by the
+      // manifest's icons array (that's Android/Chrome-specific), so they
+      // need to be listed explicitly to be precached as part of the
+      // offline app shell. icon-192/512/512-maskable are covered
+      // automatically since they're already in manifest.icons below.
+      includeAssets: [
+        'favicon.ico',
+        'icons/favicon-16.png',
+        'icons/favicon-32.png',
+        'icons/apple-touch-icon.png',
+      ],
       manifest: {
         name: 'Music Scene Magazine Gig Calendar',
         short_name: 'MSM Gig Calendar',
@@ -21,9 +28,9 @@ export default defineConfig({
         background_color: '#0d0d0d',
         theme_color: '#0a0a0a',
         icons: [
-          // Populated once the revised master logo (with (TM)) is
-          // available -- see TODO above. Required before this manifest
-          // passes an installability check.
+          { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+          { src: '/icons/icon-512-maskable.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
       },
       workbox: {
