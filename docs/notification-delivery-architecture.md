@@ -325,9 +325,122 @@ updated.
 - Wiring `fanout_notification_event` to actually run — either a trigger on
   `notification_events` insert, or an explicit call from
   `recordGigNotificationEvents`/`DB.recordNotificationEvent` at the
-  application layer. Neither is done yet, per this sprint's explicit scope.
-- A user-facing preferences UI and an in-app notification list UI. Not
-  built this sprint — the data model is verified and ready for one.
+  application layer. **Still not done as of Sprint 4** — see below.
+- ~~A user-facing preferences UI and an in-app notification list UI.~~
+  **Built in Sprint 4** — see below.
 - `admin_read` policy on `user_notification_preferences` was intentionally
   left out (no current admin UI needs it); trivial to add later following
-  the same pattern as `notification_deliveries_select_admin`.
+  the same pattern as `notification_deliveries_select_admin`. Still true
+  after Sprint 4 — the preferences page only ever reads/writes the
+  signed-in user's own row.
+
+---
+
+# Sprint 4 — Notification Centre (implemented)
+
+Builds the user-facing UI on top of the Sprint 3.5 backend above: bell +
+badge in the header, a full Notification Centre page, and a preferences
+page. Still **no push, no email delivery, no polling** — the badge is
+fetched once on sign-in and refreshed on demand (after mark-read /
+mark-all-read), never on a timer.
+
+## What was added
+
+**One small backend addition** (everything else re-uses Sprint 3.5 as-is):
+`mark_all_notifications_read()` — `supabase/migrations/20260729222120_sprint4_mark_all_notifications_read.sql`.
+Bulk counterpart to `mark_notification_read`: same `SECURITY DEFINER` /
+`search_path=''` shape, takes **no parameters** (so there's no way to target
+another user's rows), scoped to `recipient_user_id = auth.uid() and
+delivery_channel = 'in_app' and read_state = 'unread'`. `EXECUTE` granted to
+`authenticated` only (anon revoked), matching the Sprint 3.5 hardening
+convention. Verified with the same rolled-back-transaction technique as
+Sprint 3.5: a caller only ever marks their own rows (an unrelated user's
+existing unread row was untouched by another caller's bulk call), scoped to
+`in_app` only, and idempotent (second call returns 0).
+
+**Frontend, entirely in the existing single-file app plus one new pure
+module:**
+
+- `src/notificationHelpers.js` — pure, framework-free helpers
+  (`DEFAULT_NOTIFICATION_PREFS`, `describeNotificationEvent`,
+  `formatNotificationDate`), pulled out of `App.jsx` specifically so they're
+  unit-testable without a Supabase client or DOM. 13 Vitest cases in
+  `src/notificationHelpers.test.js` (event-type → display text mapping,
+  including the fallback for an unrecognized future `event_type`; date
+  formatting edge cases; the preference defaults). This repo had **zero**
+  test infrastructure before this sprint — `vitest` was added as the only
+  new dependency, with `npm test` wired up in `package.json`.
+- Six `DB.*` methods (`getNotifications`, `getUnreadNotificationCount`,
+  `markNotificationRead`, `markAllNotificationsRead`,
+  `getNotificationPreferences`, `saveNotificationPreferences`), following
+  the exact existing `DB` object conventions (async, `USE_MOCK` guard,
+  `throw` for user-facing reads/writes vs. `console.warn` for best-effort
+  ones). `getNotifications` embeds `notification_events` and, via its real
+  `gig_id` foreign key, `gigs.slug` in a single PostgREST query; the one
+  case that can't be embedded (`festival_updated`, whose `entity_id` is
+  polymorphic, not a declared FK) gets one small batched follow-up query
+  for whatever festival ids appear on the current page — never one query
+  per row.
+- `NotificationBell` (header icon + badge — the app had no existing
+  icon-button to copy, so this establishes the pattern using the same
+  opacity-on-hover treatment as `Btn`), `NotificationCentrePage`,
+  `NotificationPreferencesPage`, `ToggleSwitch` (redrawn from
+  `adminUI.jsx`'s `ToggleSetting` using `App.jsx`'s own `C`/`F` tokens
+  rather than imported cross-module, since `App.jsx` doesn't otherwise
+  depend on anything under `components/admin`), all added to `App.jsx`
+  alongside the existing Sprint 3 "My Following" components they mirror.
+- Two new tabs in `MainApp`'s existing tab system (this app has no
+  react-router routes for authenticated in-app pages — "My Following" set
+  that precedent in Sprint 3): `notifications` (in `tabDef`, shows the
+  unread count in its nav label exactly like `MODERATION (${count})`
+  already does for admins) and `notification-settings` (deliberately not
+  in `tabDef` — reachable only via the "PREFERENCES" button on the
+  Notification Centre page, the same way none of `EditProfile`'s own
+  sub-views are top-level tabs either).
+
+**Scope decision — bell placement:** the header markup is duplicated
+verbatim across `MainApp` and 5 router-routed profile/gig pages (no shared
+`<Header>` component exists anywhere in this codebase). The bell was added
+only to `MainApp`'s header — the same place "My Following" lives — rather
+than to all 6 copies, to keep this sprint's diff focused on the primary
+authenticated app shell instead of touching 5 additional, otherwise-
+unrelated page components. Extracting a shared header component to carry
+the bell everywhere would be a reasonable future cleanup, but is a bigger,
+separate change or unless requested.
+
+## Verification
+
+- 13/13 Vitest cases passing (`npm test`).
+- Full end-to-end browser verification with real rendered React/DOM (not
+  component mocks) at both desktop (1280px) and mobile (390px) viewports:
+  bell + badge showing "2", nav label showing `NOTIFICATIONS (2)`; opening
+  the Notification Centre with newest-first ordering across three event
+  types (including the `gigs.slug` and `festival` link-building paths);
+  marking one notification read (row and badge update live, no reload);
+  marking all as read (button disappears once nothing is unread, badge
+  clears); the empty state; the preferences page rendering the correct
+  defaults, toggling a channel, saving, and showing the confirmation
+  message. This session doesn't hold real user credentials, so the
+  network layer (only the auth-gated `notification_deliveries` /
+  `user_notification_preferences` / RPC endpoints, plus the read-only
+  `profiles`/`gigs`/`venues` reads unrelated to this feature) was
+  intercepted with realistic canned responses rather than hitting a real
+  signed-in session — everything above it (component logic, state,
+  rendering) is real.
+- `npm run build` passes cleanly (only the two pre-existing, unrelated
+  warnings already present before this sprint: a duplicate object key and
+  a duplicate JSX attribute elsewhere in `App.jsx`).
+- `mark_all_notifications_read` re-verified against the live schema with
+  rolled-back transactions (see above).
+
+## Remaining follow-up (still out of scope)
+
+- Wiring `fanout_notification_event` to actually run on new events (trigger
+  or explicit call site) — the Notification Centre is fully functional
+  once deliveries exist, but nothing yet creates them outside of manual
+  testing.
+- Push and email delivery.
+- A shared `<Header>` component (see scope decision above) if the bell
+  should also appear on the artist/venue/festival/promoter/gig pages.
+- Pagination on the Notification Centre (currently a flat 50-row `limit`,
+  matching the sprint's scope — no "load more").

@@ -47,6 +47,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import React from "react";
 import { BrowserRouter, Routes, Route, useParams, useNavigate, Link } from "react-router-dom";
+import { DEFAULT_NOTIFICATION_PREFS, describeNotificationEvent, formatNotificationDate } from "./notificationHelpers";
 
 // ── Supabase config ────────────────────────────────────────────────
 const SUPABASE_URL = "https://fmlaaiolqwknowhtdeue.supabase.co";
@@ -874,6 +875,110 @@ const DB = {
       });
       if (error) console.warn("recordNotificationEvent failed", error);
     } catch(e) { console.warn("recordNotificationEvent failed", e); }
+  },
+
+  // ── SPRINT 4: Notification Centre ──────────────────────────────────
+  // Reads/writes against the Sprint 3.5 notification_deliveries /
+  // user_notification_preferences tables (see
+  // docs/notification-delivery-architecture.md). Only the in_app channel
+  // is surfaced here -- email/web_push rows exist purely for a future
+  // delivery worker and have no UI representation yet.
+
+  // gig_id is a real foreign key (notification_events_gig_id_fkey) so
+  // PostgREST can embed gigs.slug in one round trip; entity_id is
+  // polymorphic (band/venue/festival share the column) and isn't a
+  // declared FK, so it can't be embedded the same way. festival_updated is
+  // the only event_type that needs it (gig-based events already get a link
+  // via gigs above), so that's a second, single batched query for whatever
+  // festival ids appear on this page -- never one query per row.
+  async getNotifications(userId, { limit = 50 } = {}) {
+    if (USE_MOCK || !userId) return [];
+    const { data, error } = await supabase
+      .from("notification_deliveries")
+      .select(`
+        id, read_state, created_at,
+        notification_events:notification_event_id (
+          event_type, entity_type, entity_id, gig_id, metadata,
+          gigs:gig_id ( slug )
+        )
+      `)
+      .eq("recipient_user_id", userId)
+      .eq("delivery_channel", "in_app")
+      .order("created_at", { ascending: false })
+      .limit(limit);
+    if (error) throw new Error(error.message);
+
+    const rows = (data || []).filter(row => row.notification_events);
+
+    const festivalIds = [...new Set(
+      rows
+        .filter(r => r.notification_events.entity_type === "festival" && !r.notification_events.gigs?.slug)
+        .map(r => r.notification_events.entity_id)
+    )];
+    let festivalSlugs = {};
+    if (festivalIds.length) {
+      const { data: profs } = await supabase.from("profiles").select("id, band_slug").in("id", festivalIds);
+      (profs || []).forEach(p => { festivalSlugs[p.id] = p.band_slug; });
+    }
+
+    return rows.map(row => {
+      const ev = row.notification_events;
+      let link = null;
+      if (ev.gigs?.slug) link = `/gig/${ev.gigs.slug}`;
+      else if (ev.entity_type === "festival" && festivalSlugs[ev.entity_id]) link = `/festival/${festivalSlugs[ev.entity_id]}`;
+      return {
+        id: row.id, readState: row.read_state, createdAt: row.created_at,
+        eventType: ev.event_type, entityType: ev.entity_type, metadata: ev.metadata || {},
+        link,
+      };
+    });
+  },
+
+  async getUnreadNotificationCount(userId) {
+    if (USE_MOCK || !userId) return 0;
+    const { count, error } = await supabase
+      .from("notification_deliveries")
+      .select("id", { count: "exact", head: true })
+      .eq("recipient_user_id", userId)
+      .eq("delivery_channel", "in_app")
+      .eq("read_state", "unread");
+    if (error) { console.warn("getUnreadNotificationCount failed", error); return 0; }
+    return count || 0;
+  },
+
+  async markNotificationRead(deliveryId) {
+    if (USE_MOCK) return;
+    const { error } = await supabase.rpc("mark_notification_read", { p_delivery_id: deliveryId, p_state: "read" });
+    if (error) console.warn("markNotificationRead failed", error);
+  },
+
+  async markAllNotificationsRead() {
+    if (USE_MOCK) return 0;
+    const { data, error } = await supabase.rpc("mark_all_notifications_read");
+    if (error) { console.warn("markAllNotificationsRead failed", error); return 0; }
+    return data || 0;
+  },
+
+  async getNotificationPreferences(userId) {
+    if (USE_MOCK || !userId) return { ...DEFAULT_NOTIFICATION_PREFS };
+    const { data, error } = await supabase
+      .from("user_notification_preferences")
+      .select("*")
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return data || { ...DEFAULT_NOTIFICATION_PREFS, user_id: userId };
+  },
+
+  async saveNotificationPreferences(userId, prefs) {
+    if (USE_MOCK) return prefs;
+    const { data, error } = await supabase
+      .from("user_notification_preferences")
+      .upsert({ user_id: userId, ...prefs }, { onConflict: "user_id" })
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    return data;
   },
 };
 
@@ -6900,6 +7005,13 @@ export const GLOBAL_CSS = `
     .msm-list-date   { font-size:14px !important; }
     .msm-list-time   { font-size:15px !important; }
 
+    /* SPRINT 4: Notification Centre rows -- same readability bump as the
+       ListView rows above, same rationale (small default sizes get harder
+       to read on a phone than on desktop). */
+    .msm-notif-row   { padding:12px 14px !important; }
+    .msm-notif-title { font-size:16px !important; }
+    .msm-notif-body  { font-size:14px !important; }
+
     /* Search bar: +4px height (12px vertical padding -> 14px), placeholder
        text bumped 14px -> 16px. Value text size (15px) and all other
        styling/behaviour are untouched. */
@@ -7112,6 +7224,265 @@ function MyFollowingPage({ userId, allGigs }) {
   );
 }
 
+// ════════════════════════════════════════════════════════════════════
+//  SPRINT 4: NOTIFICATION CENTRE
+// ════════════════════════════════════════════════════════════════════
+// Bell (header) + full list page + preferences page, on top of the Sprint
+// 3.5 notification_deliveries / user_notification_preferences backend.
+// No push, no email delivery, no polling -- unread count is fetched once
+// on auth and refreshed on demand (mark read / mark all read), exactly
+// like every other DB.* fetch in this file.
+
+// Small icon-only button -- there's no existing icon-button in the header
+// to copy (see git history/PR discussion), so this establishes one using
+// the same opacity-on-hover treatment as Btn (App.jsx's universal button).
+function NotificationBell({ unreadCount, onClick }) {
+  return (
+    <button onClick={onClick} aria-label="Notifications" title="Notifications"
+      style={{
+        position:"relative", display:"flex", alignItems:"center", justifyContent:"center",
+        width:38, height:38, borderRadius:"50%", border:`1px solid ${C.border}`,
+        background:"none", cursor:"pointer", color:C.muted, padding:0, flexShrink:0,
+        transition:"opacity 0.2s",
+      }}
+      onMouseEnter={e=>e.currentTarget.style.opacity=0.7}
+      onMouseLeave={e=>e.currentTarget.style.opacity=1}
+    >
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+        <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+      </svg>
+      {unreadCount > 0 && (
+        <span style={{
+          position:"absolute", top:-2, right:-2, minWidth:16, height:16, padding:"0 4px",
+          borderRadius:8, background:C.red, color:"#fff",
+          fontSize:10, fontFamily:F.display, letterSpacing:0.5,
+          display:"flex", alignItems:"center", justifyContent:"center",
+          lineHeight:1, border:"2px solid #0a0a0a", boxSizing:"border-box",
+        }}>{unreadCount > 99 ? "99+" : unreadCount}</span>
+      )}
+    </button>
+  );
+}
+
+function NotificationRow({ notification, onMarkRead }) {
+  const { title, body } = describeNotificationEvent(notification);
+  const isUnread = notification.readState === "unread";
+
+  const row = (
+    <div className="msm-notif-row" style={{
+      display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:12,
+      padding:"14px 18px",
+      background: isUnread ? "rgba(232,32,58,0.05)" : "rgba(255,255,255,0.02)",
+      border:`1px solid ${isUnread ? C.redDim : C.border}`, borderRadius:8,
+    }}>
+      <div style={{ display:"flex", alignItems:"flex-start", gap:10, minWidth:0 }}>
+        {isUnread && <span style={{ width:8, height:8, borderRadius:"50%", background:C.red, marginTop:6, flexShrink:0 }} />}
+        <div style={{ minWidth:0 }}>
+          <div className="msm-notif-title" style={{ fontFamily:F.display, fontSize:15, letterSpacing:0.5, color:C.white }}>{title}</div>
+          {body && <div className="msm-notif-body" style={{ fontSize:13, color:C.muted, marginTop:3 }}>{body}</div>}
+          <div style={{ fontSize:11, color:C.dim, marginTop:4 }}>{formatNotificationDate(notification.createdAt)}</div>
+        </div>
+      </div>
+      {isUnread && (
+        <button onClick={(e) => { e.preventDefault(); onMarkRead(notification.id); }}
+          style={{ background:"none", border:"none", color:C.muted, fontSize:11, letterSpacing:1, cursor:"pointer", whiteSpace:"nowrap", flexShrink:0, padding:0 }}
+        >MARK READ</button>
+      )}
+    </div>
+  );
+
+  if (!notification.link) return row;
+  return (
+    <Link to={notification.link} style={{ textDecoration:"none", color:"inherit" }}
+      onClick={() => isUnread && onMarkRead(notification.id)}
+    >{row}</Link>
+  );
+}
+
+// Lists this user's in_app notification_deliveries, newest first (already
+// sorted by the query). Mirrors MyFollowingPage's fetch/loading/empty-state
+// shape exactly (null = loading, cancelled-flag effect, error state).
+function NotificationCentrePage({ userId, onUnreadChange, onOpenPreferences }) {
+  const [items, setItems] = useState(null); // null = loading
+  const [error, setError] = useState("");
+  const [marking, setMarking] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    DB.getNotifications(userId)
+      .then(data => { if (!cancelled) setItems(data); })
+      .catch(e => { if (!cancelled) { setError(e.message); setItems([]); } });
+    return () => { cancelled = true; };
+  }, [userId]);
+
+  async function handleMarkRead(id) {
+    setItems(prev => prev.map(n => n.id === id ? { ...n, readState: "read" } : n));
+    await DB.markNotificationRead(id);
+    onUnreadChange?.();
+  }
+
+  async function handleMarkAllRead() {
+    if (marking) return;
+    setMarking(true);
+    setItems(prev => prev.map(n => n.readState === "unread" ? { ...n, readState: "read" } : n));
+    await DB.markAllNotificationsRead();
+    onUnreadChange?.();
+    setMarking(false);
+  }
+
+  if (items === null) {
+    return <div style={{ color:C.muted, fontSize:16 }}>Loading your notifications...</div>;
+  }
+
+  const unreadCount = items.filter(n => n.readState === "unread").length;
+
+  return (
+    <div>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:12, marginBottom:20 }}>
+        <SectionLabel>NOTIFICATIONS</SectionLabel>
+        <div style={{ display:"flex", gap:10 }}>
+          {unreadCount > 0 && (
+            <Btn variant="ghost" onClick={handleMarkAllRead} disabled={marking} style={{ fontSize:12, padding:"8px 14px" }}>
+              MARK ALL AS READ
+            </Btn>
+          )}
+          <Btn variant="ghost" onClick={onOpenPreferences} style={{ fontSize:12, padding:"8px 14px" }}>
+            PREFERENCES
+          </Btn>
+        </div>
+      </div>
+
+      {error && <div style={{ color:C.red, fontSize:13, marginBottom:16 }}>{error}</div>}
+
+      {items.length === 0 ? (
+        <div style={{ color:C.dim, fontSize:14, padding:"24px 0" }}>
+          You don't have any notifications yet. Follow an artist, venue or festival to hear about new gigs, cancellations and updates here.
+        </div>
+      ) : (
+        <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+          {items.map(n => <NotificationRow key={n.id} notification={n} onMarkRead={handleMarkRead} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Same visual pattern as adminUI.jsx's ToggleSetting (pill switch), redrawn
+// here with App.jsx's own C/F tokens rather than imported cross-module --
+// App.jsx doesn't currently depend on anything under components/admin, and
+// this keeps that boundary intact for a page fans (not just admins) use.
+function ToggleSwitch({ checked, onChange, label, hint }) {
+  return (
+    <label style={{ display:"flex", alignItems:"flex-start", gap:12, cursor:"pointer", userSelect:"none" }}>
+      <span style={{
+        position:"relative", flexShrink:0, width:38, height:22, borderRadius:11, marginTop:1,
+        background: checked ? C.red : "rgba(255,255,255,0.12)", transition:"background 0.15s",
+      }}>
+        <input type="checkbox" checked={checked} onChange={e=>onChange(e.target.checked)}
+          style={{ position:"absolute", opacity:0, width:"100%", height:"100%", cursor:"pointer", margin:0 }} />
+        <span style={{
+          position:"absolute", top:2, left: checked ? 18 : 2, width:18, height:18, borderRadius:"50%",
+          background:"#fff", transition:"left 0.15s", boxShadow:"0 1px 3px rgba(0,0,0,0.4)",
+        }} />
+      </span>
+      <span>
+        <span style={{ display:"block", fontSize:14, fontWeight:600, color:C.white, fontFamily:F.body }}>{label}</span>
+        {hint && <span style={{ display:"block", fontSize:12, color:C.muted, marginTop:2 }}>{hint}</span>}
+      </span>
+    </label>
+  );
+}
+
+const NOTIFICATION_CHANNEL_TOGGLES = [
+  { key:"in_app_enabled",   label:"In-app notifications", hint:"Show new activity in your Notification Centre." },
+  { key:"email_enabled",    label:"Email",                hint:"Not live yet -- email delivery is a future sprint. Safe to turn on now." },
+  { key:"web_push_enabled", label:"Push notifications",   hint:"Not live yet -- push delivery is a future sprint. Safe to turn on now." },
+];
+const NOTIFICATION_CATEGORY_TOGGLES = [
+  { key:"new_gig_alerts",      label:"New gigs",         hint:"When an artist, venue or festival you follow adds a gig." },
+  { key:"cancellation_alerts", label:"Cancellations",    hint:"When a gig you were tracking is cancelled." },
+  { key:"artist_updates",      label:"Artist updates",   hint:"Profile changes from artists you follow." },
+  { key:"venue_updates",       label:"Venue updates",    hint:"New events and changes at venues you follow." },
+  { key:"festival_updates",    label:"Festival updates", hint:"Changes to festivals you follow." },
+];
+
+function NotificationPreferencesPage({ userId, onBack }) {
+  const [prefs, setPrefs]   = useState(null); // null = loading
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg]       = useState("");
+  const [error, setError]   = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    DB.getNotificationPreferences(userId)
+      .then(p => { if (!cancelled) setPrefs(p); })
+      .catch(e => { if (!cancelled) { setError(e.message); setPrefs({ ...DEFAULT_NOTIFICATION_PREFS }); } });
+    return () => { cancelled = true; };
+  }, [userId]);
+
+  function toggle(key) {
+    setPrefs(p => ({ ...p, [key]: !p[key] }));
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    setError("");
+    try {
+      const saved = await DB.saveNotificationPreferences(userId, {
+        in_app_enabled: prefs.in_app_enabled, email_enabled: prefs.email_enabled, web_push_enabled: prefs.web_push_enabled,
+        new_gig_alerts: prefs.new_gig_alerts, cancellation_alerts: prefs.cancellation_alerts,
+        artist_updates: prefs.artist_updates, venue_updates: prefs.venue_updates, festival_updates: prefs.festival_updates,
+      });
+      setPrefs(saved);
+      setMsg("Preferences saved.");
+      setTimeout(() => setMsg(""), 4000);
+    } catch(e) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (prefs === null) {
+    return <div style={{ color:C.muted, fontSize:16 }}>Loading your preferences...</div>;
+  }
+
+  return (
+    <div style={{ maxWidth:520 }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:12, marginBottom:20 }}>
+        <SectionLabel>NOTIFICATION PREFERENCES</SectionLabel>
+        <Btn variant="ghost" onClick={onBack} style={{ fontSize:12, padding:"8px 14px" }}>← BACK TO NOTIFICATIONS</Btn>
+      </div>
+
+      {error && <div style={{ color:C.red, fontSize:13, marginBottom:16 }}>{error}</div>}
+      {msg && <div style={{ color:C.green, fontSize:13, marginBottom:16 }}>{msg}</div>}
+
+      <div style={{ marginBottom:32 }}>
+        <div style={{ fontFamily:F.display, fontSize:14, color:C.muted, letterSpacing:2, marginBottom:14 }}>CHANNELS</div>
+        <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+          {NOTIFICATION_CHANNEL_TOGGLES.map(t => (
+            <ToggleSwitch key={t.key} checked={!!prefs[t.key]} onChange={()=>toggle(t.key)} label={t.label} hint={t.hint} />
+          ))}
+        </div>
+      </div>
+
+      <div style={{ marginBottom:32 }}>
+        <div style={{ fontFamily:F.display, fontSize:14, color:C.muted, letterSpacing:2, marginBottom:14 }}>ALERT TYPES</div>
+        <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+          {NOTIFICATION_CATEGORY_TOGGLES.map(t => (
+            <ToggleSwitch key={t.key} checked={!!prefs[t.key]} onChange={()=>toggle(t.key)} label={t.label} hint={t.hint} />
+          ))}
+        </div>
+      </div>
+
+      <Btn variant="primary" onClick={handleSave} disabled={saving} style={{ fontSize:13, padding:"12px 24px" }}>
+        {saving ? "SAVING..." : "SAVE PREFERENCES"}
+      </Btn>
+    </div>
+  );
+}
+
 function MainApp() {
   const [auth,    setAuth]    = useState(null); // { user, profile, token }
   const [gigs,    setGigs]    = useState([]);
@@ -7134,6 +7505,7 @@ function MainApp() {
   const [filters, setFilters] = useState({ city:"All", venue:"All", genre:"All", dateFrom:"", dateTo:"" });
   const [search, setSearch]   = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false); // mobile-only collapsible Search & Filters panel
+  const [unreadCount, setUnreadCount] = useState(0); // SPRINT 4: notification bell badge
   const isMobile = useIsMobile();
 
   const isAdmin = auth?.profile?.role === "admin";
@@ -7173,6 +7545,17 @@ function MainApp() {
 
     return () => { active = false; listener?.subscription?.unsubscribe(); };
   }, []);
+
+  // SPRINT 4: unread notification badge. Fetched once whenever the signed-in
+  // user changes (sign-in/sign-out) -- refreshUnreadCount below is called
+  // on demand after mark-read/mark-all-read instead of polling, per Sprint
+  // 4 scope (no polling changes).
+  const refreshUnreadCount = useCallback(() => {
+    if (!auth?.user?.id) { setUnreadCount(0); return; }
+    DB.getUnreadNotificationCount(auth.user.id).then(setUnreadCount);
+  }, [auth?.user?.id]);
+
+  useEffect(() => { refreshUnreadCount(); }, [refreshUnreadCount]);
 
   // Load public gigs and bands on mount
   useEffect(() => {
@@ -7248,6 +7631,7 @@ function MainApp() {
     { id:"submit",   label:"SUBMIT GIG" },
     ...(auth ? [{ id:"profile", label: auth.profile?.profile_type === "venue" ? "MY VENUE" : "MY PROFILE" }] : []),
     ...(auth ? [{ id:"following", label:"MY FOLLOWING" }] : []),
+    ...(auth ? [{ id:"notifications", label: unreadCount > 0 ? `NOTIFICATIONS (${unreadCount})` : "NOTIFICATIONS" }] : []),
     ...(isAdmin ? [
       { id:"dashboard", label:"DASHBOARD" },
       { id:"admin",     label:`MODERATION (${allGigs.filter(g=>g.status==="pending").length})` },
@@ -7285,6 +7669,7 @@ function MainApp() {
         <div style={{ display:"flex", alignItems:"center", gap:12 }}>
           {auth ? (
             <>
+              <NotificationBell unreadCount={unreadCount} onClick={()=>setTab("notifications")} />
               <div className="msm-account" style={{ textAlign:"right" }}>
                 <div style={{ fontSize:15, color:C.white }}>{auth.profile?.band_name}</div>
                 <div style={{ fontSize:11, color: isAdmin ? C.red : C.muted, letterSpacing:1 }}>{isAdmin?"ADMINISTRATOR":"BAND ACCOUNT"}</div>
@@ -7418,6 +7803,18 @@ function MainApp() {
             own tab, doesn't touch the CALENDAR/LIST views below. */}
         {tab==="following" && auth && (
           <MyFollowingPage userId={auth.user.id} allGigs={gigs} />
+        )}
+
+        {/* SPRINT 4: NOTIFICATION CENTRE -- its own tab like MY FOLLOWING
+            above; "notifications" is in tabDef (shows unread count in the
+            nav label), "notification-settings" deliberately isn't -- it's
+            only reachable via the PREFERENCES button on this page, the same
+            way EditProfile's own sub-views aren't top-level tabs either. */}
+        {tab==="notifications" && auth && (
+          <NotificationCentrePage userId={auth.user.id} onUnreadChange={refreshUnreadCount} onOpenPreferences={()=>setTab("notification-settings")} />
+        )}
+        {tab==="notification-settings" && auth && (
+          <NotificationPreferencesPage userId={auth.user.id} onBack={()=>setTab("notifications")} />
         )}
 
         {/* SUBMIT */}
