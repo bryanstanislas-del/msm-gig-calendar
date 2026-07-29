@@ -6644,6 +6644,39 @@ export const GLOBAL_CSS = `
     .msm-signin-btn { font-size:11px !important; padding:6px 10px !important; }
     .msm-account { display:none !important; }
   }
+
+  /* ── Safe area (notch / Dynamic Island / gesture-nav devices) ──
+     Deliberately placed after the mobile media query above: both this rule
+     and the one it overrides use !important at equal specificity, so
+     source order decides the winner -- this must come last so narrow
+     (<=600px) viewports don't lose the safe-area padding to the plainer
+     mobile rule. Only the specific padding side needed is overridden on
+     .msm-header/.msm-nav (their other values -- height, gap, etc. -- are
+     untouched); env() resolves to 0 on devices with no inset, so this is a
+     no-op everywhere else. Split into a default (desktop/landscape, 28px
+     base) rule and a narrow-viewport (<=600px, 14px/8px base matching the
+     mobile block's own padding above) rule, so neither width regresses the
+     other's base padding. */
+  .msm-header {
+    padding-top: env(safe-area-inset-top) !important;
+    padding-left: max(28px, env(safe-area-inset-left)) !important;
+    padding-right: max(28px, env(safe-area-inset-right)) !important;
+  }
+  .msm-nav {
+    padding-left: max(28px, env(safe-area-inset-left)) !important;
+    padding-right: max(28px, env(safe-area-inset-right)) !important;
+  }
+  @media (max-width: 600px) {
+    .msm-header {
+      padding-top: env(safe-area-inset-top) !important;
+      padding-left: max(14px, env(safe-area-inset-left)) !important;
+      padding-right: max(14px, env(safe-area-inset-right)) !important;
+    }
+    .msm-nav {
+      padding-left: max(8px, env(safe-area-inset-left)) !important;
+      padding-right: max(8px, env(safe-area-inset-right)) !important;
+    }
+  }
 `;
 
 // ════════════════════════════════════════════════════════════════════
