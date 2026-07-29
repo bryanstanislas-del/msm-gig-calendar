@@ -6659,8 +6659,12 @@ export const GLOBAL_CSS = `
        only the <img> height through CSS would distort its aspect ratio
        since the wrapper div's width is computed from the height prop. */
     .msm-header { height:60px !important; padding:0 14px !important; }
-    .msm-tagline { padding:7px 14px !important; flex-wrap:wrap; gap:6px !important; }
+    /* Slogan swapped for the live gig counter alone -- minimises this bar's
+       height since there's only one short line left to show. */
+    .msm-tagline { padding:6px 14px !important; flex-wrap:nowrap; gap:0 !important; }
     .msm-tagline span { font-size:10px !important; }
+    .msm-slogan { display:none !important; }
+    .msm-gig-counter { margin-left:0 !important; }
     .msm-nav { padding:0 8px !important; gap:3px !important; overflow-x:auto; }
     .msm-nav button { padding:14px 12px !important; font-size:13px !important; white-space:nowrap; }
     .msm-main { padding:16px 10px !important; }
@@ -6963,10 +6967,16 @@ function MainApp() {
 
       {/* ── Hero tagline ── */}
       <div className="msm-tagline" style={{ background:"linear-gradient(90deg,#1a0000,#0d0d0d 40%,#0d0d0d 60%,#0a0018)", borderBottom:`1px solid rgba(232,32,58,0.2)`, padding:"10px 28px", display:"flex", alignItems:"center", gap:10 }}>
-        {["REAL MUSIC.","REAL PEOPLE.","REAL SCENES."].map((s,i)=>(
-          <span key={i} style={{ fontSize:13, color:C.red, letterSpacing:3, fontFamily:F.display }}>{s}{i<2&&<span style={{ color:"rgba(255,255,255,0.1)", margin:"0 8px" }}>|</span>}</span>
-        ))}
-        <div style={{ marginLeft:"auto", fontSize:13, color:C.dim, letterSpacing:1 }}>{gigs.length} GIGS LIVE</div>
+        {/* Desktop: slogan + right-flushed counter, unchanged. Mobile: the
+            slogan is hidden (.msm-slogan) and the counter becomes the sole,
+            left-aligned content of this bar -- see the mobile media query
+            in GLOBAL_CSS for both rules. */}
+        <div className="msm-slogan" style={{ display:"flex", alignItems:"center", gap:10 }}>
+          {["REAL MUSIC.","REAL PEOPLE.","REAL SCENES."].map((s,i)=>(
+            <span key={i} style={{ fontSize:13, color:C.red, letterSpacing:3, fontFamily:F.display }}>{s}{i<2&&<span style={{ color:"rgba(255,255,255,0.1)", margin:"0 8px" }}>|</span>}</span>
+          ))}
+        </div>
+        <div className="msm-gig-counter" style={{ marginLeft:"auto", fontSize:13, color:C.dim, letterSpacing:1 }}>{gigs.length} GIGS LIVE</div>
       </div>
 
       {/* ── Nav tabs ── */}
