@@ -2553,12 +2553,12 @@ function ListView({ gigs, onGigClick, bands=[] }) {
             onMouseLeave={e=>e.currentTarget.style.background="rgba(255,255,255,0.02)"}
           >
             <div style={{ flex:1 }}>
-              <div style={{ fontFamily:F.display, fontSize:15, letterSpacing:1.5, color:C.white }}>{g.band_name}</div>
+              <div className="msm-list-artist" style={{ fontFamily:F.display, fontSize:15, letterSpacing:1.5, color:C.white }}>{g.band_name}</div>
               <div className="msm-list-venue" style={{ fontSize:11, color:C.muted, marginTop:2 }}>{g.venue} · {g.city}</div>
             </div>
             <Badge label={g.genre} color={color} />
             <div style={{ textAlign:"right", minWidth:90 }}>
-              <div style={{ fontSize:12, color:C.red, fontFamily:F.display, letterSpacing:1 }}>
+              <div className="msm-list-date" style={{ fontSize:12, color:C.red, fontFamily:F.display, letterSpacing:1 }}>
                 {fmtDate(g.date)}{g.end_date ? ` — ${fmtDate(g.end_date)}` : ""}
               </div>
               <div className="msm-list-time" style={{ fontSize:11, color:C.dim }}>{g.time}</div>
@@ -6662,17 +6662,18 @@ export const GLOBAL_CSS = `
     .msm-tagline { padding:7px 14px !important; flex-wrap:wrap; gap:6px !important; }
     .msm-tagline span { font-size:10px !important; }
     .msm-nav { padding:0 8px !important; gap:3px !important; overflow-x:auto; }
-    .msm-nav button { padding:14px 12px !important; font-size:12px !important; white-space:nowrap; }
+    .msm-nav button { padding:14px 12px !important; font-size:13px !important; white-space:nowrap; }
     .msm-main { padding:16px 10px !important; }
     .msm-filters { flex-direction:column !important; gap:8px !important; padding:12px !important; }
     .msm-filters > div { flex:unset !important; width:100% !important; }
+    .msm-filters label { font-size:15px !important; }
     .msm-filter-btns { width:100% !important; justify-content:stretch !important; }
     .msm-filter-btns button { flex:1 !important; padding:12px 10px !important; }
     .msm-cal-cell { min-height:60px !important; padding:4px 3px !important; }
     .msm-cal-day { font-size:10px !important; }
     .msm-cal-nav { width:44px !important; height:44px !important; }
     .msm-gig-label { padding:2px 3px !important; }
-    .msm-gig-label span:last-child { font-size:9px !important; }
+    .msm-gig-label span:last-child { font-size:10px !important; }
     .msm-gig-dot { width:5px !important; height:5px !important; }
     .msm-legend { gap:6px 12px !important; margin-top:12px !important; }
     .msm-legend > div { font-size:11px !important; }
@@ -6681,10 +6682,19 @@ export const GLOBAL_CSS = `
     .msm-signin-btn { font-size:12px !important; padding:10px 14px !important; }
     .msm-account { display:none !important; }
 
-    /* Readability: venue/location line and event time in ListView rows only
-       -- artist name, genre badges, fonts and colours are untouched. */
-    .msm-list-venue { font-size:13px !important; }
-    .msm-list-time  { font-size:13px !important; }
+    /* Readability: gig artist name, venue/location, date and time in
+       ListView rows -- genre badges, fonts and colours are untouched.
+       (~10-15% up from the pre-Sprint-2 baseline of 15/11/12/11px.) */
+    .msm-list-artist { font-size:17px !important; }
+    .msm-list-venue  { font-size:15px !important; }
+    .msm-list-date   { font-size:14px !important; }
+    .msm-list-time   { font-size:15px !important; }
+
+    /* Search bar: +4px height (12px vertical padding -> 14px), placeholder
+       text bumped 14px -> 16px. Value text size (15px) and all other
+       styling/behaviour are untouched. */
+    .msm-search-input { padding-top:14px !important; padding-bottom:14px !important; }
+    .msm-search-input::placeholder { font-size:16px !important; }
 
     /* Collapsible Search & Filters panel (mobile only). Desktop keeps
        FiltersBar permanently expanded and never shows this toggle -- see
@@ -7079,6 +7089,7 @@ function MainApp() {
                     <span style={{ position:"absolute", left:14, top:"50%", transform:"translateY(-50%)", fontSize:16, color:C.muted, pointerEvents:"none" }}>🔍</span>
                     <input
                       type="text"
+                      className="msm-search-input"
                       placeholder="Search bands, venues or cities..."
                       value={search}
                       onChange={e=>setSearch(e.target.value)}
