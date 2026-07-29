@@ -5021,8 +5021,11 @@ function BandProfilePage() {
 
           {/* Info */}
           <div style={{ flex:1, minWidth:200 }}>
-            {/* Status badge */}
-            {band.band_status !== "active" && (
+            {/* Status badge -- band_status is nullable in the DB (only
+                defaults to 'active' for new rows), so this must also check
+                truthiness, not just inequality with "active" (matches the
+                same guard used for the AdminBands list badge below). */}
+            {band.band_status !== "active" && band.band_status && (
               <div style={{ display:"inline-block", fontSize:10, color:C.amber, border:`1px solid ${C.amber}`, borderRadius:3, padding:"2px 8px", letterSpacing:2, marginBottom:8, fontFamily:F.display }}>
                 {band.band_status.toUpperCase().replace("-"," ")}
               </div>
