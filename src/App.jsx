@@ -1661,7 +1661,25 @@ function InlineAuthPrompt({ accent = C.red, actionLabel = "CONTINUE", onAuthed, 
   );
 }
 
-function FollowBandPanel({ bandProfileId, bandName }) {
+// SPRINT 3: per-entityType copy for the generalized FollowPanel below.
+// solo_artist intentionally shares band's copy -- both read as "artist" to
+// a fan and both route through band_follows (see followTableFor).
+const FOLLOW_COPY = {
+  band:        { noun:"artist",   button:"FOLLOW THIS ARTIST",   prompt:n=>`🔔 Get notified about new ${n} gigs`,     successTail:"We'll email you when they announce a new gig." },
+  solo_artist: { noun:"artist",   button:"FOLLOW THIS ARTIST",   prompt:n=>`🔔 Get notified about new ${n} gigs`,     successTail:"We'll email you when they announce a new gig." },
+  venue:       { noun:"venue",    button:"FOLLOW THIS VENUE",    prompt:n=>`🔔 Get notified about new gigs at ${n}`,  successTail:"We'll email you when they announce a new gig." },
+  festival:    { noun:"festival", button:"FOLLOW THIS FESTIVAL", prompt:n=>`🔔 Get notified about ${n} updates`,      successTail:"We'll email you about festival updates." },
+};
+
+// SPRINT 3: the one consistent Follow component used on every followable
+// profile page (artist, venue, festival). entityType/entityId/entityName
+// drive both the DB calls (via DB.isFollowing/followEntity/unfollowEntity,
+// which route to the right table per entityType) and the copy. Structure,
+// state machine and styling are unchanged from the Phase 1 band-only
+// version below -- FollowBandPanel is now a thin wrapper over this so
+// BandProfilePage's existing usage/behaviour is preserved exactly.
+function FollowPanel({ entityType, entityId, entityName }) {
+  const copy = FOLLOW_COPY[entityType] || FOLLOW_COPY.band;
   const [authUser, setAuthUser]   = useState(undefined); // undefined=checking, null=signed out
   const [following, setFollowing] = useState(null);       // null=checking/unknown
   const [uiMode, setUiMode]       = useState("idle");      // idle | auth
@@ -1679,21 +1697,21 @@ function FollowBandPanel({ bandProfileId, bandName }) {
         if (cancelled) return;
         setAuthUser(user);
         if (user) {
-          const isFollowing = await DB.isFollowingBand(user.id, bandProfileId);
+          const isFollowing = await DB.isFollowing(user.id, entityType, entityId);
           if (!cancelled) setFollowing(isFollowing);
         }
       } catch(e) { if (!cancelled) setAuthUser(null); }
     }
     load();
     return () => { cancelled = true; };
-  }, [bandProfileId]);
+  }, [entityType, entityId]);
 
   const doFollow = async (userId) => {
     setBusy(true); setError("");
     try {
-      await DB.followBand(userId, bandProfileId);
+      await DB.followEntity(userId, entityType, entityId);
       setFollowing(true);
-      setSuccess(`You're now following ${bandName}. We'll email you when they announce a new gig.`);
+      setSuccess(`You're now following ${entityName}. ${copy.successTail}`);
     } catch(e) { setError(e.message); }
     finally { setBusy(false); }
   };
@@ -1701,7 +1719,7 @@ function FollowBandPanel({ bandProfileId, bandName }) {
   const handleUnfollow = async () => {
     setBusy(true); setError(""); setSuccess("");
     try {
-      await DB.unfollowBand(authUser.id, bandProfileId);
+      await DB.unfollowEntity(authUser.id, entityType, entityId);
       setFollowing(false);
     } catch(e) { setError(e.message); }
     finally { setBusy(false); }
@@ -1718,12 +1736,12 @@ function FollowBandPanel({ bandProfileId, bandName }) {
     return wrap(<div style={{ fontSize:13, color:C.dim, letterSpacing:1 }}>LOADING...</div>);
   }
 
-  // Signed-out visitor
+  // Signed-out visitor -- registration nudge, encouraged not forced
   if (authUser === null) {
     if (uiMode === "idle") {
       return wrap(
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:12 }}>
-          <div style={{ fontSize:13, color:C.muted, letterSpacing:1 }}>🔔 Follow {bandName} to hear about new gigs</div>
+          <div style={{ fontSize:13, color:C.muted, letterSpacing:1 }}>🔔 Follow this {copy.noun} to receive future gig updates.</div>
           <Btn onClick={()=>setUiMode("auth")} style={{ fontSize:11, padding:"10px 18px" }}>
             SIGN IN TO FOLLOW
           </Btn>
@@ -1753,9 +1771,9 @@ function FollowBandPanel({ bandProfileId, bandName }) {
           </>
         ) : (
           <>
-            <div style={{ fontSize:13, color:C.muted, letterSpacing:1 }}>🔔 Get notified about new {bandName} gigs</div>
+            <div style={{ fontSize:13, color:C.muted, letterSpacing:1 }}>{copy.prompt(entityName)}</div>
             <Btn onClick={()=>doFollow(authUser.id)} disabled={busy} style={{ fontSize:11, padding:"10px 18px" }}>
-              {busy ? "..." : "FOLLOW THIS BAND"}
+              {busy ? "..." : copy.button}
             </Btn>
           </>
         )}
@@ -1764,6 +1782,15 @@ function FollowBandPanel({ bandProfileId, bandName }) {
       {success && <div style={{ color:C.green, fontSize:12, marginTop:10 }}>✓ {success}</div>}
     </div>
   );
+}
+
+// Thin wrapper preserving FollowBandPanel's exact original prop API
+// (bandProfileId, bandName) so BandProfilePage's existing usage is
+// untouched. entityType defaults to "band" but BandProfilePage passes the
+// real profile_type ("band" | "solo_artist") the same way it already does
+// for ClaimEntityBox just below it.
+function FollowBandPanel({ bandProfileId, bandName, entityType = "band" }) {
+  return <FollowPanel entityType={entityType} entityId={bandProfileId} entityName={bandName} />;
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -4769,6 +4796,9 @@ function VenueProfilePage() {
         {/* PHASE 4: claim this venue if it's an unclaimed admin-created listing */}
         <ClaimEntityBox entityType="venue" entityId={venue.id} claimStatus={venue.claim_status} />
 
+        {/* SPRINT 3: Follow this venue */}
+        <FollowPanel entityType="venue" entityId={venue.id} entityName={venue.name} />
+
         {/* Upcoming Gigs */}
         <div style={{ marginBottom:48 }}>
           <SectionLabel>UPCOMING GIGS</SectionLabel>
@@ -5117,7 +5147,7 @@ function BandProfilePage() {
         )}
 
         {/* Fan Features Phase 1: Follow this band */}
-        <FollowBandPanel bandProfileId={band.id} bandName={band.band_name} />
+        <FollowBandPanel bandProfileId={band.id} bandName={band.band_name} entityType={band.profile_type || "band"} />
       </div>
     </div>
   );
@@ -5293,6 +5323,9 @@ function FestivalProfilePage() {
         <MSMCoverageSection awards={awards} subjectLabel={entity.band_name} />
 
         <ClaimEntityBox entityType="festival" entityId={entity.id} claimStatus={entity.claim_status} />
+
+        {/* SPRINT 3: Follow this festival */}
+        <FollowPanel entityType="festival" entityId={entity.id} entityName={entity.band_name} />
       </div>
     </div>
   );
