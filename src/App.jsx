@@ -6971,8 +6971,13 @@ export const GLOBAL_CSS = `
        grow just enough to fit the status-bar inset on ones that have it. */
     .msm-header { min-height:60px !important; height:auto !important; padding:0 14px !important; }
     /* Slogan swapped for the live gig counter alone -- minimises this bar's
-       height since there's only one short line left to show. */
-    .msm-tagline { padding:6px 14px !important; flex-wrap:nowrap; gap:0 !important; }
+       height since there's only one short line left to show. Horizontal
+       padding matches .msm-main's mobile padding (10px) below, not
+       .msm-header's (14px), so "N GIGS LIVE" lines up with the search box,
+       filters panel and gig cards it sits directly above -- vertical
+       padding (6px) is untouched, so strip height and vertical centering
+       are unaffected. */
+    .msm-tagline { padding:6px 10px !important; flex-wrap:nowrap; gap:0 !important; }
     .msm-tagline span { font-size:10px !important; }
     .msm-slogan { display:none !important; }
     .msm-gig-counter { margin-left:0 !important; }
