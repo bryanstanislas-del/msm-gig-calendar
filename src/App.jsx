@@ -48,6 +48,7 @@ import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import React from "react";
 import { BrowserRouter, Routes, Route, useParams, useNavigate, Link } from "react-router-dom";
 import { DEFAULT_NOTIFICATION_PREFS, describeNotificationEvent, formatNotificationDate } from "./notificationHelpers";
+import { parseImportText } from "./smartImport";
 
 // ── Supabase config ────────────────────────────────────────────────
 const SUPABASE_URL = "https://fmlaaiolqwknowhtdeue.supabase.co";
@@ -6128,6 +6129,146 @@ function BulkImport({ bands, onImported }) {
 }
 
 // ════════════════════════════════════════════════════════════════════
+//  SPRINT 5A: SMART IMPORT -- PARSER PREVIEW (read-only)
+// ════════════════════════════════════════════════════════════════════
+// Exercises src/smartImport's parsing engine against real pasted content
+// during development. Deliberately does nothing else: no artist/venue
+// matching, no duplicate detection, no import button, no database writes
+// of any kind -- those are Sprint 5B/5C. This exists purely so the parser
+// is visible against real input, not just visible in test output. Bulk
+// Import (above) is untouched and stays the live admin tool until Smart
+// Import reaches feature parity in Sprint 5C.
+const STATUS_ICON = { ok: "✅", needs_review: "⚠️", unparseable: "❌" };
+const STATUS_COLOR = { ok: C.green, needs_review: C.amber, unparseable: C.red };
+
+function SmartImportRow({ row }) {
+  const { fields, confidence, issues, status } = row;
+  return (
+    <tr style={{ borderBottom: `1px solid rgba(255,255,255,0.04)`, background: status === "unparseable" ? "rgba(232,32,58,0.04)" : status === "needs_review" ? "rgba(244,162,97,0.05)" : "transparent" }}>
+      <td style={{ padding: "8px 10px", width: 30 }}><span title={issues.join(", ") || "OK"}>{STATUS_ICON[status]}</span></td>
+      <td style={{ padding: "8px 10px", fontFamily: "monospace", fontSize: 11, color: C.dim, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={row.raw}>{row.raw}</td>
+      <td style={{ padding: "8px 10px", fontSize: 12 }}>{fields.artistName || <span style={{ color: C.dim }}>—</span>}</td>
+      <td style={{ padding: "8px 10px", fontSize: 12 }}>{fields.venueName || <span style={{ color: C.dim }}>—</span>}</td>
+      <td style={{ padding: "8px 10px", fontSize: 12 }}>{fields.city || <span style={{ color: C.dim }}>—</span>}</td>
+      <td style={{ padding: "8px 10px", fontSize: 12 }}>{fields.date || <span style={{ color: C.dim }}>—</span>}</td>
+      <td style={{ padding: "8px 10px", fontSize: 12 }}>{fields.time || <span style={{ color: C.dim }}>—</span>}</td>
+      <td style={{ padding: "8px 10px" }}>
+        {fields.isFestivalOrTribute && <Badge label="FEST/TRIBUTE" color={C.amber} />}
+      </td>
+      <td style={{ padding: "8px 10px" }}>
+        <Badge label={`${Math.round(confidence.overall * 100)}%`} color={STATUS_COLOR[status]} />
+      </td>
+      <td style={{ padding: "8px 10px", fontSize: 11, color: C.muted, maxWidth: 200 }}>{issues.join("; ")}</td>
+    </tr>
+  );
+}
+
+function SmartImportPreview() {
+  const [text, setText] = useState("");
+  const [format, setFormat] = useState("auto");
+  const [contextYear, setContextYear] = useState("");
+  const [defaultTime, setDefaultTime] = useState("20:00");
+  const [result, setResult] = useState(null);
+
+  const handleParse = () => {
+    if (!text.trim()) { setResult(null); return; }
+    const options = { format, defaultTime };
+    if (contextYear && /^\d{4}$/.test(contextYear)) options.contextYear = +contextYear;
+    setResult(parseImportText(text, options));
+  };
+
+  return (
+    <div>
+      <SectionLabel>SMART IMPORT — PARSER PREVIEW</SectionLabel>
+      <div style={{ fontSize: 13, color: C.muted, marginBottom: 20, maxWidth: 760 }}>
+        Sprint 5A: parsing engine only. This paste-and-preview tool never writes to the
+        database -- no artist/venue matching, no duplicate detection, no import button yet.
+        Copied webpage text, CSV and TSV are all auto-detected below. Use{" "}
+        <span style={{ color: C.white }}>BULK IMPORT</span> to actually publish gigs until
+        Smart Import replaces it.
+      </div>
+
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderTop: `3px solid ${C.red}`, borderRadius: 8, padding: 24, marginBottom: 20 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginBottom: 16 }}>
+          <div>
+            <label style={{ display: "block", fontSize: 13, color: C.white, letterSpacing: 2, marginBottom: 6, fontFamily: F.display }}>FORMAT</label>
+            <select value={format} onChange={e => setFormat(e.target.value)} style={{ ...inputCss, cursor: "pointer" }}>
+              <option value="auto">Auto-detect</option>
+              <option value="text">Plain text</option>
+              <option value="csv">CSV</option>
+              <option value="tsv">TSV</option>
+            </select>
+          </div>
+          <div>
+            <label style={{ display: "block", fontSize: 13, color: C.white, letterSpacing: 2, marginBottom: 6, fontFamily: F.display }}>CONTEXT YEAR (OPTIONAL)</label>
+            <input value={contextYear} onChange={e => setContextYear(e.target.value)} placeholder="e.g. 2026" style={inputCss} />
+          </div>
+          <div>
+            <label style={{ display: "block", fontSize: 13, color: C.white, letterSpacing: 2, marginBottom: 6, fontFamily: F.display }}>DEFAULT TIME</label>
+            <input type="time" value={defaultTime} onChange={e => setDefaultTime(e.target.value)} style={inputCss} />
+          </div>
+        </div>
+
+        <label style={{ display: "block", fontSize: 13, color: C.white, letterSpacing: 2, marginBottom: 6, fontFamily: F.display }}>PASTE TEXT, CSV OR TSV</label>
+        <textarea
+          value={text}
+          onChange={e => { setText(e.target.value); setResult(null); }}
+          rows={10}
+          placeholder={"Paste a gig list, a copied webpage, or CSV/TSV rows here..."}
+          style={{ ...inputCss, resize: "vertical", fontFamily: "monospace", fontSize: 13 }}
+        />
+
+        <Btn onClick={handleParse} disabled={!text.trim()} style={{ marginTop: 14, padding: "12px 32px" }}>
+          PARSE →
+        </Btn>
+      </div>
+
+      {result && (
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 24 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+            <div>
+              <div style={{ fontFamily: F.display, fontSize: 18, color: C.white, letterSpacing: 2 }}>
+                {result.rows.length} ROW{result.rows.length !== 1 ? "S" : ""} — {result.detectedFormat.toUpperCase()}
+              </div>
+              <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>
+                <span style={{ color: C.green }}>{result.stats.parsedRows} parsed</span>
+                {result.stats.malformed > 0 && <span style={{ color: C.red, marginLeft: 12 }}>{result.stats.malformed} unparseable</span>}
+                {result.stats.skippedFurniture > 0 && <span style={{ color: C.dim, marginLeft: 12 }}>{result.stats.skippedFurniture} furniture lines skipped</span>}
+              </div>
+            </div>
+            {result.sourceProfile && (
+              <div style={{ fontSize: 11, color: C.muted, textAlign: "right" }}>
+                <div>profile <span style={{ color: C.white }}>{result.sourceProfile.id}</span> v{result.sourceProfile.version}</div>
+                <div>match confidence {Math.round(result.sourceProfile.matchConfidence * 100)}% — {result.sourceProfile.matchReason}</div>
+              </div>
+            )}
+          </div>
+
+          {result.rows.length === 0 ? (
+            <div style={{ padding: 20, color: C.amber, fontSize: 14 }}>No rows could be parsed from this input.</div>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                    {["", "RAW", "ARTIST", "VENUE", "CITY", "DATE", "TIME", "FLAGS", "CONF.", "ISSUES"].map((h, i) => (
+                      <th key={i} style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, color: C.muted, letterSpacing: 2, fontFamily: F.display, whiteSpace: "nowrap" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.rows.map(row => <SmartImportRow key={row.id} row={row} />)}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════
 //  PHASE 4: ADMIN CLAIM & NEW-ENTITY REQUEST REVIEW
 // ════════════════════════════════════════════════════════════════════
 function AdminClaims({ claims, onRefresh }) {
@@ -7644,6 +7785,7 @@ function MainApp() {
       { id:"bands",     label:`BANDS (${bands.filter(b=>!b.disabled).length})` },
       { id:"venues",    label:`VENUES (${venues.length})` },
       { id:"import",      label:"BULK IMPORT" },
+      { id:"smart-import-preview", label:"SMART IMPORT (PREVIEW)" },
       { id:"backups",     label:"BACKUPS" },
       { id:"newsletter",    label:"NEWSLETTER" },
       { id:"featured",      label:"FEATURED" },
@@ -7737,6 +7879,13 @@ function MainApp() {
         {/* BULK IMPORT */}
         {tab==="import" && isAdmin && (
           <BulkImport bands={bands} onImported={refreshAdmin} />
+        )}
+
+        {/* SPRINT 5A: SMART IMPORT PREVIEW -- parser only, no writes. See
+            src/smartImport/. Stays alongside BULK IMPORT until Smart Import
+            reaches feature parity in Sprint 5C, per the agreed plan. */}
+        {tab==="smart-import-preview" && isAdmin && (
+          <SmartImportPreview />
         )}
 
         {/* BANDS */}
