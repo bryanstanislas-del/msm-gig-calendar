@@ -6143,9 +6143,18 @@ const STATUS_COLOR = { ok: C.green, needs_review: C.amber, unparseable: C.red };
 
 function SmartImportRow({ row }) {
   const { fields, confidence, issues, status } = row;
+  // "ok" means this row's extraction is reliable, not that the event is
+  // ready to import -- venue/address matching and duplicate detection are
+  // later pipeline stages (see the note above the table). Spell that out in
+  // the tooltip whenever a row is "ok" but still carries an unresolved
+  // venueBlock, so a 100% confidence badge doesn't read as "fully resolved".
+  const okTooltip = fields.venueBlock && !fields.venueName
+    ? "Title and date parsed reliably -- venue/address not yet resolved (see Venue Match stage)"
+    : "Parsed reliably";
+  const statusTooltip = issues.join(", ") || okTooltip;
   return (
     <tr style={{ borderBottom: `1px solid rgba(255,255,255,0.04)`, background: status === "unparseable" ? "rgba(232,32,58,0.04)" : status === "needs_review" ? "rgba(244,162,97,0.05)" : "transparent" }}>
-      <td style={{ padding: "8px 10px", width: 30 }}><span title={issues.join(", ") || "OK"}>{STATUS_ICON[status]}</span></td>
+      <td style={{ padding: "8px 10px", width: 30 }}><span title={statusTooltip}>{STATUS_ICON[status]}</span></td>
       <td style={{ padding: "8px 10px", fontFamily: "monospace", fontSize: 11, color: C.dim, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={row.raw}>{row.raw}</td>
       <td style={{ padding: "8px 10px", fontSize: 12 }}>{fields.artistName || <span style={{ color: C.dim }}>—</span>}</td>
       <td style={{ padding: "8px 10px", fontSize: 12 }}>{fields.venueName || <span style={{ color: C.dim }}>—</span>}</td>
@@ -6195,6 +6204,12 @@ function SmartImportPreview() {
         Copied webpage text, CSV and TSV are all auto-detected below. Use{" "}
         <span style={{ color: C.white }}>BULK IMPORT</span> to actually publish gigs until
         Smart Import replaces it.
+        <br /><br />
+        A green ✅ / 100% below means the title and date were extracted reliably --
+        it does <em>not</em> mean the row is ready to import. Where the source doesn't let
+        the venue/address be split without guessing, the original text is kept as-is in{" "}
+        <span style={{ color: C.white }}>VENUE BLOCK (SOURCE)</span> instead of a guessed
+        venue/city; resolving that against real venues happens in a later stage.
       </div>
 
       <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderTop: `3px solid ${C.red}`, borderRadius: 8, padding: 24, marginBottom: 20 }}>

@@ -26,7 +26,6 @@ const MONTH_NAMES = {
   july: 6, august: 7, september: 8, october: 9, november: 10, december: 11,
 };
 const DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
-const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
 function resolveYear(day, month, explicitYear) {
   if (explicitYear) return explicitYear;
@@ -83,9 +82,6 @@ export function parseDateWithConfidence(str, contextYear) {
 
 export function formatDateISO(d) {
   return `${d.year}-${String(d.month + 1).padStart(2, "0")}-${String(d.day).padStart(2, "0")}`;
-}
-export function formatDateDisplay(d) {
-  return `${String(d.day).padStart(2, "0")} ${MONTHS[d.month]} ${d.year}`;
 }
 
 // Section heading that sets a year context for subsequent dateless lines,
@@ -250,17 +246,44 @@ export function extractGenericDashList(text, { contextYear: contextYearOverride,
 // stage (Paste -> Parse -> Review -> Venue Match -> Deduplicate -> Import).
 const VIEW_DETAILS_RE = /^view details$/i;
 
+// A repeated "View Details" phrase alone is not a trustworthy signature --
+// plenty of unrelated pages repeat a "View Details" button/link with no gig
+// data anywhere nearby (e.g. a product listing page). What actually
+// distinguishes this source's Title/Date/Venue/View-Details structure is
+// that a recognizable date sits two lines above the marker, exactly where
+// extractMsmGigGuide expects one -- so detection re-checks that instead of
+// just counting the marker, to keep false-matches on unrelated pasted text
+// rare. Operates on the same blank-line-compacted view extraction uses, so
+// "two lines above" means the same thing in both places.
+const MIN_DATE_BACKED_RATIO = 0.6;
+
 function detectMsmGigGuideProfile(text) {
-  const lines = text.split("\n").map((l) => l.trim());
-  const count = lines.filter((l) => VIEW_DETAILS_RE.test(l)).length;
-  if (count < 2) {
+  const compact = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  const viewDetailsIdx = [];
+  compact.forEach((line, i) => { if (VIEW_DETAILS_RE.test(line)) viewDetailsIdx.push(i); });
+
+  if (viewDetailsIdx.length < 2) {
     return { matched: false, confidence: 0, reason: "fewer than 2 'View Details' marker lines found" };
   }
-  const confidence = Math.min(0.5 + count * 0.02, 0.98);
+
+  const dateBackedCount = viewDetailsIdx.filter(
+    (i) => i >= 2 && parseDateWithConfidence(compact[i - 2], null).parsed !== null
+  ).length;
+  const total = viewDetailsIdx.length;
+
+  if (dateBackedCount / total < MIN_DATE_BACKED_RATIO) {
+    return {
+      matched: false,
+      confidence: 0,
+      reason: `found ${total} "View Details" marker lines, but only ${dateBackedCount} had a recognizable date two lines above -- too weak a signature to trust`,
+    };
+  }
+
+  const confidence = Math.min(0.5 + dateBackedCount * 0.02, 0.98);
   return {
     matched: true,
     confidence,
-    reason: `found ${count} "View Details" marker lines -- this source's repeating Title/Date/Venue/View-Details structure`,
+    reason: `found ${total} "View Details" marker lines, ${dateBackedCount} backed by a recognizable date two lines above -- this source's repeating Title/Date/Venue/View-Details structure`,
   };
 }
 

@@ -26,6 +26,18 @@ describe("sniffDelimitedFormat", () => {
     expect(sniffDelimitedFormat("")).toBe("text");
     expect(sniffDelimitedFormat("   ")).toBe("text");
   });
+
+  it("falls back to 'text' for an ordinary prose paragraph with multiple commas per sentence", () => {
+    // Real page-furniture copy (see webpage-copy-with-furniture.txt-style
+    // intro text) routinely has 2-3 commas in a single descriptive sentence
+    // -- this must not look like a 3+ column CSV row.
+    const prose = "Whether you're a live music fanatic, theatre lover, or fan of comedy, you're at the right place.\nOur extensive event listings feature all kinds of live events, happening worldwide, from small clubs to arenas.\nSearch by location, genre, or keyword, and find your next night out, tonight.";
+    expect(sniffDelimitedFormat(prose)).toBe("text");
+  });
+
+  it("falls back to 'text' for the real msm-gig-guide-sample.txt fixture (never misdetected as CSV despite comma-bearing addresses like 'PO5 2QJ, UK')", () => {
+    expect(sniffDelimitedFormat(fixture("msm-gig-guide-sample.txt"))).toBe("text");
+  });
 });
 
 describe("parseDelimited", () => {
@@ -68,6 +80,20 @@ describe("parseDelimited", () => {
 
   it("returns no records (not an error) for empty input", () => {
     expect(parseDelimited("", ",").records).toEqual([]);
+  });
+
+  it("unescapes a doubled quote ('\"\"') inside a quoted field back to a single literal quote", () => {
+    const csv = 'Artist,Venue,City,Date,Time\nThe Mafia,"The ""Wig & Quill""",Salisbury,2026-06-06,20:00';
+    const { records } = parseDelimited(csv, ",");
+    expect(records).toHaveLength(1);
+    expect(records[0].venueName).toBe('The "Wig & Quill"');
+  });
+
+  it("keeps an embedded newline inside a quoted field as part of one cell, not a second row", () => {
+    const csv = 'Artist,Venue,City,Date,Time,Notes\nThe Mafia,The Obelisk,Woolston,2026-06-06,20:00,"Line one\nLine two"';
+    const { records } = parseDelimited(csv, ",");
+    expect(records).toHaveLength(1);
+    expect(records[0].notes).toBe("Line one\nLine two");
   });
 
   it("every alias variant maps to its target field", () => {

@@ -173,6 +173,23 @@ describe("detectSourceProfile", () => {
     const profile = detectSourceProfile(text);
     expect(profile.id).toBe("generic-dash-list");
   });
+
+  it("does not false-match msm-gig-guide on unrelated pasted text that merely repeats the phrase 'View Details' with no dates nearby", () => {
+    // e.g. a copied product-listing page where every item has its own
+    // "View Details" button, but nothing date-shaped sits near it.
+    const text = [
+      "* Wireless Headphones",
+      "In stock, ships today",
+      "£49.99",
+      "View Details",
+      "* Bluetooth Speaker",
+      "In stock, ships today",
+      "£29.99",
+      "View Details",
+    ].join("\n");
+    const profile = detectSourceProfile(text);
+    expect(profile.id).toBe("generic-dash-list");
+  });
 });
 
 describe("extractMsmGigGuide (fixture-driven, real Gig Guide sample)", () => {
