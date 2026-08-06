@@ -48,7 +48,7 @@ import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import React from "react";
 import { BrowserRouter, Routes, Route, useParams, useNavigate, Link } from "react-router-dom";
 import { DEFAULT_NOTIFICATION_PREFS, describeNotificationEvent, formatNotificationDate } from "./notificationHelpers";
-import { parseImportText } from "./smartImport";
+import { parseImportText, runMatching, REVIEW_STATUSES, REVIEW_STATUS_LABELS } from "./smartImport";
 
 // ── Supabase config ────────────────────────────────────────────────
 const SUPABASE_URL = "https://fmlaaiolqwknowhtdeue.supabase.co";
@@ -469,6 +469,22 @@ const DB = {
     let query = supabase.from("profiles").select("*").eq("profile_type","festival").order("band_name");
     if (!includeDisabled) query = query.or("disabled.is.null,disabled.eq.false");
     const { data, error } = await query;
+    if (error) throw new Error(error.message);
+    return data || [];
+  },
+
+  // Sprint 5B: snapshot used by src/smartImport's artist matching (see
+  // artistMatching.js) for its local exact-match tier. band + solo_artist
+  // only -- festival/promoter/organisation are out of scope for "artist
+  // matching" (see that module's header comment).
+  async getArtistProfiles() {
+    if (USE_MOCK) return [];
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("*")
+      .in("profile_type", ["band", "solo_artist"])
+      .or("disabled.is.null,disabled.eq.false")
+      .order("band_name");
     if (error) throw new Error(error.message);
     return data || [];
   },
@@ -6259,35 +6275,225 @@ function SmartImportRow({ row }) {
   );
 }
 
+// Sprint 5B: the matching/review stage. Reads the "Import Batch" produced
+// by src/smartImport's runMatching() -- an in-memory array only, nothing
+// written to the database -- and lets an admin filter it by exactly the
+// five review-workflow buckets. Still no import button: matching resolves
+// *what* venue/artist a row would link to and whether it looks like a
+// duplicate, it does not write any of that anywhere. Sprint 5C is what
+// turns a "Ready" row into a live gig.
+const REVIEW_STATUS_ICON = {
+  [REVIEW_STATUSES.READY]: "✅",
+  [REVIEW_STATUSES.NEEDS_REVIEW]: "⚠️",
+  [REVIEW_STATUSES.DUPLICATE]: "⛔",
+  [REVIEW_STATUSES.NEW_VENUE]: "🆕",
+  [REVIEW_STATUSES.NEW_ARTIST]: "🆕",
+};
+const REVIEW_STATUS_COLOR = {
+  [REVIEW_STATUSES.READY]: C.green,
+  [REVIEW_STATUSES.NEEDS_REVIEW]: C.amber,
+  [REVIEW_STATUSES.DUPLICATE]: C.red,
+  [REVIEW_STATUSES.NEW_VENUE]: C.muted,
+  [REVIEW_STATUSES.NEW_ARTIST]: C.muted,
+};
+const DUPLICATE_TIER_LABEL = {
+  exact_in_batch: "Exact — also in this paste",
+  near_in_batch: "Possible — similar row in this paste",
+  exact_existing: "Exact — already in the calendar",
+};
+
+function MatchCell({ match, entityLabel }) {
+  if (!match || match.tier === "not_applicable") {
+    return <span style={{ color: C.dim, fontSize: 11 }}>n/a</span>;
+  }
+  if (match.tier === "exact") {
+    return (
+      <div style={{ fontSize: 12 }}>
+        <span style={{ color: C.green }}>✓</span>{" "}
+        {match.match.name}
+        {match.match.city ? <span style={{ color: C.muted }}> — {match.match.city}</span> : null}
+      </div>
+    );
+  }
+  if (match.tier === "fuzzy") {
+    const top = match.candidates[0];
+    return (
+      <div style={{ fontSize: 11 }} title={match.candidates.map((c) => `${c.name}${c.city ? " — " + c.city : ""} (${Math.round(c.similarity_score * 100)}%)`).join("\n")}>
+        <span style={{ color: C.amber }}>{match.candidates.length} candidate{match.candidates.length !== 1 ? "s" : ""}</span>
+        <div style={{ color: C.muted, marginTop: 2 }}>
+          best: {top.name}{top.city ? ` — ${top.city}` : ""} ({Math.round(top.similarity_score * 100)}%)
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div style={{ fontSize: 11 }}>
+      <span style={{ color: C.muted }}>New {entityLabel}</span>
+      <div style={{ color: C.dim, marginTop: 2 }}>“{match.query}”</div>
+    </div>
+  );
+}
+
+function SmartImportReviewRow({ item }) {
+  const { fields, issues, reviewStatus, venueMatch, artistMatch, duplicate } = item;
+  return (
+    <tr style={{ borderBottom: `1px solid rgba(255,255,255,0.04)` }}>
+      <td style={{ padding: "8px 10px", width: 30 }}>
+        <span title={issues.join(", ") || REVIEW_STATUS_LABELS[reviewStatus]}>{REVIEW_STATUS_ICON[reviewStatus]}</span>
+      </td>
+      <td style={{ padding: "8px 10px" }}>
+        <Badge label={REVIEW_STATUS_LABELS[reviewStatus]} color={REVIEW_STATUS_COLOR[reviewStatus]} />
+      </td>
+      <td style={{ padding: "8px 10px", fontSize: 12 }}>{fields.artistName || <span style={{ color: C.dim }}>—</span>}</td>
+      <td style={{ padding: "8px 10px" }}><MatchCell match={venueMatch} entityLabel="Venue" /></td>
+      <td style={{ padding: "8px 10px" }}><MatchCell match={artistMatch} entityLabel="Artist" /></td>
+      <td style={{ padding: "8px 10px", fontSize: 11 }}>
+        {duplicate && duplicate.tier !== "none" ? (
+          <span style={{ color: C.red }}>{DUPLICATE_TIER_LABEL[duplicate.tier] || duplicate.tier}</span>
+        ) : (
+          <span style={{ color: C.dim }}>—</span>
+        )}
+      </td>
+      <td style={{ padding: "8px 10px", fontSize: 12 }}>{fields.date || <span style={{ color: C.dim }}>—</span>}</td>
+      <td style={{ padding: "8px 10px", fontSize: 12 }}>{fields.time || <span style={{ color: C.dim }}>—</span>}</td>
+    </tr>
+  );
+}
+
+function SmartImportReview({ parseResult }) {
+  const [status, setStatus] = useState("idle"); // idle | loading | done | error
+  const [batch, setBatch] = useState(null);
+  const [errorMsg, setErrorMsg] = useState("");
+  const [filter, setFilter] = useState("all");
+
+  const runReview = async () => {
+    setStatus("loading");
+    setErrorMsg("");
+    try {
+      const [venues, artistProfiles, existingGigs] = await Promise.all([
+        DB.getVenues(),
+        DB.getArtistProfiles(),
+        DB.getAllGigs(),
+      ]);
+      const matched = await runMatching(parseResult, {
+        venues,
+        artistProfiles,
+        existingGigs,
+        searchFn: (entityType, query) => DB.searchEntities(entityType, query),
+      });
+      setBatch(matched);
+      setStatus("done");
+    } catch (e) {
+      setErrorMsg(e.message || "Matching failed");
+      setStatus("error");
+    }
+  };
+
+  const counts = useMemo(() => {
+    if (!batch) return {};
+    const c = { all: batch.length };
+    for (const s of Object.values(REVIEW_STATUSES)) c[s] = 0;
+    for (const item of batch) c[item.reviewStatus]++;
+    return c;
+  }, [batch]);
+
+  const filtered = batch ? batch.filter((item) => filter === "all" ? true : item.reviewStatus === filter) : [];
+
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 24, marginTop: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div style={{ fontFamily: F.display, fontSize: 18, color: C.white, letterSpacing: 2 }}>REVIEW — VENUE / ARTIST MATCH</div>
+          <div style={{ fontSize: 13, color: C.muted, marginTop: 4, maxWidth: 720 }}>
+            Matches every parsed row against the real venues and artist profiles database, and flags likely
+            duplicates. This only reads the database and never writes to it -- no venue, artist, or gig record is
+            created here.
+          </div>
+        </div>
+        {status !== "done" && (
+          <Btn onClick={runReview} disabled={status === "loading"} style={{ padding: "12px 28px" }}>
+            {status === "loading" ? "MATCHING…" : "MATCH AGAINST DATABASE →"}
+          </Btn>
+        )}
+      </div>
+
+      {status === "error" && <div style={{ color: C.red, fontSize: 13, marginBottom: 12 }}>{errorMsg}</div>}
+
+      {status === "done" && batch && (
+        <>
+          <div style={{ display: "flex", gap: 6, marginBottom: 18, flexWrap: "wrap" }}>
+            {["all", ...Object.values(REVIEW_STATUSES)].map((s) => (
+              <button
+                key={s}
+                onClick={() => setFilter(s)}
+                style={{
+                  padding: "7px 14px", border: "none", borderRadius: 5, cursor: "pointer",
+                  fontFamily: F.display, letterSpacing: 1, fontSize: 12,
+                  background: filter === s ? C.red : "rgba(255,255,255,0.05)",
+                  color: filter === s ? "#fff" : C.muted,
+                }}
+              >
+                {s === "all" ? "ALL" : REVIEW_STATUS_LABELS[s].toUpperCase()} ({counts[s] || 0})
+              </button>
+            ))}
+          </div>
+
+          {filtered.length === 0 ? (
+            <div style={{ color: C.dim, fontSize: 14 }}>No rows in this category.</div>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                    {["", "STATUS", "ARTIST", "VENUE MATCH", "ARTIST MATCH", "DUPLICATE", "DATE", "TIME"].map((h, i) => (
+                      <th key={i} style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, color: C.muted, letterSpacing: 2, fontFamily: F.display, whiteSpace: "nowrap" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((item) => <SmartImportReviewRow key={item.id} item={item} />)}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function SmartImportPreview() {
   const [text, setText] = useState("");
   const [format, setFormat] = useState("auto");
   const [contextYear, setContextYear] = useState("");
   const [defaultTime, setDefaultTime] = useState(TIME_TBC);
   const [result, setResult] = useState(null);
+  const [parseId, setParseId] = useState(0);
 
   const handleParse = () => {
     if (!text.trim()) { setResult(null); return; }
     const options = { format, defaultTime };
     if (contextYear && /^\d{4}$/.test(contextYear)) options.contextYear = +contextYear;
     setResult(parseImportText(text, options));
+    setParseId(id => id + 1);
   };
 
   return (
     <div>
-      <SectionLabel>SMART IMPORT — PARSER PREVIEW</SectionLabel>
+      <SectionLabel>SMART IMPORT — PARSER + REVIEW PREVIEW</SectionLabel>
       <div style={{ fontSize: 13, color: C.muted, marginBottom: 20, maxWidth: 760 }}>
-        Sprint 5A: parsing engine only. This paste-and-preview tool never writes to the
-        database -- no artist/venue matching, no duplicate detection, no import button yet.
-        Copied webpage text, CSV and TSV are all auto-detected below. Use{" "}
-        <span style={{ color: C.white }}>BULK IMPORT</span> to actually publish gigs until
-        Smart Import replaces it.
+        Sprint 5A parses; Sprint 5B matches each row against the real venues and artist
+        profiles database and flags likely duplicates. Nothing on this page writes to the
+        database -- no venue, artist, or gig record is ever created here, and there is no
+        import button yet. Copied webpage text, CSV and TSV are all auto-detected below.
+        Use <span style={{ color: C.white }}>BULK IMPORT</span> to actually publish gigs
+        until Smart Import replaces it.
         <br /><br />
         A green ✅ / 100% below means the title and date were extracted reliably --
         it does <em>not</em> mean the row is ready to import. Where the source doesn't let
         the venue/address be split without guessing, the original text is kept as-is in{" "}
         <span style={{ color: C.white }}>VENUE BLOCK (SOURCE)</span> instead of a guessed
-        venue/city; resolving that against real venues happens in a later stage.
+        venue/city; resolving that against real venues happens below, in the review stage.
       </div>
 
       <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderTop: `3px solid ${C.red}`, borderRadius: 8, padding: 24, marginBottom: 20 }}>
@@ -6363,6 +6569,8 @@ function SmartImportPreview() {
           )}
         </div>
       )}
+
+      {result && result.rows.length > 0 && <SmartImportReview key={parseId} parseResult={result} />}
     </div>
   );
 }
