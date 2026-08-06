@@ -1,18 +1,18 @@
 {
-  "_comment": "Hand-verified expected output for fixtures/msm-gig-guide-sample.txt (Sprint 5A, item 6). This is NOT a full 226-row snapshot of whatever the implementation happens to produce -- it's a curated set of representative and edge-case rows, each checked by hand against the raw fixture text, so a future regression in the parser or profile trips a real assertion instead of being silently re-baselined. Row indices are stable because msm-gig-guide-sample.txt's 'View Details' markers are processed in file order.",
-  "sourceProfile": { "id": "msm-gig-guide", "version": "1.0.0" },
+  "_comment": "Hand-verified expected output for fixtures/msm-gig-guide-sample.txt. This is NOT a full 226-row snapshot of whatever the implementation happens to produce -- it's a curated set of representative and edge-case rows, each checked by hand against the raw fixture text, so a future regression in the parser or profile trips a real assertion instead of being silently re-baselined. Row indices are stable because msm-gig-guide-sample.txt's 'View Details' markers are processed in file order. Updated 2026-08 (profile v1.1.0) when the live site changed to a 5-line record structure (title/date/venue/address/View Details, no '* ' bullet on titles, venue and address on separate lines instead of squashed together) -- see sourceProfiles.js's msm-gig-guide section comment for the full diagnosis. The event list itself, its order and every landmark row index are unchanged from the original Sprint 5A sample; only the source markup (and therefore raw/venueBlock) changed.",
+  "sourceProfile": { "id": "msm-gig-guide", "version": "1.1.0" },
   "rowCount": 226,
-  "stats": { "totalInputLines": 918, "parsedRows": 226, "skippedFurniture": 0, "malformed": 0 },
+  "stats": { "totalInputLines": 1148, "parsedRows": 226, "skippedFurniture": 0, "malformed": 0 },
   "rows": [
     {
       "index": 0,
       "note": "simple, unambiguous row -- first data row in the fixture",
-      "raw": "* Biohazard\n5th August 2026\nSouthampton 1865Brunswick Square",
+      "raw": "Biohazard\n5th August 2026\nSouthampton 1865\nBrunswick Square",
       "fields": {
         "artistName": "Biohazard",
         "venueName": null,
         "city": null,
-        "venueBlock": "Southampton 1865Brunswick Square",
+        "venueBlock": "Southampton 1865, Brunswick Square",
         "date": "2026-08-05",
         "dateRaw": "5th August 2026",
         "isFestivalOrTribute": false,
@@ -28,7 +28,7 @@
       "note": "tribute wording must be preserved verbatim in the title and flagged",
       "fields": {
         "artistName": "Sleep Broken (Sleep Token Tribute)",
-        "venueBlock": "Southampton 1865Brunswick Square",
+        "venueBlock": "Southampton 1865, Brunswick Square",
         "date": "2026-08-16",
         "isFestivalOrTribute": true,
         "isCancelled": false,
@@ -39,13 +39,13 @@
     {
       "index": 34,
       "note": "exact duplicate cluster, row 1 of 2 (identical title/date/venue)",
-      "fields": { "artistName": "Jamie Webster", "date": "2026-09-05", "venueBlock": "Southampton 1865Brunswick Square" },
+      "fields": { "artistName": "Jamie Webster", "date": "2026-09-05", "venueBlock": "Southampton 1865, Brunswick Square" },
       "status": "ok"
     },
     {
       "index": 35,
       "note": "exact duplicate cluster, row 2 of 2 -- Sprint 5A keeps both visible, does not merge",
-      "fields": { "artistName": "Jamie Webster", "date": "2026-09-05", "venueBlock": "Southampton 1865Brunswick Square" },
+      "fields": { "artistName": "Jamie Webster", "date": "2026-09-05", "venueBlock": "Southampton 1865, Brunswick Square" },
       "status": "ok"
     },
     {
@@ -62,61 +62,61 @@
     {
       "index": 74,
       "note": "near-duplicate cluster, row 1 of 2 -- plain title",
-      "fields": { "artistName": "Day Fever", "date": "2026-09-26", "venueBlock": "O2 Academy Bournemouth570 Christchurch Rd" },
+      "fields": { "artistName": "Day Fever", "date": "2026-09-26", "venueBlock": "O2 Academy Bournemouth, 570 Christchurch Rd" },
       "status": "ok"
     },
     {
       "index": 75,
       "note": "near-duplicate cluster, row 2 of 2 -- same act/date/venue, location text appended to the title",
-      "fields": { "artistName": "Day Fever - Bournemouth", "date": "2026-09-26", "venueBlock": "O2 Academy Bournemouth570 Christchurch Rd" },
+      "fields": { "artistName": "Day Fever - Bournemouth", "date": "2026-09-26", "venueBlock": "O2 Academy Bournemouth, 570 Christchurch Rd" },
       "status": "ok"
     },
     {
       "index": 111,
       "note": "second near-duplicate cluster (different date/venue from the Bournemouth one), row 1 of 2",
-      "fields": { "artistName": "Day Fever", "date": "2026-10-10", "venueBlock": "O2 Guildhall SouthamptonCivic Centre" },
+      "fields": { "artistName": "Day Fever", "date": "2026-10-10", "venueBlock": "O2 Guildhall Southampton, Civic Centre" },
       "status": "ok"
     },
     {
       "index": 112,
       "note": "second near-duplicate cluster, row 2 of 2",
-      "fields": { "artistName": "Day Fever - Southampton", "date": "2026-10-10", "venueBlock": "O2 Guildhall SouthamptonCivic Centre" },
+      "fields": { "artistName": "Day Fever - Southampton", "date": "2026-10-10", "venueBlock": "O2 Guildhall Southampton, Civic Centre" },
       "status": "ok"
     },
     {
       "index": 140,
-      "note": "exact duplicate cluster (O2 Academy Bournemouth -- digit run '570' immediately after the brand name 'O2 Academy Bournemouth' must NOT be split off), row 1 of 2",
-      "fields": { "artistName": "Transvision Vamp", "date": "2026-10-21", "venueBlock": "O2 Academy Bournemouth570 Christchurch Rd" },
+      "note": "exact duplicate cluster (O2 Academy Bournemouth is now its own clean venue line, no digit-run split concern any more since the source itself separates venue from address), row 1 of 2",
+      "fields": { "artistName": "Transvision Vamp", "date": "2026-10-21", "venueBlock": "O2 Academy Bournemouth, 570 Christchurch Rd" },
       "status": "ok"
     },
     {
       "index": 141,
       "note": "exact duplicate cluster, row 2 of 2",
-      "fields": { "artistName": "Transvision Vamp", "date": "2026-10-21", "venueBlock": "O2 Academy Bournemouth570 Christchurch Rd" },
+      "fields": { "artistName": "Transvision Vamp", "date": "2026-10-21", "venueBlock": "O2 Academy Bournemouth, 570 Christchurch Rd" },
       "status": "ok"
     },
     {
       "index": 186,
       "note": "capitalisation-only duplicate cluster, row 1 of 2",
-      "fields": { "artistName": "Overpass", "date": "2026-11-10", "venueBlock": "The Brook466 Portswood Road" },
+      "fields": { "artistName": "Overpass", "date": "2026-11-10", "venueBlock": "The Brook, 466 Portswood Road" },
       "status": "ok"
     },
     {
       "index": 187,
       "note": "capitalisation-only duplicate cluster, row 2 of 2 -- lowercase variant, distinct string, still visible separately",
-      "fields": { "artistName": "overpass", "date": "2026-11-10", "venueBlock": "The Brook466 Portswood Road" },
+      "fields": { "artistName": "overpass", "date": "2026-11-10", "venueBlock": "The Brook, 466 Portswood Road" },
       "status": "ok"
     },
     {
       "index": 216,
       "note": "exact duplicate cluster with an unrelated row (Del Amitri) between the two occurrences in the source, row 1 of 2",
-      "fields": { "artistName": "Avatar", "date": "2026-11-21", "venueBlock": "O2 Guildhall SouthamptonCivic Centre" },
+      "fields": { "artistName": "Avatar", "date": "2026-11-21", "venueBlock": "O2 Guildhall Southampton, Civic Centre" },
       "status": "ok"
     },
     {
       "index": 218,
       "note": "exact duplicate cluster, row 2 of 2",
-      "fields": { "artistName": "Avatar", "date": "2026-11-21", "venueBlock": "O2 Guildhall SouthamptonCivic Centre" },
+      "fields": { "artistName": "Avatar", "date": "2026-11-21", "venueBlock": "O2 Guildhall Southampton, Civic Centre" },
       "status": "ok"
     },
     {
@@ -125,7 +125,7 @@
       "fields": {
         "artistName": "Hothouse Flowers - the Greatest Hits Tour",
         "date": "2026-11-24",
-        "venueBlock": "Fareham Live34 OSBORNE ROAD"
+        "venueBlock": "Fareham Live, 34 OSBORNE ROAD"
       },
       "status": "ok"
     }

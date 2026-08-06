@@ -195,8 +195,8 @@ describe("detectSourceProfile", () => {
     expect(typeof profile.extract).toBe("function");
   });
 
-  it("matches msm-gig-guide when 'View Details' marker lines appear at least twice", () => {
-    const text = "* Biohazard\n5th August 2026\nSouthampton 1865Brunswick Square\nView Details\n* Crypta\n13th August 2026\nSouthampton 1865Brunswick Square\nView Details";
+  it("matches msm-gig-guide when 'View Details' marker lines appear at least twice, on the current 5-line (title/date/venue/address) record structure", () => {
+    const text = "Biohazard\n5th August 2026\nSouthampton 1865\nBrunswick Square\nView Details\nCrypta\n13th August 2026\nSouthampton 1865\nBrunswick Square\nView Details";
     const profile = detectSourceProfile(text);
     expect(profile.id).toBe("msm-gig-guide");
     expect(profile.matchConfidence).toBeGreaterThan(0);
@@ -213,17 +213,40 @@ describe("detectSourceProfile", () => {
     // e.g. a copied product-listing page where every item has its own
     // "View Details" button, but nothing date-shaped sits near it.
     const text = [
-      "* Wireless Headphones",
+      "Wireless Headphones",
       "In stock, ships today",
+      "Free delivery",
       "£49.99",
       "View Details",
-      "* Bluetooth Speaker",
+      "Bluetooth Speaker",
       "In stock, ships today",
+      "Free delivery",
       "£29.99",
       "View Details",
     ].join("\n");
     const profile = detectSourceProfile(text);
     expect(profile.id).toBe("generic-dash-list");
+  });
+
+  it("the old format is superseded, not supported: the pre-v1.1.0 4-line, bulleted, squashed-venue shape no longer detects as msm-gig-guide", () => {
+    // This is the exact shape Sprint 5A's original fixture used, before the
+    // live site changed its markup -- pinned down here (not just described
+    // in a comment) so a future change can't silently resurrect dual-format
+    // ambiguity without a test noticing. See the v1.1.0 comment above
+    // extractMsmGigGuide in sourceProfiles.js for the full rationale.
+    const oldFormatText = [
+      "* Biohazard",
+      "5th August 2026",
+      "Southampton 1865Brunswick Square",
+      "View Details",
+      "* Crypta",
+      "13th August 2026",
+      "Southampton 1865Brunswick Square",
+      "View Details",
+    ].join("\n");
+    const profile = detectSourceProfile(oldFormatText);
+    expect(profile.id).toBe("generic-dash-list");
+    expect(profile.id).not.toBe("msm-gig-guide");
   });
 });
 
@@ -236,7 +259,7 @@ describe("extractMsmGigGuide (fixture-driven, real Gig Guide sample)", () => {
     expect(rows).toHaveLength(226);
   });
 
-  it("extracts the complete event title, date and raw venue block for a simple row", () => {
+  it("extracts the complete event title, date and joined venue block for a simple row", () => {
     const row = rows.find((r) => r.fields.artistName === "Biohazard");
     expect(row.fields).toMatchObject({
       artistName: "Biohazard",
@@ -244,21 +267,21 @@ describe("extractMsmGigGuide (fixture-driven, real Gig Guide sample)", () => {
       dateRaw: "5th August 2026",
       venueName: null, // never guessed -- see profile comment in sourceProfiles.js
       city: null,
-      venueBlock: "Southampton 1865Brunswick Square",
+      venueBlock: "Southampton 1865, Brunswick Square",
     });
     expect(row.status).toBe("ok");
     expect(row.confidence.field.venueName).toBeNull(); // not attempted, not scored
     expect(row.confidence.field.city).toBeNull();
   });
 
-  it("never splits the squashed venue+address text, even for tricky brand names with embedded digits/capitals", () => {
-    // "O2 Academy Bournemouth570 Christchurch Rd" -- naive letter/digit
-    // splitting would wrongly cut the brand name "O2" apart from "Academy".
-    const o2Row = rows.find((r) => r.fields.venueBlock === "O2 Academy Bournemouth570 Christchurch Rd");
+  it("joins the source's own venue and address lines verbatim (comma-separated) rather than decomposing them further, even for tricky brand names with embedded digits/capitals", () => {
+    // The live site delimits venue from address with a real line break --
+    // no split heuristic is needed or attempted here. "O2 Academy
+    // Bournemouth" / "570 Christchurch Rd" arrive as two clean lines and are
+    // simply joined; nothing has to guess where the brand name ends.
+    const o2Row = rows.find((r) => r.fields.venueBlock === "O2 Academy Bournemouth, 570 Christchurch Rd");
     expect(o2Row).toBeTruthy();
-    // "Southampton 1865Brunswick Square" -- the digits are part of the
-    // venue's own name ("Southampton 1865"), not a street number.
-    const sotonRow = rows.find((r) => r.fields.venueBlock === "Southampton 1865Brunswick Square");
+    const sotonRow = rows.find((r) => r.fields.venueBlock === "Southampton 1865, Brunswick Square");
     expect(sotonRow).toBeTruthy();
     for (const r of rows) {
       expect(r.fields.venueName).toBeNull();
@@ -266,9 +289,9 @@ describe("extractMsmGigGuide (fixture-driven, real Gig Guide sample)", () => {
     }
   });
 
-  it("preserves the genuine event data (title/date/venue) verbatim in raw, but excludes the 'View Details' furniture marker", () => {
+  it("preserves the genuine event data (title/date/venue/address) verbatim in raw, but excludes the 'View Details' furniture marker", () => {
     const row = rows.find((r) => r.fields.artistName === "Biohazard");
-    expect(row.raw).toBe("* Biohazard\n5th August 2026\nSouthampton 1865Brunswick Square");
+    expect(row.raw).toBe("Biohazard\n5th August 2026\nSouthampton 1865\nBrunswick Square");
     expect(row.raw).not.toMatch(/view details/i);
   });
 
