@@ -242,7 +242,8 @@ export function extractGenericDashList(text, { contextYear: contextYearOverride,
   return rows;
 }
 
-// -- msm-gig-guide: repeating "Title / Date / VenueBlock / View Details" ---
+// -- msm-gig-guide: repeating "Title / Date / Venue / Address / View
+// Details" (5 lines per record) -----------------------------------------
 // Anchoring extraction on the literal "View Details" marker line (rather
 // than classifying every line) is what lets this profile ignore all page
 // furniture -- the "Search Listings" header/search-form text, the mid-list
@@ -250,28 +251,34 @@ export function extractGenericDashList(text, { contextYear: contextYearOverride,
 // needing furniture.js at all: none of that furniture is ever immediately
 // followed by a "View Details" line, so it's never harvested.
 //
-// Per the revised Sprint 5A architecture, this profile does NOT attempt to
-// split the source's squashed "VenueAddress" text (e.g. "O2 Academy
-// Bournemouth570 Christchurch Rd") into venueName/address/city. That split
-// is fundamentally a guess -- there's no reliable signal distinguishing "the
-// digits belong to the venue's own name" (e.g. "Southampton 1865") from "the
-// digits start the street address" (e.g. "The Brook466 Portswood Road").
-// Sprint 5A's job is accurate, non-lossy parsing, not venue resolution -- so
-// venueName/city are always left null (unresolved, excluded from the
-// confidence average, never scored as a failure) and the untouched text is
-// kept verbatim as fields.venueBlock for the pipeline's later Venue Match
-// stage (Paste -> Parse -> Review -> Venue Match -> Deduplicate -> Import).
+// v1.1.0 (2026-08): the live site changed its markup -- venue name and
+// street address used to be squashed onto a single line with no separator
+// (e.g. "O2 Academy Bournemouth570 Christchurch Rd") and titles carried a
+// "* " bullet prefix; both of those are gone. A record is now genuinely 5
+// lines (title, date, venue, address, "View Details"), titles have no
+// bullet at all, and venue/address are already cleanly split by the source
+// itself. This profile still does NOT try to further decompose the venue
+// line from the address line into a normalized venueName/city -- the two
+// lines are concatenated verbatim into fields.venueBlock rather than
+// guessed at, consistent with Sprint 5A's "accurate parsing, not venue
+// resolution" scope -- but unlike the old squashed-line format, no split
+// heuristic is needed here at all, since the source already delimits them
+// with a real line break. venueName/city stay null (unresolved, excluded
+// from the confidence average, never scored as a failure); resolving them
+// against real venues is the pipeline's later Venue Match stage (Paste ->
+// Parse -> Review -> Venue Match -> Deduplicate -> Import).
 const VIEW_DETAILS_RE = /^view details$/i;
 
 // A repeated "View Details" phrase alone is not a trustworthy signature --
 // plenty of unrelated pages repeat a "View Details" button/link with no gig
 // data anywhere nearby (e.g. a product listing page). What actually
-// distinguishes this source's Title/Date/Venue/View-Details structure is
-// that a recognizable date sits two lines above the marker, exactly where
-// extractMsmGigGuide expects one -- so detection re-checks that instead of
-// just counting the marker, to keep false-matches on unrelated pasted text
-// rare. Operates on the same blank-line-compacted view extraction uses, so
-// "two lines above" means the same thing in both places.
+// distinguishes this source's Title/Date/Venue/Address/View-Details
+// structure is that a recognizable date sits three lines above the marker,
+// exactly where extractMsmGigGuide expects one -- so detection re-checks
+// that instead of just counting the marker, to keep false-matches on
+// unrelated pasted text rare. Operates on the same blank-line-compacted
+// view extraction uses, so "three lines above" means the same thing in
+// both places.
 const MIN_DATE_BACKED_RATIO = 0.6;
 
 function detectMsmGigGuideProfile(text) {
@@ -284,7 +291,7 @@ function detectMsmGigGuideProfile(text) {
   }
 
   const dateBackedCount = viewDetailsIdx.filter(
-    (i) => i >= 2 && parseDateWithConfidence(compact[i - 2], null).parsed !== null
+    (i) => i >= 3 && parseDateWithConfidence(compact[i - 3], null).parsed !== null
   ).length;
   const total = viewDetailsIdx.length;
 
@@ -292,7 +299,7 @@ function detectMsmGigGuideProfile(text) {
     return {
       matched: false,
       confidence: 0,
-      reason: `found ${total} "View Details" marker lines, but only ${dateBackedCount} had a recognizable date two lines above -- too weak a signature to trust`,
+      reason: `found ${total} "View Details" marker lines, but only ${dateBackedCount} had a recognizable date three lines above -- too weak a signature to trust`,
     };
   }
 
@@ -300,13 +307,17 @@ function detectMsmGigGuideProfile(text) {
   return {
     matched: true,
     confidence,
-    reason: `found ${total} "View Details" marker lines, ${dateBackedCount} backed by a recognizable date two lines above -- this source's repeating Title/Date/Venue/View-Details structure`,
+    reason: `found ${total} "View Details" marker lines, ${dateBackedCount} backed by a recognizable date three lines above -- this source's repeating Title/Date/Venue/Address/View-Details structure`,
   };
 }
 
-function extractMsmGigGuideRow(titleLine, dateLine, venueBlockLine, contextYear, defaultTime) {
+function extractMsmGigGuideRow(titleLine, dateLine, venueLine, addressLine, contextYear, defaultTime) {
+  // Bullet-stripping is defensive leftover, not load-bearing: the live site
+  // no longer prefixes titles with "* ", but stripping one if it's ever
+  // there costs nothing and guards against a future markdown-list-style
+  // regression in the source.
   const cleanTitle = titleLine.replace(/^\*\s*/, "").trim();
-  const venueBlock = venueBlockLine.trim();
+  const venueBlock = [venueLine.trim(), addressLine.trim()].filter(Boolean).join(", ");
   const { parsed, confidenceTier } = parseDateWithConfidence(dateLine, contextYear);
 
   const issues = [];
@@ -317,9 +328,9 @@ function extractMsmGigGuideRow(titleLine, dateLine, venueBlockLine, contextYear,
   const fieldConfidence = {
     date: parsed ? DATE_CONFIDENCE[confidenceTier] : DATE_CONFIDENCE.UNPARSEABLE,
     artistName: cleanTitle ? TEXT_FIELD_CONFIDENCE.EXPLICIT : TEXT_FIELD_CONFIDENCE.MISSING,
-    // Not attempted: this profile deliberately never decomposes the squashed
-    // venue+address block (see comment above) -- "not applicable" (null),
-    // not "attempted and failed" (0). See confidence.js.
+    // Not attempted: this profile deliberately never decomposes venueBlock
+    // into a normalized venueName/city (see comment above) -- "not
+    // applicable" (null), not "attempted and failed" (0). See confidence.js.
     venueName: null,
     city: null,
   };
@@ -347,9 +358,9 @@ function extractMsmGigGuideRow(titleLine, dateLine, venueBlockLine, contextYear,
   // furniture to the *editor*: it carries no event information, so it's
   // deliberately left out of `raw`, which is what the preview displays.
   // Internal boundary detection has already happened by this point (the
-  // caller found this triplet by scanning for the marker in `compact`), so
-  // dropping it here doesn't affect parsing at all -- only what's shown.
-  const raw = [titleLine.trim(), dateLine.trim(), venueBlockLine.trim()].join("\n");
+  // caller found this quadruplet by scanning for the marker in `compact`),
+  // so dropping it here doesn't affect parsing at all -- only what's shown.
+  const raw = [titleLine.trim(), dateLine.trim(), venueLine.trim(), addressLine.trim()].join("\n");
 
   return assembleEventRow({ raw, fields, fieldConfidence, issues });
 }
@@ -359,14 +370,18 @@ export function extractMsmGigGuide(text, { contextYear, defaultTime } = {}) {
   const rows = [];
   for (let i = 0; i < compact.length; i++) {
     if (!VIEW_DETAILS_RE.test(compact[i])) continue;
-    if (i < 3) continue; // not enough preceding lines for a full triplet
-    const [titleLine, dateLine, venueBlockLine] = [compact[i - 3], compact[i - 2], compact[i - 1]];
-    // A genuine title line always carries the "* " bullet in this source;
-    // if it doesn't, the 3 lines above this "View Details" aren't a real
-    // title/date/venue triplet -- skip rather than fabricate a row from
-    // unrelated furniture.
-    if (!/^\*\s*\S/.test(titleLine)) continue;
-    rows.push(extractMsmGigGuideRow(titleLine, dateLine, venueBlockLine, contextYear, defaultTime));
+    if (i < 4) continue; // not enough preceding lines for a full quadruplet
+    const [titleLine, dateLine, venueLine, addressLine] = [compact[i - 4], compact[i - 3], compact[i - 2], compact[i - 1]];
+    // A genuine record's date line must actually parse as a date -- if it
+    // doesn't, the 4 lines above this "View Details" aren't a real
+    // title/date/venue/address quadruplet (e.g. furniture with no "View
+    // Details" of its own happened to land at this offset by coincidence)
+    // -- skip rather than fabricate a row from unrelated text. This is a
+    // stronger, more principled guard than the old "starts with a bullet"
+    // check it replaces: it validates the structure that actually matters
+    // instead of an incidental formatting quirk of one page snapshot.
+    if (!parseDateWithConfidence(dateLine, contextYear).parsed) continue;
+    rows.push(extractMsmGigGuideRow(titleLine, dateLine, venueLine, addressLine, contextYear, defaultTime));
   }
   return rows;
 }
@@ -380,7 +395,7 @@ export function extractMsmGigGuide(text, { contextYear, defaultTime } = {}) {
 const PROFILES = [
   {
     id: "msm-gig-guide",
-    version: "1.0.0",
+    version: "1.1.0", // 2026-08: adapted to the site's 5-line, no-bullet record structure
     detect: detectMsmGigGuideProfile,
     extract: extractMsmGigGuide,
   },
