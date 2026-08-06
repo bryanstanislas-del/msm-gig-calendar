@@ -6,7 +6,10 @@ import {
   parseDateWithConfidence,
   detectContextYear,
   detectFestivalOrTribute,
-  detectPostponedOrCancelled,
+  detectCancelled,
+  detectPostponed,
+  detectRescheduled,
+  detectSoldOut,
   extractGenericDashList,
   extractMsmGigGuide,
   detectSourceProfile,
@@ -129,6 +132,22 @@ describe("extractGenericDashList (fixture-driven)", () => {
     expect(rows[3].fields.city).toBeNull();
   });
 
+  it("flags cancelled/postponed/rescheduled/sold-out as independent structured flags, not a single merged one", () => {
+    const rows = extractGenericDashList([
+      "5 July - The Brook, Southampton - CANCELLED",
+      "6 July - The Brook, Southampton - Postponed",
+      "7 July - The Brook, Southampton - Rescheduled to 20 July",
+      "8 July - The Brook, Southampton - SOLD OUT",
+      "9 July - The Brook, Southampton",
+    ].join("\n"));
+    expect(rows).toHaveLength(5);
+    expect(rows[0].fields).toMatchObject({ isCancelled: true, isPostponed: false, isRescheduled: false, isSoldOut: false });
+    expect(rows[1].fields).toMatchObject({ isCancelled: false, isPostponed: true, isRescheduled: false, isSoldOut: false });
+    expect(rows[2].fields).toMatchObject({ isCancelled: false, isPostponed: false, isRescheduled: true, isSoldOut: false });
+    expect(rows[3].fields).toMatchObject({ isCancelled: false, isPostponed: false, isRescheduled: false, isSoldOut: true });
+    expect(rows[4].fields).toMatchObject({ isCancelled: false, isPostponed: false, isRescheduled: false, isSoldOut: false });
+  });
+
   it("parses festival-tribute-flagging.txt: keyword heuristic flags festival/tribute rows, leaves an ordinary row unflagged", () => {
     const rows = extractGenericDashList(fixture("festival-tribute-flagging.txt"));
     expect(rows).toHaveLength(3);
@@ -139,14 +158,30 @@ describe("extractGenericDashList (fixture-driven)", () => {
   });
 });
 
-describe("detectPostponedOrCancelled", () => {
-  it("flags 'postponed', 'cancelled' and 'canceled', case-insensitively", () => {
-    expect(detectPostponedOrCancelled("A Skylit Drive - POSTPONED")).toBe(true);
-    expect(detectPostponedOrCancelled("Some Gig - Cancelled")).toBe(true);
-    expect(detectPostponedOrCancelled("Some Gig - canceled")).toBe(true);
+describe("event status flags (structured, one boolean per status)", () => {
+  it("detectCancelled flags 'cancelled' and 'canceled', case-insensitively", () => {
+    expect(detectCancelled("Some Gig - Cancelled")).toBe(true);
+    expect(detectCancelled("Some Gig - canceled")).toBe(true);
+    expect(detectCancelled("Biohazard")).toBe(false);
   });
-  it("does not flag an ordinary title", () => {
-    expect(detectPostponedOrCancelled("Biohazard")).toBe(false);
+  it("detectPostponed flags 'postponed', case-insensitively", () => {
+    expect(detectPostponed("A Skylit Drive - POSTPONED")).toBe(true);
+    expect(detectPostponed("Biohazard")).toBe(false);
+  });
+  it("detectRescheduled flags 'rescheduled', case-insensitively", () => {
+    expect(detectRescheduled("Some Gig - RESCHEDULED to 5th July")).toBe(true);
+    expect(detectRescheduled("Biohazard")).toBe(false);
+  });
+  it("detectSoldOut flags 'sold out' (with or without a hyphen/space), case-insensitively", () => {
+    expect(detectSoldOut("Some Gig - SOLD OUT")).toBe(true);
+    expect(detectSoldOut("Some Gig - Sold-Out")).toBe(true);
+    expect(detectSoldOut("Biohazard")).toBe(false);
+  });
+  it("the four flags are independent -- a title can match more than one, or none", () => {
+    expect(detectCancelled("Postponed then later Cancelled")).toBe(true);
+    expect(detectPostponed("Postponed then later Cancelled")).toBe(true);
+    expect(detectRescheduled("Postponed then later Cancelled")).toBe(false);
+    expect(detectSoldOut("Postponed then later Cancelled")).toBe(false);
   });
 });
 
@@ -231,9 +266,39 @@ describe("extractMsmGigGuide (fixture-driven, real Gig Guide sample)", () => {
     }
   });
 
-  it("preserves the complete raw source block (title/date/venue/View Details) verbatim per row", () => {
+  it("preserves the genuine event data (title/date/venue) verbatim in raw, but excludes the 'View Details' furniture marker", () => {
     const row = rows.find((r) => r.fields.artistName === "Biohazard");
-    expect(row.raw).toBe("* Biohazard\n5th August 2026\nSouthampton 1865Brunswick Square\nView Details");
+    expect(row.raw).toBe("* Biohazard\n5th August 2026\nSouthampton 1865Brunswick Square");
+    expect(row.raw).not.toMatch(/view details/i);
+  });
+
+  it("never leaks the 'View Details' furniture marker into any row's raw or fields, even though extraction still uses it internally to find record boundaries", () => {
+    for (const row of rows) {
+      expect(row.raw.toLowerCase()).not.toContain("view details");
+      for (const value of Object.values(row.fields)) {
+        if (typeof value === "string") expect(value.toLowerCase()).not.toContain("view details");
+      }
+    }
+  });
+
+  it("removing the 'View Details' furniture marker from the preview does not reduce the number of events extracted -- boundary detection still runs on the unstripped text", () => {
+    const viewDetailsCount = (fixture("msm-gig-guide-sample.txt").match(/View Details/g) || []).length;
+    expect(rows).toHaveLength(viewDetailsCount);
+    expect(rows).toHaveLength(226); // same count as before furniture was stripped from raw
+  });
+
+  it("removing the 'View Details' furniture marker from raw does not affect confidence scoring -- scores come only from fields, which are untouched", () => {
+    // Every real row has an EXPLICIT date and a non-empty title, so overall
+    // confidence is the full weighted average of those two fields (venue/
+    // city are never attempted by this profile -- see confidence.js -- and
+    // so are excluded from the average, not penalized): 1.0 either way,
+    // exactly as it was when raw still contained the marker.
+    for (const row of rows) {
+      expect(row.confidence.overall).toBe(1);
+      expect(row.confidence.field.date).toBe(1);
+      expect(row.confidence.field.artistName).toBe(1);
+      expect(row.status).toBe("ok");
+    }
   });
 
   it("flags festival/tribute wording in the title", () => {
@@ -243,12 +308,17 @@ describe("extractMsmGigGuide (fixture-driven, real Gig Guide sample)", () => {
     expect(ordinaryRow.fields.isFestivalOrTribute).toBe(false);
   });
 
-  it("flags postponed/cancelled wording in the title", () => {
+  it("flags postponed wording in the title as a structured status flag, distinct from cancelled/rescheduled/sold out", () => {
     const row = rows.find((r) => r.fields.artistName === "A Skylit Drive / Vampires Everywhere - POSTPONED");
     expect(row).toBeTruthy();
-    expect(row.fields.isPostponedOrCancelled).toBe(true);
-    const rows2 = rows.filter((r) => r.fields.isPostponedOrCancelled);
-    expect(rows2).toHaveLength(1);
+    expect(row.fields.isPostponed).toBe(true);
+    expect(row.fields.isCancelled).toBe(false);
+    expect(row.fields.isRescheduled).toBe(false);
+    expect(row.fields.isSoldOut).toBe(false);
+    const postponedRows = rows.filter((r) => r.fields.isPostponed);
+    expect(postponedRows).toHaveLength(1);
+    const cancelledRows = rows.filter((r) => r.fields.isCancelled);
+    expect(cancelledRows).toHaveLength(0);
   });
 
   it("keeps exact duplicate rows visible and separate -- Sprint 5A does not deduplicate", () => {

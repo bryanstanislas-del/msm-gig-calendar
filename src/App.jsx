@@ -6245,7 +6245,10 @@ function SmartImportRow({ row }) {
       <td style={{ padding: "8px 10px" }}>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           {fields.isFestivalOrTribute && <Badge label="FEST/TRIBUTE" color={C.amber} />}
-          {fields.isPostponedOrCancelled && <Badge label="POSTPONED/CANCELLED" color={C.red} />}
+          {fields.isCancelled && <Badge label="CANCELLED" color={C.red} />}
+          {fields.isPostponed && <Badge label="POSTPONED" color={C.amber} />}
+          {fields.isRescheduled && <Badge label="RESCHEDULED" color={C.amber} />}
+          {fields.isSoldOut && <Badge label="SOLD OUT" color={C.green} />}
         </div>
       </td>
       <td style={{ padding: "8px 10px" }}>

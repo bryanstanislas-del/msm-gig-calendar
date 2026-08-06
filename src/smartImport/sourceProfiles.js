@@ -104,10 +104,20 @@ export function detectFestivalOrTribute(text) {
   return FESTIVAL_TRIBUTE_RE.test(text);
 }
 
-const POSTPONED_CANCELLED_RE = /\b(postponed|cancelled|canceled)\b/i;
-export function detectPostponedOrCancelled(text) {
-  return POSTPONED_CANCELLED_RE.test(text);
-}
+// Event status becomes structured data (one boolean per status) rather than
+// a single merged flag or, worse, silently discarded text -- an admin
+// reviewing the preview needs to know *which* of these applies, since they
+// aren't interchangeable (a cancelled show and a rescheduled one need very
+// different follow-up). Same "simple keyword heuristic, not a classifier"
+// posture as detectFestivalOrTribute above.
+const CANCELLED_RE = /\bcancell?ed\b/i;
+const POSTPONED_RE = /\bpostponed\b/i;
+const RESCHEDULED_RE = /\brescheduled\b/i;
+const SOLD_OUT_RE = /\bsold[\s-]?out\b/i;
+export function detectCancelled(text) { return CANCELLED_RE.test(text); }
+export function detectPostponed(text) { return POSTPONED_RE.test(text); }
+export function detectRescheduled(text) { return RESCHEDULED_RE.test(text); }
+export function detectSoldOut(text) { return SOLD_OUT_RE.test(text); }
 
 // -- generic-dash-list: "date - venue, city[ - notes]" ------------------
 const TIME_RE = /\b(\d{1,2}):(\d{2})\s*([ap]m)?\b|\b(\d{1,2})\s*([ap]m)\b/gi;
@@ -141,7 +151,11 @@ function extractGenericDashListLine(rawLine, contextYear, defaultTime) {
     if (!simpleSep) {
       return assembleEventRow({
         raw: line,
-        fields: { artistName: null, venueName: null, venueBlock: null, city: null, date: null, dateRaw: "", time: extractedTime || defaultTime || null, genre: null, ticketUrl: null, notes: null, isFestivalOrTribute: detectFestivalOrTribute(line), isPostponedOrCancelled: detectPostponedOrCancelled(line) },
+        fields: {
+          artistName: null, venueName: null, venueBlock: null, city: null, date: null, dateRaw: "", time: extractedTime || defaultTime || null, genre: null, ticketUrl: null, notes: null,
+          isFestivalOrTribute: detectFestivalOrTribute(line),
+          isCancelled: detectCancelled(line), isPostponed: detectPostponed(line), isRescheduled: detectRescheduled(line), isSoldOut: detectSoldOut(line),
+        },
         fieldConfidence: { date: DATE_CONFIDENCE.UNPARSEABLE, venueName: TEXT_FIELD_CONFIDENCE.MISSING, city: TEXT_FIELD_CONFIDENCE.MISSING, artistName: null },
         issues: ["Can't find separator"],
       });
@@ -199,7 +213,10 @@ function extractGenericDashListLine(rawLine, contextYear, defaultTime) {
     ticketUrl: null,
     notes: notes || null,
     isFestivalOrTribute: detectFestivalOrTribute(line),
-    isPostponedOrCancelled: detectPostponedOrCancelled(line),
+    isCancelled: detectCancelled(line),
+    isPostponed: detectPostponed(line),
+    isRescheduled: detectRescheduled(line),
+    isSoldOut: detectSoldOut(line),
   };
 
   return assembleEventRow({ raw: line, fields, fieldConfidence, issues });
@@ -319,10 +336,20 @@ function extractMsmGigGuideRow(titleLine, dateLine, venueBlockLine, contextYear,
     ticketUrl: null,
     notes: null,
     isFestivalOrTribute: detectFestivalOrTribute(cleanTitle),
-    isPostponedOrCancelled: detectPostponedOrCancelled(cleanTitle),
+    isCancelled: detectCancelled(cleanTitle),
+    isPostponed: detectPostponed(cleanTitle),
+    isRescheduled: detectRescheduled(cleanTitle),
+    isSoldOut: detectSoldOut(cleanTitle),
   };
 
-  const raw = [titleLine.trim(), dateLine.trim(), venueBlockLine.trim(), "View Details"].join("\n");
+  // "View Details" is this profile's own record-boundary marker (see
+  // extractMsmGigGuide below) -- it's real to the *parser*, but it's page
+  // furniture to the *editor*: it carries no event information, so it's
+  // deliberately left out of `raw`, which is what the preview displays.
+  // Internal boundary detection has already happened by this point (the
+  // caller found this triplet by scanning for the marker in `compact`), so
+  // dropping it here doesn't affect parsing at all -- only what's shown.
+  const raw = [titleLine.trim(), dateLine.trim(), venueBlockLine.trim()].join("\n");
 
   return assembleEventRow({ raw, fields, fieldConfidence, issues });
 }

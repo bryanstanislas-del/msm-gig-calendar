@@ -7,7 +7,7 @@
     {
       "index": 0,
       "note": "simple, unambiguous row -- first data row in the fixture",
-      "raw": "* Biohazard\n5th August 2026\nSouthampton 1865Brunswick Square\nView Details",
+      "raw": "* Biohazard\n5th August 2026\nSouthampton 1865Brunswick Square",
       "fields": {
         "artistName": "Biohazard",
         "venueName": null,
@@ -16,7 +16,10 @@
         "date": "2026-08-05",
         "dateRaw": "5th August 2026",
         "isFestivalOrTribute": false,
-        "isPostponedOrCancelled": false
+        "isCancelled": false,
+        "isPostponed": false,
+        "isRescheduled": false,
+        "isSoldOut": false
       },
       "status": "ok"
     },
@@ -28,7 +31,8 @@
         "venueBlock": "Southampton 1865Brunswick Square",
         "date": "2026-08-16",
         "isFestivalOrTribute": true,
-        "isPostponedOrCancelled": false
+        "isCancelled": false,
+        "isPostponed": false
       },
       "status": "ok"
     },
@@ -50,7 +54,8 @@
       "fields": {
         "artistName": "A Skylit Drive / Vampires Everywhere - POSTPONED",
         "date": "2026-09-20",
-        "isPostponedOrCancelled": true
+        "isPostponed": true,
+        "isCancelled": false
       },
       "status": "ok"
     },
