@@ -1303,7 +1303,7 @@ function buildFestivalJsonLd(e) {
 // band vs solo_artist -- only the artist's own /artist/:slug page does.
 function buildGigJsonLd(g, band, venue) {
   const canonicalUrl = `${BASE_URL}/gig/${g.slug}`;
-  const isoTime = (g.time && /^\d{2}:\d{2}$/.test(g.time)) ? `${g.date}T${g.time}:00` : g.date;
+  const isoTime = isConfirmedTime(g.time) ? `${g.date}T${g.time}:00` : g.date;
   const data = {
     "@context": "https://schema.org",
     "@type": "MusicEvent",
@@ -1385,10 +1385,19 @@ function getProfileCompleteness(profile) {
 // ── iCal export ────────────────────────────────────────────────────
 function exportICal(gigs) {
   const esc = s => (s||"").replace(/[\\;,]/g, c=>`\\${c}`).replace(/\n/g,"\\n");
-  const dt  = (date, time) => {
+  // A confirmed "HH:MM" becomes a real timed DTSTART/DTEND. "Time TBC" and
+  // "All Day" (and anything else that isn't a real clock time) have no
+  // time component to encode -- RFC5545 represents that as a date-only
+  // value (DTSTART;VALUE=DATE:YYYYMMDD), not by guessing a time, since
+  // `time.split(":")` on a sentinel string like "Time TBC" would silently
+  // produce a garbage NaN-laced datetime otherwise.
+  const dtLine = (label, date, time) => {
     const [y,m,d] = date.split("-");
-    const [hh,mm] = (time||"00:00").split(":");
-    return `${y}${m}${d}T${hh}${mm}00`;
+    if (isConfirmedTime(time)) {
+      const [hh,mm] = time.split(":");
+      return `${label}:${y}${m}${d}T${hh}${mm}00`;
+    }
+    return `${label};VALUE=DATE:${y}${m}${d}`;
   };
   const uid = g => `gig-${g.id}@musicsceenemagazine.co.uk`;
   const lines = [
@@ -1404,8 +1413,8 @@ function exportICal(gigs) {
     lines.push(
       "BEGIN:VEVENT",
       `UID:${uid(g)}`,
-      `DTSTART:${dt(g.date, g.time)}`,
-      `DTEND:${dt(g.date, g.time)}`,   // same time; no duration known
+      dtLine("DTSTART", g.date, g.time),
+      dtLine("DTEND", g.date, g.time),   // same time; no duration known
       `SUMMARY:${esc(g.band_name)} @ ${esc(g.venue)}`,
       `LOCATION:${esc(g.venue + ", " + g.city)}`,
       `DESCRIPTION:${esc([g.genre, g.notes, g.tickets].filter(Boolean).join(" | "))}`,
@@ -1541,6 +1550,65 @@ const Select = ({ label, value, onChange, options }) => (
     </select>
   </div>
 );
+
+// ── Event time field: "Time TBC" / "All Day" / a confirmed clock time ──
+// gigs.time is a free-text column (see the 2026-08-06 migration) -- these
+// two sentinel strings are stored verbatim alongside real "HH:MM" values,
+// not a separate enum or NULL, so every existing confirmed time and every
+// piece of code that just displays `gig.time` as text keeps working
+// untouched. isConfirmedTime() is the one place that decides whether a
+// value is a real clock time; anything doing arithmetic on `time` (iCal
+// export, "Add to Google Calendar", sort ordering) must go through it
+// rather than assuming `time.split(":")` is safe.
+export const TIME_TBC     = "Time TBC";
+export const TIME_ALL_DAY = "All Day";
+export const isConfirmedTime = (t) => /^([01]\d|2[0-3]):[0-5]\d$/.test(t || "");
+// For same-day chronological ordering: All Day events read naturally first
+// (nothing to be "before"), confirmed times sort as real clock times
+// (lexicographic "HH:MM" order is already chronological order), and Time
+// TBC -- genuinely unknown -- sorts last rather than wherever its string
+// spelling happens to fall.
+const timeSortKey = (t) => t === TIME_ALL_DAY ? "0" : isConfirmedTime(t) ? `1_${t}` : "2";
+
+const TimeField = ({ label, value, onChange, compact }) => {
+  const confirmed = isConfirmedTime(value);
+  const mode = confirmed ? "confirmed" : (value === TIME_ALL_DAY ? TIME_ALL_DAY : TIME_TBC);
+  const fieldCss = compact ? { ...inputCss, padding:"4px 8px", fontSize:12 } : inputCss;
+
+  const handleModeChange = (e) => {
+    const next = e.target.value;
+    // Switching into "confirmed" needs an actual starting clock time for
+    // the native time input to show -- reuse the existing value if it
+    // already happens to be one (rare, but possible if a caller re-renders
+    // mid-edit), otherwise a plain, clearly-a-placeholder starting point.
+    onChange({ target: { value: next === "confirmed" ? (confirmed ? value : "20:00") : next } });
+  };
+
+  return (
+    <div>
+      {label && <label style={{ display:"block", fontSize:13, color:"#ffffff", letterSpacing:2, marginBottom:6, fontFamily:F.display }}>{label}</label>}
+      <div style={{ display:"flex", gap:8 }}>
+        <select
+          value={mode === "confirmed" ? "confirmed" : mode}
+          onChange={handleModeChange}
+          style={{ ...fieldCss, cursor:"pointer", flex: mode === "confirmed" ? "0 0 auto" : 1, minWidth: mode === "confirmed" ? 120 : undefined }}
+        >
+          <option value={TIME_TBC}>{TIME_TBC}</option>
+          <option value={TIME_ALL_DAY}>{TIME_ALL_DAY}</option>
+          <option value="confirmed">Confirmed time…</option>
+        </select>
+        {mode === "confirmed" && (
+          <input
+            type="time"
+            value={confirmed ? value : "20:00"}
+            onChange={onChange}
+            style={{ ...fieldCss, flex:1 }}
+          />
+        )}
+      </div>
+    </div>
+  );
+};
 
 // ════════════════════════════════════════════════════════════════════
 //  PUBLIC EDITORIAL AWARDS -- shared read-only display components
@@ -2260,7 +2328,7 @@ function AuthPanel({ onAuth, onBack }) {
 //  SUBMIT GIG FORM
 // ════════════════════════════════════════════════════════════════════
 function SubmitGigForm({ user, profile, onSubmitted, onEditProfile }) {
-  const empty = { band_name: profile?.band_name||"", venue:"", city:"", date:"", end_date:"", time:"20:00", genre:"Indie Rock", tickets:"", notes:"", is_recurring:false, recurrence:"none", spotify: profile?.spotify||"" };
+  const empty = { band_name: profile?.band_name||"", venue:"", city:"", date:"", end_date:"", time:TIME_TBC, genre:"Indie Rock", tickets:"", notes:"", is_recurring:false, recurrence:"none", spotify: profile?.spotify||"" };
   const [form, setForm]     = useState(empty);
   const [errors, setErrors] = useState({});
   const [status, setStatus] = useState("idle"); // idle | loading | success | error
@@ -2339,7 +2407,7 @@ function SubmitGigForm({ user, profile, onSubmitted, onEditProfile }) {
         <Input label="CITY" value={form.city} onChange={set("city")} required error={errors.city} />
         <Input label="START DATE" type="date" value={form.date} onChange={set("date")} required error={errors.date} />
         <Input label="END DATE (OPTIONAL — FOR MULTI-DAY EVENTS)" type="date" value={form.end_date} onChange={set("end_date")} />
-        <Input label="DOORS / START TIME" type="time" value={form.time} onChange={set("time")} />
+        <TimeField label="DOORS / START TIME" value={form.time} onChange={set("time")} />
         <div style={{ gridColumn:"1/-1" }}>
           <Select label="GENRE" value={form.genre} onChange={set("genre")} options={GENRES} />
         </div>
@@ -2456,7 +2524,7 @@ function AdminPanel({ allGigs, onRefresh, bands=[] }) {
       venue:        g.venue        || "",
       city:         g.city         || "",
       date:         g.date         || "",
-      time:         g.time         || "20:00",
+      time:         g.time         || TIME_TBC,
       genre:        g.genre        || "Other",
       status:       g.status       || "pending",
       notes:        g.notes        || "",
@@ -2510,7 +2578,7 @@ function AdminPanel({ allGigs, onRefresh, bands=[] }) {
           <Input label="VENUE"  value={editForm.venue} onChange={e=>setEditForm(f=>({...f,venue:e.target.value}))} />
           <Input label="CITY"   value={editForm.city}  onChange={e=>setEditForm(f=>({...f,city:e.target.value}))} />
           <Input label="DATE"   type="date" value={editForm.date} onChange={e=>setEditForm(f=>({...f,date:e.target.value}))} />
-          <Input label="TIME"   type="time" value={editForm.time} onChange={e=>setEditForm(f=>({...f,time:e.target.value}))} />
+          <TimeField label="TIME" value={editForm.time} onChange={e=>setEditForm(f=>({...f,time:e.target.value}))} />
           <Select label="GENRE" value={editForm.genre} onChange={e=>setEditForm(f=>({...f,genre:e.target.value}))} options={GENRES} />
           <Select label="STATUS" value={editForm.status} onChange={e=>setEditForm(f=>({...f,status:e.target.value}))}
             options={[{value:"pending",label:"Pending"},{value:"approved",label:"Approved"},{value:"rejected",label:"Rejected"}]}
@@ -3115,7 +3183,7 @@ function AdminDashboard({ bands, festivals=[], allGigs, venues, onNav, onEditGig
   const pendingGigs     = allGigs.filter(g => g.status === "pending");
   const upcomingWeek    = approvedGigs.filter(g => g.date >= todayStr && g.date <= weekStr);
   const thisMonth       = approvedGigs.filter(g => g.date >= monthStart && g.date <= monthEnd);
-  const upcoming10      = approvedGigs.filter(g => g.date >= todayStr).sort((a,b)=>a.date.localeCompare(b.date)||a.time.localeCompare(b.time)).slice(0,10);
+  const upcoming10      = approvedGigs.filter(g => g.date >= todayStr).sort((a,b)=>a.date.localeCompare(b.date)||timeSortKey(a.time).localeCompare(timeSortKey(b.time))).slice(0,10);
   const incompleteBands  = bands.filter(b => getProfileCompleteness(b).score < 60 && !b.disabled);
   const completeBands    = bands.filter(b => getProfileCompleteness(b).score >= 60 && !b.disabled);
   const incompleteVenues = venues.filter(v => !v.description && !v.website);
@@ -4422,11 +4490,26 @@ function GigDetailPage() {
   const mapsUrl  = `https://www.google.com/maps/search/${encodeURIComponent(`${gig.venue} ${gig.city}`)}`;
   const gcalUrl  = (() => {
     const d = gig.date.replace(/-/g,"");
-    const [h,m] = (gig.time||"20:00").split(":");
-    const start = `${d}T${h}${m}00`;
-    const endH  = String(+h+2).padStart(2,"0");
-    const end   = `${d}T${endH}${m}00`;
-    return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(`${gig.band_name} at ${gig.venue}`)}&dates=${start}/${end}&details=${encodeURIComponent(`${gig.band_name} live at ${gig.venue}, ${gig.city}`)}&location=${encodeURIComponent(`${gig.venue}, ${gig.city}`)}`;
+    const text = encodeURIComponent(`${gig.band_name} at ${gig.venue}`);
+    const details = encodeURIComponent(`${gig.band_name} live at ${gig.venue}, ${gig.city}`);
+    const location = encodeURIComponent(`${gig.venue}, ${gig.city}`);
+    let dates;
+    if (isConfirmedTime(gig.time)) {
+      const [h,m] = gig.time.split(":");
+      const start = `${d}T${h}${m}00`;
+      const endH  = String(+h+2).padStart(2,"0");
+      const end   = `${d}T${endH}${m}00`;
+      dates = `${start}/${end}`;
+    } else {
+      // "Time TBC" / "All Day": nothing real to encode as a start time --
+      // Google Calendar's all-day format is a date-only range whose end
+      // date is exclusive (the day after gig.date, not gig.date itself).
+      const [y, mo, da] = gig.date.split("-").map(Number);
+      const next = new Date(y, mo - 1, da + 1);
+      const nextStr = `${next.getFullYear()}${String(next.getMonth()+1).padStart(2,"0")}${String(next.getDate()).padStart(2,"0")}`;
+      dates = `${d}/${nextStr}`;
+    }
+    return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${text}&dates=${dates}&details=${details}&location=${location}`;
   })();
 
   const copyLink = () => {
@@ -5819,7 +5902,7 @@ function parseGigText(text, contextYearOverride) {
 // ── BulkImport Component ─────────────────────────────────────────
 function BulkImport({ bands, onImported }) {
   const [selectedBand, setSelectedBand] = useState("");
-  const [defaultTime,  setDefaultTime]  = useState("20:00");
+  const [defaultTime,  setDefaultTime]  = useState(TIME_TBC);
   const [text,         setText]         = useState("");
   const [rows,         setRows]         = useState(null); // null = not yet parsed
   const [importing,    setImporting]    = useState(false);
@@ -5899,7 +5982,7 @@ function BulkImport({ bands, onImported }) {
           venue:           row.venue,
           city:            row.city,
           date:            row.date,
-          time:            row.time || "20:00",
+          time:            row.time || TIME_TBC,
           genre:           row.genre || bandGenre || null,
           status:          "approved",
           submitted_by:    userId,
@@ -5952,10 +6035,7 @@ function BulkImport({ bands, onImported }) {
               {bandOptions.map(b => <option key={b.id} value={b.id}>{b.band_name}</option>)}
             </select>
           </div>
-          <div>
-            <label style={{ display:"block", fontSize:13, color:C.white, letterSpacing:2, marginBottom:6, fontFamily:F.display }}>DEFAULT DOORS TIME</label>
-            <input type="time" value={defaultTime} onChange={e=>setDefaultTime(e.target.value)} style={inputCss} />
-          </div>
+          <TimeField label="DEFAULT DOORS TIME" value={defaultTime} onChange={e=>setDefaultTime(e.target.value)} />
         </div>
 
         {selectedBandObj && (
@@ -6042,13 +6122,8 @@ function BulkImport({ bands, onImported }) {
                       />
                     </td>
                     {/* Time */}
-                    <td style={{ padding:"8px 4px", minWidth:90 }}>
-                      <input
-                        type="time"
-                        value={row.time}
-                        onChange={e=>updateRow(row.id,"time",e.target.value)}
-                        style={{ ...inputCss, padding:"4px 8px", fontSize:12 }}
-                      />
+                    <td style={{ padding:"8px 4px", minWidth:150 }}>
+                      <TimeField value={row.time} onChange={e=>updateRow(row.id,"time",e.target.value)} compact />
                     </td>
                     {/* Genre */}
                     <td style={{ padding:"8px 4px", minWidth:130 }}>
@@ -6185,7 +6260,7 @@ function SmartImportPreview() {
   const [text, setText] = useState("");
   const [format, setFormat] = useState("auto");
   const [contextYear, setContextYear] = useState("");
-  const [defaultTime, setDefaultTime] = useState("20:00");
+  const [defaultTime, setDefaultTime] = useState(TIME_TBC);
   const [result, setResult] = useState(null);
 
   const handleParse = () => {
@@ -6227,10 +6302,7 @@ function SmartImportPreview() {
             <label style={{ display: "block", fontSize: 13, color: C.white, letterSpacing: 2, marginBottom: 6, fontFamily: F.display }}>CONTEXT YEAR (OPTIONAL)</label>
             <input value={contextYear} onChange={e => setContextYear(e.target.value)} placeholder="e.g. 2026" style={inputCss} />
           </div>
-          <div>
-            <label style={{ display: "block", fontSize: 13, color: C.white, letterSpacing: 2, marginBottom: 6, fontFamily: F.display }}>DEFAULT TIME</label>
-            <input type="time" value={defaultTime} onChange={e => setDefaultTime(e.target.value)} style={inputCss} />
-          </div>
+          <TimeField label="DEFAULT TIME" value={defaultTime} onChange={e => setDefaultTime(e.target.value)} />
         </div>
 
         <label style={{ display: "block", fontSize: 13, color: C.white, letterSpacing: 2, marginBottom: 6, fontFamily: F.display }}>PASTE TEXT, CSV OR TSV</label>
