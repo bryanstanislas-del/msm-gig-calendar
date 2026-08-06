@@ -48,12 +48,19 @@ describe("classifyArtistMatch", () => {
 
   it("tier 'fuzzy' with sorted candidates when there's no exact match", () => {
     const fuzzyCandidates = [
-      { id: "p5", name: "The Mafiosos", city: "Southampton", similarity_score: 0.3 },
+      { id: "p5", name: "The Mafiosos", city: "Southampton", similarity_score: 0.4 },
       { id: "p6", name: "Mafia Kings", city: "Southampton", similarity_score: 0.5 },
     ];
     const result = classifyArtistMatch({ artistName: "Mafia" }, profiles, fuzzyCandidates);
     expect(result.tier).toBe("fuzzy");
     expect(result.candidates.map((c) => c.id)).toEqual(["p6", "p5"]);
+  });
+
+  it("tier 'none' (not 'fuzzy') when every candidate falls below MIN_FUZZY_SIMILARITY", () => {
+    const fuzzyCandidates = [{ id: "p5", name: "The Mafiosos", city: "Southampton", similarity_score: 0.28 }];
+    const result = classifyArtistMatch({ artistName: "Mafia" }, profiles, fuzzyCandidates);
+    expect(result.tier).toBe("none");
+    expect(result.candidates).toEqual([]);
   });
 
   it("tier 'none' with an empty query and no candidates", () => {

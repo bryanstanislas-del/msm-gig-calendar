@@ -117,6 +117,26 @@ describe("runMatching", () => {
     expect(result[0].reviewStatus).toBe("needs_review");
   });
 
+  it("preserves row order in the output even though rows are matched concurrently with staggered searchFn latency", async () => {
+    // Rows matched earlier in the array resolve their searchFn call *later*
+    // than rows behind them -- if matching leaked completion order into the
+    // output (e.g. building the result via a Map iterated in resolution
+    // order) this would catch it.
+    const searchFn = vi.fn(async (entityType, query) => {
+      const delayMs = query.length % 3 === 0 ? 0 : 5;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      return [];
+    });
+    const ids = ["r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8"];
+    const parseResult = {
+      rows: ids.map((id) =>
+        row(id, { fields: { artistName: `Act ${id}`, venueName: `Venue ${id}`, city: "Southampton", date: "2026-09-01" } })
+      ),
+    };
+    const result = await runMatching(parseResult, { venues: [], artistProfiles: [], searchFn });
+    expect(result.map((r) => r.id)).toEqual(ids);
+  });
+
   it("runs end-to-end against a real parseImportText result with no matching data available", async () => {
     const parseResult = parseImportText("5 July - The Brook, Southampton", { contextYear: 2030 });
     const result = await runMatching(parseResult, { venues: [], artistProfiles: [], existingGigs: [] });

@@ -7,16 +7,26 @@
 //      `lower(trim(regexp_replace(name, '\s+',' ','g')))` normalisation (see
 //      textNormalize.js), so "exact" here means the database would already
 //      consider it the same venue.
-//   2. fuzzy -- no exact match, but the `search_entities('venue', ...)` RPC
-//      (trigram similarity + ilike fallback, already tuned server-side via
-//      extensions.set_limit(0.25) -- see that function's SQL) returned at
-//      least one candidate. Surfaced to the admin as "Needs Review" rather
-//      than auto-picked: a wrong pick would silently mis-link a gig to the
-//      wrong venue, and any candidate the RPC judged worth returning is
-//      worth a human glance rather than a second, independently-tuned
-//      confidence cutoff invented here.
+//   2. fuzzy -- no exact match, but `search_entities('venue', ...)` returned
+//      at least one candidate at or above MIN_FUZZY_SIMILARITY below.
 //
-// No candidates at all -> tier "none" ("New Venue" in the review UI).
+// No qualifying candidate -> tier "none" ("New Venue" in the review UI).
+//
+// MIN_FUZZY_SIMILARITY exists on top of search_entities' own internal
+// extensions.set_limit(0.25) floor because that floor is tuned for an
+// autocomplete search box, where a human is already typing and eight loosely
+// related suggestions are harmless -- not for an unattended per-row
+// classification. Verified against the real database and the real
+// msm-gig-guide-sample.txt fixture: querying "The Brook" (no relation to any
+// of the 75 real venues) returned eight candidates in the 0.25-0.27 range,
+// e.g. "The Dove", "The Hoff", "The Ship" -- every short "The <word>" venue
+// name in the table, matched purely on the shared "the " trigram, not on any
+// real resemblance. Below this line every one of those would have been
+// surfaced to the admin as a "Needs Review" candidate, for every row whose
+// venue happens to start with "The". 0.35 keeps genuinely partial matches
+// (the same run found "Portsmouth Guildhall" -> "Portsmouth Hoy" at 0.44,
+// a reasonable candidate for a human to glance at) while dropping the
+// common-word noise.
 //
 // This module is pure and synchronous: it never calls Supabase itself. The
 // caller (runMatching.js) fetches the `venues` snapshot and the fuzzy
@@ -24,6 +34,8 @@
 // what keeps this file unit-testable the same way every Sprint 5A module is:
 // plain fixtures in, a plain result out, no network.
 import { normaliseName, normaliseCity, stripStatusWording } from "./textNormalize.js";
+
+export const VENUE_MATCH_THRESHOLDS = { MIN_FUZZY_SIMILARITY: 0.35 };
 
 // venueBlock (msm-gig-guide profile only) is "<venue name>, <address>" --
 // see sourceProfiles.js's msm-gig-guide section comment. The venue name is
@@ -69,7 +81,9 @@ export function classifyVenueMatch(fields, venues, fuzzyCandidates = []) {
     return { tier: "exact", query, city, match: { id: exact.id, name: exact.name, city: exact.city }, candidates: [] };
   }
 
-  const candidates = [...fuzzyCandidates].sort((a, b) => b.similarity_score - a.similarity_score);
+  const candidates = fuzzyCandidates
+    .filter((c) => c.similarity_score >= VENUE_MATCH_THRESHOLDS.MIN_FUZZY_SIMILARITY)
+    .sort((a, b) => b.similarity_score - a.similarity_score);
   if (candidates.length > 0) {
     return { tier: "fuzzy", query, city, match: null, candidates };
   }

@@ -25,11 +25,20 @@ export const REVIEW_STATUS_LABELS = {
 //   2. Needs Review (parser-level) -- Sprint 5A's own status is anything
 //      but "ok", meaning the underlying fields aren't trustworthy yet, so
 //      it's resolved before any matching conclusion is drawn from them.
-//   3. New Venue -- no venue match at all. Checked before New Artist
+//   3. Needs Review (match-level) -- venue and/or artist found only a fuzzy
+//      (unconfirmed) candidate. Checked before New Venue/New Artist below,
+//      not after: a fuzzy candidate is a decision a human still has to
+//      make, which is more actionable than "no match, will create new" on
+//      the other field. Verified against the real database: a row whose
+//      venue is a genuine "New Venue" (tier "none") but whose artist got a
+//      fuzzy candidate on the other field was landing in "New Artist" under
+//      the old order, silently hiding that candidate behind a filter tab
+//      that doesn't hint it's there (the candidate is still shown in the
+//      row's own Artist Match column either way, but the *filter* is the
+//      thing an admin scans first).
+//   4. New Venue -- no venue match at all. Checked before New Artist
 //      because venue matching is this sprint's own priority 1.
-//   4. New Artist -- no artist match at all (and venue did resolve).
-//   5. Needs Review (match-level) -- venue and/or artist only found a
-//      fuzzy (unconfirmed) candidate; a human has to pick.
+//   5. New Artist -- no artist match at all (and venue did resolve).
 //   6. Ready -- everything above cleared.
 // "not_applicable" (artist matching skipped entirely, e.g. generic-dash-list
 // rows -- see artistMatching.js) is deliberately treated the same as a
@@ -37,8 +46,8 @@ export const REVIEW_STATUS_LABELS = {
 export function deriveReviewStatus({ parserStatus, duplicate, venueMatch, artistMatch }) {
   if (duplicate && duplicate.tier !== "none") return REVIEW_STATUSES.DUPLICATE;
   if (parserStatus !== "ok") return REVIEW_STATUSES.NEEDS_REVIEW;
+  if (venueMatch.tier === "fuzzy" || artistMatch.tier === "fuzzy") return REVIEW_STATUSES.NEEDS_REVIEW;
   if (venueMatch.tier === "none") return REVIEW_STATUSES.NEW_VENUE;
   if (artistMatch.tier === "none") return REVIEW_STATUSES.NEW_ARTIST;
-  if (venueMatch.tier === "fuzzy" || artistMatch.tier === "fuzzy") return REVIEW_STATUSES.NEEDS_REVIEW;
   return REVIEW_STATUSES.READY;
 }

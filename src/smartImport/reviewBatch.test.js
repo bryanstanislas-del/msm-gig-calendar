@@ -47,6 +47,21 @@ describe("deriveReviewStatus", () => {
     );
   });
 
+  it("prefers 'needs_review' over 'new_venue'/'new_artist' when one side is fuzzy and the other has no match at all", () => {
+    // Observed against the real database: a venue with only a weak fuzzy
+    // candidate, paired with an artist that has no match, used to land in
+    // 'new_artist' -- silently hiding the venue candidate behind a filter
+    // tab that gives no hint it's there. A fuzzy candidate is a decision an
+    // admin still has to make, so it now wins over "no match, will create
+    // new" on the other field.
+    expect(deriveReviewStatus({ parserStatus: "ok", duplicate: noDuplicate, venueMatch: fuzzy, artistMatch: none })).toBe(
+      REVIEW_STATUSES.NEEDS_REVIEW
+    );
+    expect(deriveReviewStatus({ parserStatus: "ok", duplicate: noDuplicate, venueMatch: none, artistMatch: fuzzy })).toBe(
+      REVIEW_STATUSES.NEEDS_REVIEW
+    );
+  });
+
   it("returns 'ready' when the venue is exact, the artist is exact or not_applicable, parser status is ok, and there's no duplicate", () => {
     expect(deriveReviewStatus({ parserStatus: "ok", duplicate: noDuplicate, venueMatch: exact, artistMatch: exact })).toBe(
       REVIEW_STATUSES.READY

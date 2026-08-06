@@ -19,6 +19,10 @@ import { normaliseName, stripStatusWording } from "./textNormalize.js";
 
 export const ARTIST_PROFILE_TYPES = ["band", "solo_artist"];
 
+// See venueMatching.js's VENUE_MATCH_THRESHOLDS comment for why this exists
+// on top of search_entities' own 0.25 floor -- same RPC, same noise problem.
+export const ARTIST_MATCH_THRESHOLDS = { MIN_FUZZY_SIMILARITY: 0.35 };
+
 export function deriveArtistQuery(fields) {
   if (fields.artistName == null) return { query: null, applicable: false };
   return { query: stripStatusWording(fields.artistName).trim(), applicable: true };
@@ -47,7 +51,9 @@ export function classifyArtistMatch(fields, profiles, fuzzyCandidates = []) {
     };
   }
 
-  const candidates = [...fuzzyCandidates].sort((a, b) => b.similarity_score - a.similarity_score);
+  const candidates = fuzzyCandidates
+    .filter((c) => c.similarity_score >= ARTIST_MATCH_THRESHOLDS.MIN_FUZZY_SIMILARITY)
+    .sort((a, b) => b.similarity_score - a.similarity_score);
   if (candidates.length > 0) return { tier: "fuzzy", query, match: null, candidates };
 
   return { tier: "none", query, match: null, candidates: [] };

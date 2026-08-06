@@ -54,14 +54,24 @@ describe("classifyVenueMatch", () => {
     expect(result.tier).not.toBe("exact");
   });
 
-  it("tier 'fuzzy' with sorted candidates when there's no exact match but the search returned candidates", () => {
+  it("tier 'fuzzy' with sorted candidates when there's no exact match but the search returned qualifying candidates", () => {
     const fuzzyCandidates = [
-      { id: "v9", name: "The Brooke Inn", city: "Southampton", similarity_score: 0.3 },
+      { id: "v9", name: "The Brooke Inn", city: "Southampton", similarity_score: 0.4 },
       { id: "v8", name: "The Brookside", city: "Southampton", similarity_score: 0.6 },
     ];
     const result = classifyVenueMatch({ venueName: "The Brooky", city: "Southampton", venueBlock: null }, venues, fuzzyCandidates);
     expect(result.tier).toBe("fuzzy");
     expect(result.candidates.map((c) => c.id)).toEqual(["v8", "v9"]);
+  });
+
+  it("tier 'none' (not 'fuzzy') when every candidate falls below MIN_FUZZY_SIMILARITY -- the common-word-noise case observed against the real database (see the header comment)", () => {
+    const fuzzyCandidates = [
+      { id: "v9", name: "The Dove", city: "Micheldever", similarity_score: 0.27 },
+      { id: "v8", name: "The Hoff", city: "Bognor Regis", similarity_score: 0.25 },
+    ];
+    const result = classifyVenueMatch({ venueName: "The Nook", city: "Southampton", venueBlock: null }, venues, fuzzyCandidates);
+    expect(result.tier).toBe("none");
+    expect(result.candidates).toEqual([]);
   });
 
   it("tier 'none' when there's no exact match and no fuzzy candidates", () => {
