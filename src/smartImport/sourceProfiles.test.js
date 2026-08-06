@@ -227,6 +227,27 @@ describe("detectSourceProfile", () => {
     const profile = detectSourceProfile(text);
     expect(profile.id).toBe("generic-dash-list");
   });
+
+  it("the old format is superseded, not supported: the pre-v1.1.0 4-line, bulleted, squashed-venue shape no longer detects as msm-gig-guide", () => {
+    // This is the exact shape Sprint 5A's original fixture used, before the
+    // live site changed its markup -- pinned down here (not just described
+    // in a comment) so a future change can't silently resurrect dual-format
+    // ambiguity without a test noticing. See the v1.1.0 comment above
+    // extractMsmGigGuide in sourceProfiles.js for the full rationale.
+    const oldFormatText = [
+      "* Biohazard",
+      "5th August 2026",
+      "Southampton 1865Brunswick Square",
+      "View Details",
+      "* Crypta",
+      "13th August 2026",
+      "Southampton 1865Brunswick Square",
+      "View Details",
+    ].join("\n");
+    const profile = detectSourceProfile(oldFormatText);
+    expect(profile.id).toBe("generic-dash-list");
+    expect(profile.id).not.toBe("msm-gig-guide");
+  });
 });
 
 describe("extractMsmGigGuide (fixture-driven, real Gig Guide sample)", () => {

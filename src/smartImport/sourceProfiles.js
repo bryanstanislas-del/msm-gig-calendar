@@ -257,7 +257,19 @@ export function extractGenericDashList(text, { contextYear: contextYearOverride,
 // "* " bullet prefix; both of those are gone. A record is now genuinely 5
 // lines (title, date, venue, address, "View Details"), titles have no
 // bullet at all, and venue/address are already cleanly split by the source
-// itself. This profile still does NOT try to further decompose the venue
+// itself.
+//
+// SUPERSEDED, NOT SUPPORTED: this version only detects/extracts the current
+// 5-line, no-bullet shape. The old 4-line, bulleted, squashed-venue format
+// (Sprint 5A's original fixture) is not recognized any more -- pasting it
+// now falls through to the generic-dash-list fallback and produces
+// unparseable rows, not a correct parse (see the "old format is superseded"
+// test in sourceProfiles.test.js, which pins down exactly that behaviour).
+// There's no dual-format support and none is planned speculatively: if the
+// site's markup changes shape again, this profile needs another targeted,
+// evidence-based update the same way this one was.
+//
+// This profile still does NOT try to further decompose the venue
 // line from the address line into a normalized venueName/city -- the two
 // lines are concatenated verbatim into fields.venueBlock rather than
 // guessed at, consistent with Sprint 5A's "accurate parsing, not venue
