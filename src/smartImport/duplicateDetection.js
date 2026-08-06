@@ -1,18 +1,28 @@
-// Sprint 5B: duplicate detection -- flags rows that look like the same
+// Sprint 5B/5B.5: duplicate detection -- flags rows that look like the same
 // real-world gig as another row in the same paste, or as a gig that
-// already exists in the database. Two independent, rule-based checks:
+// already exists in the database. Four tiers, checked in this precedence
+// (highest first):
 //
-//   - within-batch "exact": rows sharing the same normalised
-//     artist + date + venue key. Sprint 5A deliberately keeps every row
-//     visible rather than merging them (see msm-gig-guide-sample.expected
-//     .json's duplicate-cluster notes, e.g. the two identical "Jamie
-//     Webster" rows) -- this module keeps that behaviour: it flags, it
-//     never removes or merges a row.
-//   - within-batch "near": rows sharing the same date + venue where one
-//     normalised artist name is the other with extra trailing words, e.g.
-//     "Day Fever" vs "Day Fever - Bournemouth" (see the same fixture).
-//   - "existing": a row's normalised artist + date + venue key matches a
-//     row already present in the live `gigs` table.
+//   - "exact_existing" -- a row's normalised artist + date + venue key
+//     matches a row already present in the live `gigs` table. Unconditional:
+//     always wins, since importing this row would create a literal
+//     duplicate database record.
+//   - "exact_in_batch" -- rows sharing the same normalised artist + date +
+//     venue key with another row in the *same paste*. Sprint 5A
+//     deliberately keeps every row visible rather than merging them (see
+//     msm-gig-guide-sample.expected.json's duplicate-cluster notes, e.g. the
+//     two identical "Jamie Webster" rows) -- this module keeps that
+//     behaviour: it flags, it never removes or merges a row.
+//   - "near_existing" -- same date + venue as an already-live gig, with one
+//     normalised artist name a near-match (trailing-words variant, see
+//     isNearDuplicateArtist below) of the live gig's band_name. A near-match
+//     against confirmed live data is a stronger signal than one against
+//     another still-unconfirmed line in the same paste, so this outranks
+//     "near_in_batch" -- but never downgrades an already-"exact_in_batch"
+//     row (that's still the more certain classification).
+//   - "near_in_batch" -- same date + venue as another row in the same
+//     paste, with one normalised artist name a near-match of the other,
+//     e.g. "Day Fever" vs "Day Fever - Bournemouth" (see the same fixture).
 //
 // Venue identity for the key prefers a resolved *exact* venueMatch (the
 // same venue row id the database itself would use) over raw text, so "The
@@ -28,6 +38,7 @@ export const DUPLICATE_TIERS = {
   NONE: "none",
   EXACT_IN_BATCH: "exact_in_batch",
   NEAR_IN_BATCH: "near_in_batch",
+  NEAR_EXISTING: "near_existing",
   EXACT_EXISTING: "exact_existing",
 };
 
@@ -35,6 +46,10 @@ function venueKeyFor(fields, venueMatch) {
   if (venueMatch && venueMatch.tier === "exact") return `id:${venueMatch.match.id}`;
   const { query } = deriveVenueQuery(fields);
   return `name:${normaliseName(query)}`;
+}
+
+function venueKeyForGig(gig) {
+  return gig.venue_id ? `id:${gig.venue_id}` : `name:${normaliseName(gig.venue)}`;
 }
 
 function artistKeyFor(fields) {
@@ -100,11 +115,28 @@ export function detectDuplicates(rows, { existingGigs = [] } = {}) {
     }
   }
 
-  // -- against existing gigs (highest precedence: a live gig already exists) --
+  // -- against existing gigs: near -- (upgrades "none"/"near_in_batch", never downgrades "exact_in_batch")
+  for (const row of rows) {
+    if (!row.fields.date || !row.fields.artistName) continue;
+    const current = results.get(row.id).tier;
+    if (current === DUPLICATE_TIERS.EXACT_IN_BATCH) continue;
+    const rowArtistKey = artistKeyFor(row.fields);
+    const rowVenueKey = venueKeyFor(row.fields, row.venueMatch);
+    if (rowVenueKey === "name:") continue;
+
+    for (const gig of existingGigs) {
+      if (gig.date !== row.fields.date) continue;
+      if (venueKeyForGig(gig) !== rowVenueKey) continue;
+      if (!isNearDuplicateArtist(rowArtistKey, normaliseName(gig.band_name))) continue;
+      results.set(row.id, { tier: DUPLICATE_TIERS.NEAR_EXISTING, withRowIds: [], existingGigId: gig.id });
+      break;
+    }
+  }
+
+  // -- against existing gigs: exact -- (highest precedence: a live gig already exists)
   const existingByKey = new Map();
   for (const gig of existingGigs) {
-    const venueKey = gig.venue_id ? `id:${gig.venue_id}` : `name:${normaliseName(gig.venue)}`;
-    existingByKey.set(`${normaliseName(gig.band_name)}|${gig.date}|${venueKey}`, gig.id);
+    existingByKey.set(`${normaliseName(gig.band_name)}|${gig.date}|${venueKeyForGig(gig)}`, gig.id);
   }
   for (const row of rows) {
     if (!isUsableKey(row.fields, row.venueMatch)) continue;

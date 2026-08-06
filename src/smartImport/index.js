@@ -15,5 +15,33 @@ export { STATUS_THRESHOLDS } from "./confidence.js";
 export { classifyVenueMatch, deriveVenueQuery } from "./venueMatching.js";
 export { classifyArtistMatch, deriveArtistQuery, ARTIST_PROFILE_TYPES } from "./artistMatching.js";
 export { detectDuplicates, DUPLICATE_TIERS } from "./duplicateDetection.js";
-export { deriveReviewStatus, REVIEW_STATUSES, REVIEW_STATUS_LABELS } from "./reviewBatch.js";
 export { runMatching } from "./runMatching.js";
+
+// Sprint 5B.5: the 12-state row model and the Import Review Dashboard's
+// selection/override/summary logic. No database writes here either -- see
+// batchSelection.js's header comment.
+export {
+  ROW_STATES,
+  ROW_STATE_LABELS,
+  EXCLUDED_MANUALLY,
+  DUPLICATE_STATES,
+  ERROR_STATES,
+  DEFAULT_INCLUDED_STATES,
+  LOCKED_STATES,
+  isLocked,
+  deriveRowState,
+  resolveDisplayState,
+  explainRowState,
+} from "./reviewBatch.js";
+export {
+  computeDefaultSelection,
+  selectAllReady,
+  excludeAllErrors,
+  excludeAllDuplicates,
+  excludeVisibleSelected,
+  applyMatchOverride,
+  withOverridesApplied,
+  applyBulkApproveSuggestions,
+  summariseBatch,
+  groupSkippedReasons,
+} from "./batchSelection.js";

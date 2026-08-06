@@ -10,7 +10,7 @@
 import { classifyVenueMatch, deriveVenueQuery } from "./venueMatching.js";
 import { classifyArtistMatch, deriveArtistQuery } from "./artistMatching.js";
 import { detectDuplicates } from "./duplicateDetection.js";
-import { deriveReviewStatus } from "./reviewBatch.js";
+import { deriveRowState } from "./reviewBatch.js";
 
 // Rows are matched concurrently, capped at this many in flight at once.
 // Verified against the real msm-gig-guide-sample.txt fixture (226 rows)
@@ -81,12 +81,13 @@ export async function runMatching(parseResult, { venues = [], artistProfiles = [
 
   return matchedRows.map((row) => {
     const duplicate = duplicates.get(row.id);
-    const reviewStatus = deriveReviewStatus({
+    const rowState = deriveRowState({
       parserStatus: row.status,
+      fields: row.fields,
       duplicate,
       venueMatch: row.venueMatch,
       artistMatch: row.artistMatch,
     });
-    return { ...row, duplicate, reviewStatus };
+    return { ...row, duplicate, rowState };
   });
 }
