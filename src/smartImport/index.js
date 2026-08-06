@@ -45,3 +45,11 @@ export {
   summariseBatch,
   groupSkippedReasons,
 } from "./batchSelection.js";
+
+// Sprint 5C: the safe import engine. This is the one place database writes
+// finally happen -- exclusively through the four SECURITY DEFINER RPCs this
+// module calls via injected functions (startRunFn/importRowFn/
+// completeRunFn), never a direct supabase.from(...).insert(). See
+// importEngine.js's header comment.
+export { validateRowForImport, buildGigInsertPayload, runImport, summariseImportResult } from "./importEngine.js";
+export { mapWithConcurrency } from "./concurrency.js";
