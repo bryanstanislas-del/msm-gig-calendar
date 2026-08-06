@@ -67,6 +67,10 @@ import {
   withOverridesApplied,
   summariseBatch,
   groupSkippedReasons,
+  validateRowForImport,
+  buildGigInsertPayload,
+  runImport,
+  summariseImportResult,
 } from "./smartImport";
 
 // ── Supabase config ────────────────────────────────────────────────
@@ -380,6 +384,62 @@ const DB = {
     const { data, error } = await supabase.rpc("search_entities", {
       p_entity_type: entityType, p_query: query, p_limit: 8,
     });
+    if (error) throw new Error(error.message);
+    return data || [];
+  },
+
+  // ── Sprint 5C: Safe Import Engine ────────────────────────────────────
+  // Thin wrappers around the four SECURITY DEFINER RPCs from the Sprint 5C
+  // migration -- these are the ONLY write path for gigs/venues created via
+  // Smart Import. No direct supabase.from("gigs").insert(...) anywhere in
+  // this section; import_gig_row owns that (see importEngine.js).
+  async startImportRun({ sourceProfileId, totalRows }) {
+    if (USE_MOCK) return `mock-run-${Date.now()}`;
+    const { data, error } = await supabase.rpc("start_import_run", {
+      p_source_profile_id: sourceProfileId, p_total_rows: totalRows,
+    });
+    if (error) throw new Error(error.message);
+    return data;
+  },
+
+  async importGigRow({ importRunId, band_name, venue, city, date, time, genre, notes, tickets, band_profile_id, raw_text }) {
+    if (USE_MOCK) return { outcome: "created", gig_id: `mock-gig-${Date.now()}` };
+    const { data, error } = await supabase.rpc("import_gig_row", {
+      p_import_run_id: importRunId,
+      p_band_name: band_name,
+      p_venue: venue,
+      p_city: city,
+      p_date: date,
+      p_time: time,
+      p_genre: genre,
+      p_notes: notes,
+      p_tickets: tickets,
+      p_band_profile_id: band_profile_id,
+      p_raw_text: raw_text,
+    });
+    if (error) throw new Error(error.message);
+    return data;
+  },
+
+  async completeImportRun({ importRunId, succeeded, failed }) {
+    if (USE_MOCK) return { import_run_id: importRunId, status: failed > 0 ? "completed_with_errors" : "completed" };
+    const { data, error } = await supabase.rpc("complete_import_run", {
+      p_import_run_id: importRunId, p_succeeded: succeeded, p_failed: failed,
+    });
+    if (error) throw new Error(error.message);
+    return data;
+  },
+
+  async rollbackImportRun(importRunId) {
+    if (USE_MOCK) return { import_run_id: importRunId, rolled_back_count: 0, skipped_count: 0 };
+    const { data, error } = await supabase.rpc("rollback_import_run", { p_import_run_id: importRunId });
+    if (error) throw new Error(error.message);
+    return data;
+  },
+
+  async getImportRuns() {
+    if (USE_MOCK) return [];
+    const { data, error } = await supabase.from("import_runs").select("*").order("started_at", { ascending: false });
     if (error) throw new Error(error.message);
     return data || [];
   },
@@ -6528,12 +6588,114 @@ function BulkActionsBar({ onSelectAllReady, onExcludeAllErrors, onExcludeAllDupl
   );
 }
 
-function ConfirmationSummary({ items, selected, onBack }) {
+function ConfirmationSummary({ items, selected, sourceProfileId, onBack }) {
   const importCount = selected.size;
   const skipCount = items.length - importCount;
   const groups = useMemo(() => groupSkippedReasons(items, selected), [items, selected]);
+  // idle -> importing -> done (-> rolling_back -> rolled_back), or error at any point before "done".
+  const [phase, setPhase] = useState("idle");
+  const [importResult, setImportResult] = useState(null); // { importRunId, summary }
+  const [rollbackResult, setRollbackResult] = useState(null);
+  const [errorMsg, setErrorMsg] = useState("");
+
+  const handleImport = async () => {
+    setPhase("importing");
+    setErrorMsg("");
+    try {
+      const rows = items.filter((item) => selected.has(item.id));
+      const { importRunId, results, blocked } = await runImport(rows, {
+        sourceProfileId,
+        startRunFn: ({ sourceProfileId: spid, totalRows }) => DB.startImportRun({ sourceProfileId: spid, totalRows }),
+        importRowFn: (row) => DB.importGigRow(row),
+        completeRunFn: ({ importRunId: id, succeeded, failed }) => DB.completeImportRun({ importRunId: id, succeeded, failed }),
+      });
+      setImportResult({ importRunId, summary: summariseImportResult({ results, blocked }) });
+      setPhase("done");
+    } catch (e) {
+      setErrorMsg(e.message || "Import failed");
+      setPhase("error");
+    }
+  };
+
+  const handleRollback = async () => {
+    if (!importResult) return;
+    setPhase("rolling_back");
+    setErrorMsg("");
+    try {
+      const result = await DB.rollbackImportRun(importResult.importRunId);
+      setRollbackResult(result);
+      setPhase("rolled_back");
+    } catch (e) {
+      setErrorMsg(e.message || "Rollback failed");
+      setPhase("done");
+    }
+  };
+
+  const busy = phase === "importing" || phase === "rolling_back";
+
+  if (phase === "done" || phase === "rolling_back" || phase === "rolled_back") {
+    const { summary } = importResult;
+    return (
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderTop: `3px solid ${C.green}`, borderRadius: 8, padding: 24, marginTop: 20 }}>
+        <div aria-live="polite" style={visuallyHiddenCss}>
+          Import complete. {summary.created} created, {summary.failed} failed, {summary.blocked} blocked.
+        </div>
+        <div style={{ fontFamily: F.display, fontSize: 18, color: C.white, letterSpacing: 2, marginBottom: 12 }}>IMPORT COMPLETE</div>
+        <div style={{ fontSize: 15, color: C.white, marginBottom: 6 }}>{summary.created} gig{summary.created !== 1 ? "s" : ""} created.</div>
+        {summary.failed > 0 && <div style={{ fontSize: 15, color: C.red, marginBottom: 6 }}>{summary.failed} row{summary.failed !== 1 ? "s" : ""} failed during import.</div>}
+        {summary.blocked > 0 && <div style={{ fontSize: 15, color: C.muted, marginBottom: 6 }}>{summary.blocked} row{summary.blocked !== 1 ? "s" : ""} were blocked and never attempted.</div>}
+        {summary.created > 0 && (
+          <div style={{ fontSize: 13, color: C.amber, margin: "10px 0", maxWidth: 640 }}>
+            Imported gigs are saved as <strong>pending</strong> -- they still need a second review and approval in
+            the Admin Panel before they appear publicly.
+          </div>
+        )}
+        {summary.failureReasons.length > 0 && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={smallLabelCss}>Why rows failed</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 6 }}>
+              {summary.failureReasons.map((r) => (
+                <div key={r.reason} style={{ fontSize: 13, color: C.muted, display: "flex", justifyContent: "space-between", maxWidth: 480, gap: 12 }}>
+                  <span>{r.reason}</span><span style={{ color: C.white }}>{r.count}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {summary.blockedReasons.length > 0 && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={smallLabelCss}>Why rows were blocked</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 6 }}>
+              {summary.blockedReasons.map((r) => (
+                <div key={r.reason} style={{ fontSize: 13, color: C.muted, display: "flex", justifyContent: "space-between", maxWidth: 480, gap: 12 }}>
+                  <span>{r.reason}</span><span style={{ color: C.white }}>{r.count}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {errorMsg && <div style={{ color: C.red, fontSize: 13, marginBottom: 12 }}>{errorMsg}</div>}
+        {phase === "rolled_back" && (
+          <div style={{ fontSize: 13, color: C.green, marginBottom: 16 }}>
+            Undone: {rollbackResult.rolled_back_count} gig{rollbackResult.rolled_back_count !== 1 ? "s" : ""} removed
+            {rollbackResult.skipped_count > 0 ? `, ${rollbackResult.skipped_count} skipped because they were hand-edited since import` : ""}.
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          {phase !== "rolled_back" && summary.created > 0 && (
+            <Btn variant="ghost" onClick={handleRollback} disabled={busy} style={{ padding: "12px 20px" }}>
+              {phase === "rolling_back" ? "UNDOING…" : "UNDO THIS IMPORT"}
+            </Btn>
+          )}
+          <Btn variant="ghost" onClick={onBack} disabled={busy} style={{ padding: "12px 20px" }}>← BACK TO REVIEW</Btn>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderTop: `3px solid ${C.green}`, borderRadius: 8, padding: 24, marginTop: 20 }}>
+      <div aria-live="polite" style={visuallyHiddenCss}>{phase === "importing" ? `Importing ${importCount} rows.` : ""}</div>
       <div style={{ fontFamily: F.display, fontSize: 18, color: C.white, letterSpacing: 2, marginBottom: 12 }}>CONFIRM SELECTION</div>
       <div style={{ fontSize: 15, color: C.white, marginBottom: 6 }}>{importCount} row{importCount !== 1 ? "s" : ""} will be imported.</div>
       <div style={{ fontSize: 15, color: C.muted, marginBottom: 16 }}>{skipCount} row{skipCount !== 1 ? "s" : ""} will be skipped.</div>
@@ -6550,11 +6712,15 @@ function ConfirmationSummary({ items, selected, onBack }) {
         </div>
       )}
       <div style={{ fontSize: 13, color: C.amber, marginBottom: 16, maxWidth: 640 }}>
-        Import execution is not implemented yet (Sprint 5C). No gigs, venues, or artists have been created or modified.
+        Imported gigs are saved as pending and still require review and approval in the Admin Panel -- this does
+        not publish anything directly.
       </div>
+      {phase === "error" && <div style={{ color: C.red, fontSize: 13, marginBottom: 12 }}>{errorMsg}</div>}
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        <Btn disabled style={{ padding: "12px 28px" }}>IMPORT (COMING IN SPRINT 5C)</Btn>
-        <Btn variant="ghost" onClick={onBack} style={{ padding: "12px 20px" }}>← BACK TO REVIEW</Btn>
+        <Btn onClick={handleImport} disabled={busy || importCount === 0} style={{ padding: "12px 28px" }}>
+          {phase === "importing" ? "IMPORTING…" : `IMPORT ${importCount} ROW${importCount !== 1 ? "S" : ""} →`}
+        </Btn>
+        <Btn variant="ghost" onClick={onBack} disabled={busy} style={{ padding: "12px 20px" }}>← BACK TO REVIEW</Btn>
       </div>
     </div>
   );
@@ -6752,7 +6918,14 @@ function ImportReviewDashboard({ parseResult }) {
             <Btn onClick={() => setConfirmOpen(true)} style={{ padding: "12px 28px" }}>REVIEW SELECTION →</Btn>
           </div>
 
-          {confirmOpen && <ConfirmationSummary items={resolvedBatch} selected={selected} onBack={() => setConfirmOpen(false)} />}
+          {confirmOpen && (
+            <ConfirmationSummary
+              items={resolvedBatch}
+              selected={selected}
+              sourceProfileId={parseResult?.sourceProfile?.id ?? null}
+              onBack={() => setConfirmOpen(false)}
+            />
+          )}
         </>
       )}
     </div>

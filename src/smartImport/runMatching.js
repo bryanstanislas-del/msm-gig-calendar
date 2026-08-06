@@ -11,6 +11,7 @@ import { classifyVenueMatch, deriveVenueQuery } from "./venueMatching.js";
 import { classifyArtistMatch, deriveArtistQuery } from "./artistMatching.js";
 import { detectDuplicates } from "./duplicateDetection.js";
 import { deriveRowState } from "./reviewBatch.js";
+import { mapWithConcurrency } from "./concurrency.js";
 
 // Rows are matched concurrently, capped at this many in flight at once.
 // Verified against the real msm-gig-guide-sample.txt fixture (226 rows)
@@ -22,19 +23,6 @@ import { deriveRowState } from "./reviewBatch.js";
 // hundreds of simultaneous connections against a shared database for what
 // is still just an admin preview tool.
 const MATCH_CONCURRENCY = 6;
-
-async function mapWithConcurrency(items, limit, fn) {
-  const results = new Array(items.length);
-  let next = 0;
-  async function worker() {
-    while (next < items.length) {
-      const i = next++;
-      results[i] = await fn(items[i], i);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
-}
 
 async function matchRow(row, { venues, artistProfiles, searchFn }) {
   // A cheap local-only pass first: only worth a network round trip once
