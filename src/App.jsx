@@ -6149,11 +6149,20 @@ function SmartImportRow({ row }) {
       <td style={{ padding: "8px 10px", fontFamily: "monospace", fontSize: 11, color: C.dim, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={row.raw}>{row.raw}</td>
       <td style={{ padding: "8px 10px", fontSize: 12 }}>{fields.artistName || <span style={{ color: C.dim }}>—</span>}</td>
       <td style={{ padding: "8px 10px", fontSize: 12 }}>{fields.venueName || <span style={{ color: C.dim }}>—</span>}</td>
+      <td
+        style={{ padding: "8px 10px", fontFamily: "monospace", fontSize: 11, color: fields.venueBlock ? C.muted : C.dim, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+        title={fields.venueBlock ? `Unresolved -- preserved verbatim from source, not split by the parser. Venue/address resolution happens at the Venue Match stage.\n\n${fields.venueBlock}` : ""}
+      >
+        {fields.venueBlock || <span style={{ color: C.dim }}>—</span>}
+      </td>
       <td style={{ padding: "8px 10px", fontSize: 12 }}>{fields.city || <span style={{ color: C.dim }}>—</span>}</td>
       <td style={{ padding: "8px 10px", fontSize: 12 }}>{fields.date || <span style={{ color: C.dim }}>—</span>}</td>
       <td style={{ padding: "8px 10px", fontSize: 12 }}>{fields.time || <span style={{ color: C.dim }}>—</span>}</td>
       <td style={{ padding: "8px 10px" }}>
-        {fields.isFestivalOrTribute && <Badge label="FEST/TRIBUTE" color={C.amber} />}
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {fields.isFestivalOrTribute && <Badge label="FEST/TRIBUTE" color={C.amber} />}
+          {fields.isPostponedOrCancelled && <Badge label="POSTPONED/CANCELLED" color={C.red} />}
+        </div>
       </td>
       <td style={{ padding: "8px 10px" }}>
         <Badge label={`${Math.round(confidence.overall * 100)}%`} color={STATUS_COLOR[status]} />
@@ -6251,7 +6260,7 @@ function SmartImportPreview() {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                 <thead>
                   <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                    {["", "RAW", "ARTIST", "VENUE", "CITY", "DATE", "TIME", "FLAGS", "CONF.", "ISSUES"].map((h, i) => (
+                    {["", "RAW", "ARTIST", "VENUE", "VENUE BLOCK (SOURCE)", "CITY", "DATE", "TIME", "FLAGS", "CONF.", "ISSUES"].map((h, i) => (
                       <th key={i} style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, color: C.muted, letterSpacing: 2, fontFamily: F.display, whiteSpace: "nowrap" }}>{h}</th>
                     ))}
                   </tr>

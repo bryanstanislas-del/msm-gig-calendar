@@ -7,7 +7,7 @@
 
 import { sniffDelimitedFormat, parseDelimited } from "./csvTsv.js";
 import { filterPageFurniture } from "./furniture.js";
-import { detectSourceProfile, parseDateWithConfidence, formatDateISO, detectFestivalOrTribute } from "./sourceProfiles.js";
+import { detectSourceProfile, parseDateWithConfidence, formatDateISO, detectFestivalOrTribute, detectPostponedOrCancelled } from "./sourceProfiles.js";
 import { DATE_CONFIDENCE, TEXT_FIELD_CONFIDENCE, assembleEventRow } from "./confidence.js";
 
 function emptyResult() {
@@ -42,6 +42,7 @@ function eventRowFromDelimitedRecord(record) {
   const fields = {
     artistName: record.artistName || null,
     venueName: record.venueName || null,
+    venueBlock: null,
     city: record.city || null,
     date: dateResult.parsed ? formatDateISO(dateResult.parsed) : null,
     dateRaw: record.date || "",
@@ -50,6 +51,7 @@ function eventRowFromDelimitedRecord(record) {
     ticketUrl: record.ticketUrl || null,
     notes: record.notes || null,
     isFestivalOrTribute: detectFestivalOrTribute(`${record.artistName || ""} ${record.notes || ""}`),
+    isPostponedOrCancelled: detectPostponedOrCancelled(`${record.artistName || ""} ${record.notes || ""}`),
   };
 
   return assembleEventRow({ raw: record.raw, fields, fieldConfidence, issues });
@@ -93,11 +95,23 @@ function parseDelimitedInput(rawText, detectedFormat) {
 
 function parseTextInput(rawText, { contextYear, defaultTime } = {}) {
   const lines = rawText.split("\n");
-  const { keptLines, discardedCount } = filterPageFurniture(lines);
-  const keptText = keptLines.join("\n");
 
-  const profile = detectSourceProfile(keptText);
-  const extractedRows = profile.extract(keptText, { contextYear, defaultTime });
+  // Detection always runs against the raw, unfiltered text: a
+  // marker-anchored profile like msm-gig-guide relies on structural
+  // signature lines (e.g. "View Details") that furniture.js's generic
+  // >2x-repeated-line heuristic would otherwise strip out as junk before
+  // detection ever saw them.
+  const profile = detectSourceProfile(rawText);
+
+  let textForExtraction = rawText;
+  let discardedCount = 0;
+  if (profile.filtersFurniture) {
+    const filtered = filterPageFurniture(lines);
+    textForExtraction = filtered.keptLines.join("\n");
+    discardedCount = filtered.discardedCount;
+  }
+
+  const extractedRows = profile.extract(textForExtraction, { contextYear, defaultTime });
   const rows = extractedRows.map((row, i) => ({ ...row, id: `row-${i}` }));
 
   return {

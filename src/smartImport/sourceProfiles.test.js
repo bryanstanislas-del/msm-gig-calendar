@@ -6,7 +6,9 @@ import {
   parseDateWithConfidence,
   detectContextYear,
   detectFestivalOrTribute,
+  detectPostponedOrCancelled,
   extractGenericDashList,
+  extractMsmGigGuide,
   detectSourceProfile,
   PROFILES,
 } from "./sourceProfiles.js";
@@ -137,13 +139,143 @@ describe("extractGenericDashList (fixture-driven)", () => {
   });
 });
 
+describe("detectPostponedOrCancelled", () => {
+  it("flags 'postponed', 'cancelled' and 'canceled', case-insensitively", () => {
+    expect(detectPostponedOrCancelled("A Skylit Drive - POSTPONED")).toBe(true);
+    expect(detectPostponedOrCancelled("Some Gig - Cancelled")).toBe(true);
+    expect(detectPostponedOrCancelled("Some Gig - canceled")).toBe(true);
+  });
+  it("does not flag an ordinary title", () => {
+    expect(detectPostponedOrCancelled("Biohazard")).toBe(false);
+  });
+});
+
 describe("detectSourceProfile", () => {
-  it("always resolves to the generic-dash-list fallback for Sprint 5A (no other profiles registered yet)", () => {
+  it("falls back to generic-dash-list when no 'View Details' structural signature is present", () => {
     const profile = detectSourceProfile("anything at all");
     expect(profile.id).toBe("generic-dash-list");
     expect(profile.version).toBe(PROFILES.find((p) => p.id === "generic-dash-list").version);
     expect(typeof profile.matchConfidence).toBe("number");
     expect(typeof profile.matchReason).toBe("string");
     expect(typeof profile.extract).toBe("function");
+  });
+
+  it("matches msm-gig-guide when 'View Details' marker lines appear at least twice", () => {
+    const text = "* Biohazard\n5th August 2026\nSouthampton 1865Brunswick Square\nView Details\n* Crypta\n13th August 2026\nSouthampton 1865Brunswick Square\nView Details";
+    const profile = detectSourceProfile(text);
+    expect(profile.id).toBe("msm-gig-guide");
+    expect(profile.matchConfidence).toBeGreaterThan(0);
+    expect(profile.matchReason).toMatch(/View Details/);
+  });
+
+  it("does not match msm-gig-guide on a single 'View Details' occurrence (too weak a signature to trust)", () => {
+    const text = "12 June 2026 - The Wig & Quill, Salisbury\nView Details";
+    const profile = detectSourceProfile(text);
+    expect(profile.id).toBe("generic-dash-list");
+  });
+});
+
+describe("extractMsmGigGuide (fixture-driven, real Gig Guide sample)", () => {
+  const rows = extractMsmGigGuide(fixture("msm-gig-guide-sample.txt"));
+
+  it("extracts exactly one row per 'View Details' marker, ignoring all page furniture", () => {
+    const viewDetailsCount = (fixture("msm-gig-guide-sample.txt").match(/View Details/g) || []).length;
+    expect(viewDetailsCount).toBe(226);
+    expect(rows).toHaveLength(226);
+  });
+
+  it("extracts the complete event title, date and raw venue block for a simple row", () => {
+    const row = rows.find((r) => r.fields.artistName === "Biohazard");
+    expect(row.fields).toMatchObject({
+      artistName: "Biohazard",
+      date: "2026-08-05",
+      dateRaw: "5th August 2026",
+      venueName: null, // never guessed -- see profile comment in sourceProfiles.js
+      city: null,
+      venueBlock: "Southampton 1865Brunswick Square",
+    });
+    expect(row.status).toBe("ok");
+    expect(row.confidence.field.venueName).toBeNull(); // not attempted, not scored
+    expect(row.confidence.field.city).toBeNull();
+  });
+
+  it("never splits the squashed venue+address text, even for tricky brand names with embedded digits/capitals", () => {
+    // "O2 Academy Bournemouth570 Christchurch Rd" -- naive letter/digit
+    // splitting would wrongly cut the brand name "O2" apart from "Academy".
+    const o2Row = rows.find((r) => r.fields.venueBlock === "O2 Academy Bournemouth570 Christchurch Rd");
+    expect(o2Row).toBeTruthy();
+    // "Southampton 1865Brunswick Square" -- the digits are part of the
+    // venue's own name ("Southampton 1865"), not a street number.
+    const sotonRow = rows.find((r) => r.fields.venueBlock === "Southampton 1865Brunswick Square");
+    expect(sotonRow).toBeTruthy();
+    for (const r of rows) {
+      expect(r.fields.venueName).toBeNull();
+      expect(r.fields.city).toBeNull();
+    }
+  });
+
+  it("preserves the complete raw source block (title/date/venue/View Details) verbatim per row", () => {
+    const row = rows.find((r) => r.fields.artistName === "Biohazard");
+    expect(row.raw).toBe("* Biohazard\n5th August 2026\nSouthampton 1865Brunswick Square\nView Details");
+  });
+
+  it("flags festival/tribute wording in the title", () => {
+    const tributeRow = rows.find((r) => r.fields.artistName === "Sleep Broken (Sleep Token Tribute)");
+    expect(tributeRow.fields.isFestivalOrTribute).toBe(true);
+    const ordinaryRow = rows.find((r) => r.fields.artistName === "Biohazard");
+    expect(ordinaryRow.fields.isFestivalOrTribute).toBe(false);
+  });
+
+  it("flags postponed/cancelled wording in the title", () => {
+    const row = rows.find((r) => r.fields.artistName === "A Skylit Drive / Vampires Everywhere - POSTPONED");
+    expect(row).toBeTruthy();
+    expect(row.fields.isPostponedOrCancelled).toBe(true);
+    const rows2 = rows.filter((r) => r.fields.isPostponedOrCancelled);
+    expect(rows2).toHaveLength(1);
+  });
+
+  it("keeps exact duplicate rows visible and separate -- Sprint 5A does not deduplicate", () => {
+    const jamieRows = rows.filter((r) => r.fields.artistName === "Jamie Webster" && r.fields.date === "2026-09-05");
+    expect(jamieRows).toHaveLength(2);
+
+    const vampRows = rows.filter((r) => r.fields.artistName === "Transvision Vamp" && r.fields.date === "2026-10-21");
+    expect(vampRows).toHaveLength(2);
+
+    const avatarRows = rows.filter((r) => r.fields.artistName === "Avatar" && r.fields.date === "2026-11-21");
+    expect(avatarRows).toHaveLength(2);
+  });
+
+  it("keeps capitalisation-only duplicate rows visible and separate", () => {
+    const overpassRows = rows.filter((r) => r.fields.artistName?.toLowerCase() === "overpass" && r.fields.date === "2026-11-10");
+    expect(overpassRows).toHaveLength(2);
+    expect(overpassRows.map((r) => r.fields.artistName).sort()).toEqual(["Overpass", "overpass"]);
+  });
+
+  it("keeps near-duplicate rows (location text appended to the title) visible and separate", () => {
+    const dayFeverBournemouth = rows.filter((r) => r.fields.date === "2026-09-26" && r.fields.artistName?.startsWith("Day Fever"));
+    expect(dayFeverBournemouth.map((r) => r.fields.artistName).sort()).toEqual(["Day Fever", "Day Fever - Bournemouth"]);
+
+    const dayFeverSouthampton = rows.filter((r) => r.fields.date === "2026-10-10" && r.fields.artistName?.startsWith("Day Fever"));
+    expect(dayFeverSouthampton.map((r) => r.fields.artistName).sort()).toEqual(["Day Fever", "Day Fever - Southampton"]);
+  });
+
+  it("does not fabricate a row from the mid-list 'Promote Your Event' / 'Add Your Event' furniture block", () => {
+    const promoRow = rows.find((r) => (r.fields.artistName || "").includes("Promote Your Event") || (r.fields.artistName || "").includes("Add Your Event"));
+    expect(promoRow).toBeUndefined();
+  });
+
+  it("every row status is 'ok': title+date resolved with full confidence, venue decomposition deferred (not penalized)", () => {
+    for (const r of rows) expect(r.status).toBe("ok");
+  });
+
+  it("matches the hand-verified expected JSON fixture row-for-row at every checked index", () => {
+    const expected = JSON.parse(fixture("expected/msm-gig-guide-sample.expected.json"));
+    expect(rows).toHaveLength(expected.rowCount);
+    for (const expectedRow of expected.rows) {
+      const actual = rows[expectedRow.index];
+      if (expectedRow.raw) expect(actual.raw).toBe(expectedRow.raw);
+      expect(actual.fields).toMatchObject(expectedRow.fields);
+      expect(actual.status).toBe(expectedRow.status);
+    }
   });
 });

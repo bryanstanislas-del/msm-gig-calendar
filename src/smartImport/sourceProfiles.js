@@ -108,6 +108,11 @@ export function detectFestivalOrTribute(text) {
   return FESTIVAL_TRIBUTE_RE.test(text);
 }
 
+const POSTPONED_CANCELLED_RE = /\b(postponed|cancelled|canceled)\b/i;
+export function detectPostponedOrCancelled(text) {
+  return POSTPONED_CANCELLED_RE.test(text);
+}
+
 // -- generic-dash-list: "date - venue, city[ - notes]" ------------------
 const TIME_RE = /\b(\d{1,2}):(\d{2})\s*([ap]m)?\b|\b(\d{1,2})\s*([ap]m)\b/gi;
 
@@ -140,7 +145,7 @@ function extractGenericDashListLine(rawLine, contextYear, defaultTime) {
     if (!simpleSep) {
       return assembleEventRow({
         raw: line,
-        fields: { artistName: null, venueName: null, city: null, date: null, dateRaw: "", time: extractedTime || defaultTime || null, genre: null, ticketUrl: null, notes: null, isFestivalOrTribute: detectFestivalOrTribute(line) },
+        fields: { artistName: null, venueName: null, venueBlock: null, city: null, date: null, dateRaw: "", time: extractedTime || defaultTime || null, genre: null, ticketUrl: null, notes: null, isFestivalOrTribute: detectFestivalOrTribute(line), isPostponedOrCancelled: detectPostponedOrCancelled(line) },
         fieldConfidence: { date: DATE_CONFIDENCE.UNPARSEABLE, venueName: TEXT_FIELD_CONFIDENCE.MISSING, city: TEXT_FIELD_CONFIDENCE.MISSING, artistName: null },
         issues: ["Can't find separator"],
       });
@@ -189,6 +194,7 @@ function extractGenericDashListLine(rawLine, contextYear, defaultTime) {
   const fields = {
     artistName: null,
     venueName: venue || null,
+    venueBlock: null,
     city: city || null,
     date: parsed ? formatDateISO(parsed) : null,
     dateRaw: datePart,
@@ -197,6 +203,7 @@ function extractGenericDashListLine(rawLine, contextYear, defaultTime) {
     ticketUrl: null,
     notes: notes || null,
     isFestivalOrTribute: detectFestivalOrTribute(line),
+    isPostponedOrCancelled: detectPostponedOrCancelled(line),
   };
 
   return assembleEventRow({ raw: line, fields, fieldConfidence, issues });
@@ -222,18 +229,117 @@ export function extractGenericDashList(text, { contextYear: contextYearOverride,
   return rows;
 }
 
+// -- msm-gig-guide: repeating "Title / Date / VenueBlock / View Details" ---
+// Anchoring extraction on the literal "View Details" marker line (rather
+// than classifying every line) is what lets this profile ignore all page
+// furniture -- the "Search Listings" header/search-form text, the mid-list
+// "Promote Your Event"/"Add Your Event" block, "Load More" -- without
+// needing furniture.js at all: none of that furniture is ever immediately
+// followed by a "View Details" line, so it's never harvested.
+//
+// Per the revised Sprint 5A architecture, this profile does NOT attempt to
+// split the source's squashed "VenueAddress" text (e.g. "O2 Academy
+// Bournemouth570 Christchurch Rd") into venueName/address/city. That split
+// is fundamentally a guess -- there's no reliable signal distinguishing "the
+// digits belong to the venue's own name" (e.g. "Southampton 1865") from "the
+// digits start the street address" (e.g. "The Brook466 Portswood Road").
+// Sprint 5A's job is accurate, non-lossy parsing, not venue resolution -- so
+// venueName/city are always left null (unresolved, excluded from the
+// confidence average, never scored as a failure) and the untouched text is
+// kept verbatim as fields.venueBlock for the pipeline's later Venue Match
+// stage (Paste -> Parse -> Review -> Venue Match -> Deduplicate -> Import).
+const VIEW_DETAILS_RE = /^view details$/i;
+
+function detectMsmGigGuideProfile(text) {
+  const lines = text.split("\n").map((l) => l.trim());
+  const count = lines.filter((l) => VIEW_DETAILS_RE.test(l)).length;
+  if (count < 2) {
+    return { matched: false, confidence: 0, reason: "fewer than 2 'View Details' marker lines found" };
+  }
+  const confidence = Math.min(0.5 + count * 0.02, 0.98);
+  return {
+    matched: true,
+    confidence,
+    reason: `found ${count} "View Details" marker lines -- this source's repeating Title/Date/Venue/View-Details structure`,
+  };
+}
+
+function extractMsmGigGuideRow(titleLine, dateLine, venueBlockLine, contextYear, defaultTime) {
+  const cleanTitle = titleLine.replace(/^\*\s*/, "").trim();
+  const venueBlock = venueBlockLine.trim();
+  const { parsed, confidenceTier } = parseDateWithConfidence(dateLine, contextYear);
+
+  const issues = [];
+  if (!cleanTitle) issues.push("No event title");
+  if (!parsed) issues.push("Date unclear");
+  if (!venueBlock) issues.push("No venue information");
+
+  const fieldConfidence = {
+    date: parsed ? DATE_CONFIDENCE[confidenceTier] : DATE_CONFIDENCE.UNPARSEABLE,
+    artistName: cleanTitle ? TEXT_FIELD_CONFIDENCE.EXPLICIT : TEXT_FIELD_CONFIDENCE.MISSING,
+    // Not attempted: this profile deliberately never decomposes the squashed
+    // venue+address block (see comment above) -- "not applicable" (null),
+    // not "attempted and failed" (0). See confidence.js.
+    venueName: null,
+    city: null,
+  };
+
+  const fields = {
+    artistName: cleanTitle || null,
+    venueName: null,
+    venueBlock: venueBlock || null,
+    city: null,
+    date: parsed ? formatDateISO(parsed) : null,
+    dateRaw: dateLine.trim(),
+    time: defaultTime || null,
+    genre: null,
+    ticketUrl: null,
+    notes: null,
+    isFestivalOrTribute: detectFestivalOrTribute(cleanTitle),
+    isPostponedOrCancelled: detectPostponedOrCancelled(cleanTitle),
+  };
+
+  const raw = [titleLine.trim(), dateLine.trim(), venueBlockLine.trim(), "View Details"].join("\n");
+
+  return assembleEventRow({ raw, fields, fieldConfidence, issues });
+}
+
+export function extractMsmGigGuide(text, { contextYear, defaultTime } = {}) {
+  const compact = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  const rows = [];
+  for (let i = 0; i < compact.length; i++) {
+    if (!VIEW_DETAILS_RE.test(compact[i])) continue;
+    if (i < 3) continue; // not enough preceding lines for a full triplet
+    const [titleLine, dateLine, venueBlockLine] = [compact[i - 3], compact[i - 2], compact[i - 1]];
+    // A genuine title line always carries the "* " bullet in this source;
+    // if it doesn't, the 3 lines above this "View Details" aren't a real
+    // title/date/venue triplet -- skip rather than fabricate a row from
+    // unrelated furniture.
+    if (!/^\*\s*\S/.test(titleLine)) continue;
+    rows.push(extractMsmGigGuideRow(titleLine, dateLine, venueBlockLine, contextYear, defaultTime));
+  }
+  return rows;
+}
+
 // -- Profile registry -----------------------------------------------------
 // `version` is stored on every ParseResult (see parser.js) so that if this
 // profile's rules change later, historical import batches remain traceable
-// to the exact rule version that produced them.
+// to the exact rule version that produced them. msm-gig-guide is listed
+// before generic-dash-list: generic-dash-list's detect() always matches (it's
+// the catch-all fallback), so anything more specific must be tried first.
 const PROFILES = [
-  // Slot reserved for an 'msm-gig-guide' profile once a real sample is
-  // available to derive its structural signature from -- not fabricated.
+  {
+    id: "msm-gig-guide",
+    version: "1.0.0",
+    detect: detectMsmGigGuideProfile,
+    extract: extractMsmGigGuide,
+  },
   {
     id: "generic-dash-list",
     version: "1.0.0",
     detect: () => ({ matched: true, confidence: 0.5, reason: "fallback: no more specific structural profile matched" }),
     extract: extractGenericDashList,
+    filtersFurniture: true,
   },
 ];
 
@@ -247,6 +353,13 @@ export function detectSourceProfile(text) {
         matchConfidence: result.confidence,
         matchReason: result.reason,
         extract: profile.extract,
+        // Whether parser.js should run the generic furniture.js filter
+        // before calling extract(). msm-gig-guide (and any other
+        // marker-anchored profile) ignores furniture by construction --
+        // running the generic filter first would actively hurt it, since
+        // furniture.js's >2x-repeated-line heuristic would strip out the
+        // very "View Details" marker lines the extractor anchors on.
+        filtersFurniture: !!profile.filtersFurniture,
       };
     }
   }
