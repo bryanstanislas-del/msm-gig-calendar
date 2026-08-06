@@ -54,4 +54,36 @@ describe("filterPageFurniture", () => {
     const { discardedCount } = filterPageFurniture(["PRIVACY POLICY", "follow US"]);
     expect(discardedCount).toBe(2);
   });
+
+  it("drops UI-chrome link/button text (View Details, Read More, Buy Tickets, Book Now, Find Out More, More Info, Share Event, Add to Calendar, Directions, Load More)", () => {
+    const chrome = [
+      "View Details", "Read More", "Buy Tickets", "Book Now", "Find Out More",
+      "More Info", "Share Event", "Add to Calendar", "Directions", "Load More",
+    ];
+    const { keptLines, discardedCount } = filterPageFurniture([...chrome, "12 June 2026 - The Obelisk, Woolston"]);
+    expect(keptLines).toEqual(["12 June 2026 - The Obelisk, Woolston"]);
+    expect(discardedCount).toBe(chrome.length);
+  });
+
+  it("does NOT drop a real sentence that merely starts with one of the UI-chrome words -- these are whole-line matches, not a prefix match", () => {
+    const { keptLines, discardedCount } = filterPageFurniture([
+      "Directions to the venue are down Mill Lane",
+      "More info coming soon about support acts",
+    ]);
+    expect(keptLines).toEqual([
+      "Directions to the venue are down Mill Lane",
+      "More info coming soon about support acts",
+    ]);
+    expect(discardedCount).toBe(0);
+  });
+
+  it("drops promotional-banner boilerplate (Promote Your Event / Add Your Event, as seen verbatim in the real Gig Guide sample)", () => {
+    const { discardedCount } = filterPageFurniture(["Promote Your Event", "Add Your Event"]);
+    expect(discardedCount).toBe(2);
+  });
+
+  it("drops basic pagination controls (Next/Previous, Page N of M), with or without arrow decoration", () => {
+    const { discardedCount } = filterPageFurniture(["Next »", "« Previous", "Page 2 of 5", "Load More"]);
+    expect(discardedCount).toBe(4);
+  });
 });

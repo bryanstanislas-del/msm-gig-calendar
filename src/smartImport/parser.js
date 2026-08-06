@@ -7,7 +7,7 @@
 
 import { sniffDelimitedFormat, parseDelimited } from "./csvTsv.js";
 import { filterPageFurniture } from "./furniture.js";
-import { detectSourceProfile, parseDateWithConfidence, formatDateISO, detectFestivalOrTribute, detectPostponedOrCancelled } from "./sourceProfiles.js";
+import { detectSourceProfile, parseDateWithConfidence, formatDateISO, detectFestivalOrTribute, detectCancelled, detectPostponed, detectRescheduled, detectSoldOut } from "./sourceProfiles.js";
 import { DATE_CONFIDENCE, TEXT_FIELD_CONFIDENCE, assembleEventRow } from "./confidence.js";
 
 function emptyResult() {
@@ -51,7 +51,10 @@ function eventRowFromDelimitedRecord(record) {
     ticketUrl: record.ticketUrl || null,
     notes: record.notes || null,
     isFestivalOrTribute: detectFestivalOrTribute(`${record.artistName || ""} ${record.notes || ""}`),
-    isPostponedOrCancelled: detectPostponedOrCancelled(`${record.artistName || ""} ${record.notes || ""}`),
+    isCancelled: detectCancelled(`${record.artistName || ""} ${record.notes || ""}`),
+    isPostponed: detectPostponed(`${record.artistName || ""} ${record.notes || ""}`),
+    isRescheduled: detectRescheduled(`${record.artistName || ""} ${record.notes || ""}`),
+    isSoldOut: detectSoldOut(`${record.artistName || ""} ${record.notes || ""}`),
   };
 
   return assembleEventRow({ raw: record.raw, fields, fieldConfidence, issues });
