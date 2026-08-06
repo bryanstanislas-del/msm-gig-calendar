@@ -145,7 +145,7 @@ export function explainRowState(item) {
   }
 
   if (artistMatch.tier === "none") {
-    reasons.push(`No matching artist found for "${artistMatch.query}" -- will be created as a new artist.`);
+    reasons.push(`No matching artist found for "${artistMatch.query}" -- will import as free text with no artist profile linked.`);
   } else if (artistMatch.tier === "fuzzy") {
     const top = artistMatch.candidates[0];
     reasons.push(`Artist match uncertain: closest is "${top.name}" (${Math.round(top.similarity_score * 100)}% match) -- needs confirmation.`);

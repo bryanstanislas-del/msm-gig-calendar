@@ -125,6 +125,36 @@ describe("buildGigInsertPayload", () => {
     expect(result.time).toBeNull();
     expect(result.genre).toBeNull();
   });
+
+  it("includes the row's parsed fields verbatim for the audit trail", () => {
+    const result = buildGigInsertPayload(item());
+    expect(result.parsed_fields).toEqual(item().fields);
+  });
+
+  it("records the venue/artist match decisions actually made, not just the resolved payload", () => {
+    const result = buildGigInsertPayload(
+      item({
+        venueMatch: { tier: "confirmed", query: "The Brooky", city: null, match: { id: "v9", name: "The Brooke Inn", city: "Winchester" }, candidates: [] },
+        artistMatch: { tier: "none", query: "Unknown Act", match: null, candidates: [] },
+      })
+    );
+    expect(result.match_decisions).toEqual({
+      rowState: ROW_STATES.READY,
+      venue: { tier: "confirmed", query: "The Brooky", matchedVenueId: "v9", matchedVenueName: "The Brooke Inn" },
+      artist: { tier: "none", query: "Unknown Act", matchedArtistId: null, matchedArtistName: null },
+      duplicate: { tier: "none", includedDespiteWarning: false },
+    });
+  });
+
+  it("flags includedDespiteWarning when a near-duplicate row was explicitly imported anyway", () => {
+    const result = buildGigInsertPayload(
+      item({
+        rowState: ROW_STATES.PROBABLE_DUPLICATE,
+        duplicate: { tier: "near_existing", withRowIds: [], existingGigId: "g1" },
+      })
+    );
+    expect(result.match_decisions.duplicate).toEqual({ tier: "near_existing", includedDespiteWarning: true });
+  });
 });
 
 describe("runImport", () => {

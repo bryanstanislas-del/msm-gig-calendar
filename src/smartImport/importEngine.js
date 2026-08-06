@@ -61,6 +61,39 @@ function resolveVenueFields(venueMatch) {
   return { venue: venueMatch.query, city: venueMatch.city };
 }
 
+// Snapshot of exactly what the admin's review decided for this row, kept
+// alongside the raw text in import_run_items -- without this, a FAILED
+// row's audit trail is just "raw text + error", with no record of what was
+// actually about to be written or which match/duplicate call the admin
+// made. A CREATED row's parsed fields are also implicitly the resulting
+// gigs row, but a failed row has no gigs row to look at, so this is the
+// only place that data survives.
+function buildMatchDecisions(item) {
+  return {
+    rowState: item.rowState,
+    venue: {
+      tier: item.venueMatch.tier,
+      query: item.venueMatch.query,
+      matchedVenueId: item.venueMatch.match?.id ?? null,
+      matchedVenueName: item.venueMatch.match?.name ?? null,
+    },
+    artist: {
+      tier: item.artistMatch.tier,
+      query: item.artistMatch.query,
+      matchedArtistId: item.artistMatch.match?.id ?? null,
+      matchedArtistName: item.artistMatch.match?.name ?? null,
+    },
+    duplicate: {
+      tier: item.duplicate.tier,
+      // Only meaningful for the two "resembles something" tiers -- any row
+      // reaching this function already passed validateRowForImport, so a
+      // near-duplicate tier here can only mean the admin explicitly
+      // overrode the review dashboard's default-excluded warning.
+      includedDespiteWarning: item.duplicate.tier === "near_existing" || item.duplicate.tier === "near_in_batch",
+    },
+  };
+}
+
 // Maps one resolved dashboard row to import_gig_row's RPC parameters.
 // time/genre are passed through as-is, including null/empty -- the RPC
 // itself coalesces those to their DB defaults ('Time TBC'/'Indie Rock'),
@@ -86,6 +119,8 @@ export function buildGigInsertPayload(item) {
     tickets: item.fields.ticketUrl,
     band_profile_id: bandProfileId,
     raw_text: item.raw,
+    parsed_fields: item.fields,
+    match_decisions: buildMatchDecisions(item),
   };
 }
 

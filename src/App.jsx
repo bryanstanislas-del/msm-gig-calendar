@@ -402,7 +402,7 @@ const DB = {
     return data;
   },
 
-  async importGigRow({ importRunId, band_name, venue, city, date, time, genre, notes, tickets, band_profile_id, raw_text }) {
+  async importGigRow({ importRunId, band_name, venue, city, date, time, genre, notes, tickets, band_profile_id, raw_text, parsed_fields, match_decisions }) {
     if (USE_MOCK) return { outcome: "created", gig_id: `mock-gig-${Date.now()}` };
     const { data, error } = await supabase.rpc("import_gig_row", {
       p_import_run_id: importRunId,
@@ -416,6 +416,8 @@ const DB = {
       p_tickets: tickets,
       p_band_profile_id: band_profile_id,
       p_raw_text: raw_text,
+      p_parsed_fields: parsed_fields ?? null,
+      p_match_decisions: match_decisions ?? null,
     });
     if (error) throw new Error(error.message);
     return data;
