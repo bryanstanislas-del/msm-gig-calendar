@@ -48,7 +48,26 @@ import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import React from "react";
 import { BrowserRouter, Routes, Route, useParams, useNavigate, Link } from "react-router-dom";
 import { DEFAULT_NOTIFICATION_PREFS, describeNotificationEvent, formatNotificationDate } from "./notificationHelpers";
-import { parseImportText, runMatching, REVIEW_STATUSES, REVIEW_STATUS_LABELS } from "./smartImport";
+import {
+  parseImportText,
+  runMatching,
+  ROW_STATES,
+  ROW_STATE_LABELS,
+  EXCLUDED_MANUALLY,
+  isLocked,
+  deriveRowState,
+  resolveDisplayState,
+  explainRowState,
+  computeDefaultSelection,
+  selectAllReady,
+  excludeAllErrors,
+  excludeAllDuplicates,
+  excludeVisibleSelected,
+  applyBulkApproveSuggestions,
+  withOverridesApplied,
+  summariseBatch,
+  groupSkippedReasons,
+} from "./smartImport";
 
 // ── Supabase config ────────────────────────────────────────────────
 const SUPABASE_URL = "https://fmlaaiolqwknowhtdeue.supabase.co";
@@ -6275,43 +6294,71 @@ function SmartImportRow({ row }) {
   );
 }
 
-// Sprint 5B: the matching/review stage. Reads the "Import Batch" produced
-// by src/smartImport's runMatching() -- an in-memory array only, nothing
-// written to the database -- and lets an admin filter it by exactly the
-// five review-workflow buckets. Still no import button: matching resolves
-// *what* venue/artist a row would link to and whether it looks like a
-// duplicate, it does not write any of that anywhere. Sprint 5C is what
-// turns a "Ready" row into a live gig.
-const REVIEW_STATUS_ICON = {
-  [REVIEW_STATUSES.READY]: "✅",
-  [REVIEW_STATUSES.NEEDS_REVIEW]: "⚠️",
-  [REVIEW_STATUSES.DUPLICATE]: "⛔",
-  [REVIEW_STATUSES.NEW_VENUE]: "🆕",
-  [REVIEW_STATUSES.NEW_ARTIST]: "🆕",
+// Sprint 5B.5: the Import Review Dashboard. Reads the "Import Batch"
+// produced by src/smartImport's runMatching() -- an in-memory array only,
+// nothing written to the database -- derives each row's granular state via
+// deriveRowState(), and lets an admin curate exactly which rows to include.
+// A bad row never blocks the rest of the batch: inclusion is row-level,
+// never batch-level all-or-nothing. Still no import button: this stage
+// resolves what a row would link to, flags duplicates, and lets an admin
+// pick a final row list -- it does not write any of that anywhere. Sprint
+// 5C is what turns a confirmed selection into live gigs.
+const ROW_STATE_ICON = {
+  [ROW_STATES.READY]: "✅",
+  [ROW_STATES.NEEDS_REVIEW]: "⚠️",
+  [ROW_STATES.MISSING_VENUE]: "🆕",
+  [ROW_STATES.MISSING_ARTIST]: "🆕",
+  [ROW_STATES.POSSIBLE_DUPLICATE]: "⚠️",
+  [ROW_STATES.PROBABLE_DUPLICATE]: "‼️",
+  [ROW_STATES.EXACT_DUPLICATE]: "⛔",
+  [ROW_STATES.INVALID_DATE]: "🚫",
+  [ROW_STATES.CANCELLED]: "❌",
+  [ROW_STATES.POSTPONED]: "⏸️",
+  [ROW_STATES.RESCHEDULED]: "🔁",
+  [EXCLUDED_MANUALLY]: "⏹️",
 };
-const REVIEW_STATUS_COLOR = {
-  [REVIEW_STATUSES.READY]: C.green,
-  [REVIEW_STATUSES.NEEDS_REVIEW]: C.amber,
-  [REVIEW_STATUSES.DUPLICATE]: C.red,
-  [REVIEW_STATUSES.NEW_VENUE]: C.muted,
-  [REVIEW_STATUSES.NEW_ARTIST]: C.muted,
-};
-const DUPLICATE_TIER_LABEL = {
-  exact_in_batch: "Exact — also in this paste",
-  near_in_batch: "Possible — similar row in this paste",
-  exact_existing: "Exact — already in the calendar",
+const ROW_STATE_COLOR = {
+  [ROW_STATES.READY]: C.green,
+  [ROW_STATES.NEEDS_REVIEW]: C.amber,
+  [ROW_STATES.MISSING_VENUE]: C.muted,
+  [ROW_STATES.MISSING_ARTIST]: C.muted,
+  [ROW_STATES.POSSIBLE_DUPLICATE]: C.amber,
+  [ROW_STATES.PROBABLE_DUPLICATE]: C.amber,
+  [ROW_STATES.EXACT_DUPLICATE]: C.red,
+  [ROW_STATES.INVALID_DATE]: C.red,
+  [ROW_STATES.CANCELLED]: C.red,
+  [ROW_STATES.POSTPONED]: C.amber,
+  [ROW_STATES.RESCHEDULED]: C.amber,
+  [EXCLUDED_MANUALLY]: C.dim,
 };
 
-function MatchCell({ match, entityLabel }) {
+const linkBtnCss = { marginLeft: 8, background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 10, textDecoration: "underline", padding: 0, fontFamily: "inherit" };
+const smallLabelCss = { fontFamily: F.display, fontSize: 10, letterSpacing: 1.5, color: C.muted, textTransform: "uppercase", marginBottom: 4 };
+// Visually hidden but still readable by screen readers -- standard
+// "sr-only" pattern, used for the selection-count live region below.
+const visuallyHiddenCss = { position: "absolute", width: 1, height: 1, padding: 0, margin: -1, overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap", border: 0 };
+
+// tier "confirmed" is never produced by classifyVenueMatch/classifyArtistMatch
+// themselves -- it only exists as batchSelection.js's applyMatchOverride()
+// output, when an admin accepts a fuzzy candidate (or "Bulk approve
+// matching suggestions" does it for them). Rendered like "exact" (resolved,
+// green check) but labelled so it's clear a human picked it, with an undo.
+function MatchCell({ match, entityLabel, onAccept, onUndo }) {
   if (!match || match.tier === "not_applicable") {
     return <span style={{ color: C.dim, fontSize: 11 }}>n/a</span>;
   }
-  if (match.tier === "exact") {
+  if (match.tier === "exact" || match.tier === "confirmed") {
     return (
       <div style={{ fontSize: 12 }}>
         <span style={{ color: C.green }}>✓</span>{" "}
         {match.match.name}
         {match.match.city ? <span style={{ color: C.muted }}> — {match.match.city}</span> : null}
+        {match.tier === "confirmed" && (
+          <div style={{ color: C.muted, fontSize: 10, marginTop: 2 }}>
+            admin confirmed
+            {onUndo && <button onClick={onUndo} style={linkBtnCss}>undo</button>}
+          </div>
+        )}
       </div>
     );
   }
@@ -6322,6 +6369,7 @@ function MatchCell({ match, entityLabel }) {
         <span style={{ color: C.amber }}>{match.candidates.length} candidate{match.candidates.length !== 1 ? "s" : ""}</span>
         <div style={{ color: C.muted, marginTop: 2 }}>
           best: {top.name}{top.city ? ` — ${top.city}` : ""} ({Math.round(top.similarity_score * 100)}%)
+          {onAccept && <button onClick={() => onAccept(top.id)} style={linkBtnCss}>✓ use this</button>}
         </div>
       </div>
     );
@@ -6334,25 +6382,42 @@ function MatchCell({ match, entityLabel }) {
   );
 }
 
-function SmartImportReviewRow({ item }) {
-  const { fields, issues, reviewStatus, venueMatch, artistMatch, duplicate } = item;
+// Checkbox aria-label text -- shared by the desktop and mobile row shells so
+// screen-reader users get the same identifying description of a row either
+// way.
+function rowAriaLabel(fields) {
+  const venue = fields.venueName || fields.venueBlock || "unknown venue";
+  return `Include row: ${fields.artistName || "untitled"} at ${venue} on ${fields.date || "unknown date"}`;
+}
+
+function ImportReviewRowDesktop({ item, displayState, selected, locked, reasons, onToggleSelected, onAcceptVenue, onAcceptArtist, onUndoVenue, onUndoArtist }) {
+  const { fields } = item;
   return (
     <tr style={{ borderBottom: `1px solid rgba(255,255,255,0.04)` }}>
       <td style={{ padding: "8px 10px", width: 30 }}>
-        <span title={issues.join(", ") || REVIEW_STATUS_LABELS[reviewStatus]}>{REVIEW_STATUS_ICON[reviewStatus]}</span>
+        <input
+          type="checkbox"
+          checked={selected}
+          disabled={locked}
+          onChange={() => onToggleSelected(item.id)}
+          aria-label={rowAriaLabel(fields)}
+          title={locked ? `Can't be included -- ${reasons[0] || ROW_STATE_LABELS[displayState]}` : undefined}
+          style={{ width: 16, height: 16, cursor: locked ? "not-allowed" : "pointer" }}
+        />
       </td>
       <td style={{ padding: "8px 10px" }}>
-        <Badge label={REVIEW_STATUS_LABELS[reviewStatus]} color={REVIEW_STATUS_COLOR[reviewStatus]} />
+        <span title={reasons.join(" ") || ROW_STATE_LABELS[displayState]} style={{ marginRight: 6 }}>{ROW_STATE_ICON[displayState]}</span>
+        <Badge label={ROW_STATE_LABELS[displayState]} color={ROW_STATE_COLOR[displayState]} />
       </td>
       <td style={{ padding: "8px 10px", fontSize: 12 }}>{fields.artistName || <span style={{ color: C.dim }}>—</span>}</td>
-      <td style={{ padding: "8px 10px" }}><MatchCell match={venueMatch} entityLabel="Venue" /></td>
-      <td style={{ padding: "8px 10px" }}><MatchCell match={artistMatch} entityLabel="Artist" /></td>
-      <td style={{ padding: "8px 10px", fontSize: 11 }}>
-        {duplicate && duplicate.tier !== "none" ? (
-          <span style={{ color: C.red }}>{DUPLICATE_TIER_LABEL[duplicate.tier] || duplicate.tier}</span>
-        ) : (
-          <span style={{ color: C.dim }}>—</span>
-        )}
+      <td style={{ padding: "8px 10px" }}>
+        <MatchCell match={item.venueMatch} entityLabel="Venue" onAccept={onAcceptVenue} onUndo={item.venueMatch.tier === "confirmed" ? onUndoVenue : null} />
+      </td>
+      <td style={{ padding: "8px 10px" }}>
+        <MatchCell match={item.artistMatch} entityLabel="Artist" onAccept={onAcceptArtist} onUndo={item.artistMatch.tier === "confirmed" ? onUndoArtist : null} />
+      </td>
+      <td style={{ padding: "8px 10px", fontSize: 11, color: C.muted, maxWidth: 280 }}>
+        {reasons.length ? reasons.join(" ") : <span style={{ color: C.dim }}>—</span>}
       </td>
       <td style={{ padding: "8px 10px", fontSize: 12 }}>{fields.date || <span style={{ color: C.dim }}>—</span>}</td>
       <td style={{ padding: "8px 10px", fontSize: 12 }}>{fields.time || <span style={{ color: C.dim }}>—</span>}</td>
@@ -6360,11 +6425,151 @@ function SmartImportReviewRow({ item }) {
   );
 }
 
-function SmartImportReview({ parseResult }) {
+function ImportReviewRowCard({ item, displayState, selected, locked, reasons, onToggleSelected, onAcceptVenue, onAcceptArtist, onUndoVenue, onUndoArtist }) {
+  const { fields } = item;
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "16px 18px", display: "flex", gap: 12 }}>
+      <input
+        type="checkbox"
+        checked={selected}
+        disabled={locked}
+        onChange={() => onToggleSelected(item.id)}
+        aria-label={rowAriaLabel(fields)}
+        title={locked ? `Can't be included -- ${reasons[0] || ROW_STATE_LABELS[displayState]}` : undefined}
+        style={{ width: 18, height: 18, marginTop: 4, cursor: locked ? "not-allowed" : "pointer", flexShrink: 0 }}
+      />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+          <span>{ROW_STATE_ICON[displayState]}</span>
+          <Badge label={ROW_STATE_LABELS[displayState]} color={ROW_STATE_COLOR[displayState]} />
+        </div>
+        <div style={{ fontSize: 15, color: C.white }}>{fields.artistName || <span style={{ color: C.dim }}>—</span>}</div>
+        <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
+          {fields.date || "—"}{fields.time ? ` · ${fields.time}` : ""}
+        </div>
+        <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div>
+            <div style={smallLabelCss}>VENUE MATCH</div>
+            <MatchCell match={item.venueMatch} entityLabel="Venue" onAccept={onAcceptVenue} onUndo={item.venueMatch.tier === "confirmed" ? onUndoVenue : null} />
+          </div>
+          <div>
+            <div style={smallLabelCss}>ARTIST MATCH</div>
+            <MatchCell match={item.artistMatch} entityLabel="Artist" onAccept={onAcceptArtist} onUndo={item.artistMatch.tier === "confirmed" ? onUndoArtist : null} />
+          </div>
+        </div>
+        {reasons.length > 0 && <div style={{ marginTop: 10, fontSize: 11, color: C.muted }}>{reasons.join(" ")}</div>}
+      </div>
+    </div>
+  );
+}
+
+function BatchSummary({ counts }) {
+  const tiles = [
+    ["Total Parsed", counts.totalParsed, C.white],
+    ["Ready", counts.ready, C.green],
+    ["Selected For Import", counts.selectedForImport, C.green],
+    ["Needs Review", counts.needsReview, C.amber],
+    ["Exact Duplicates", counts.exactDuplicates, C.red],
+    ["Possible Duplicates", counts.possibleDuplicates, C.amber],
+    ["Missing Artists", counts.missingArtists, C.muted],
+    ["Missing Venues", counts.missingVenues, C.muted],
+    ["Invalid Rows", counts.invalidRows, C.red],
+    ["Manually Excluded", counts.manuallyExcluded, C.dim],
+  ];
+  return (
+    <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 18 }}>
+      {tiles.map(([label, value, color]) => (
+        <div key={label} style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}`, borderRadius: 6, padding: "10px 14px", minWidth: 120 }}>
+          <div style={smallLabelCss}>{label}</div>
+          <div style={{ fontFamily: F.display, fontSize: 22, color }}>{value}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function FilterTabs({ filter, setFilter, counts, attentionOnly, setAttentionOnly }) {
+  const tabs = ["all", ...Object.values(ROW_STATES), EXCLUDED_MANUALLY];
+  return (
+    <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
+      {tabs.map((s) => (
+        <button
+          key={s}
+          onClick={() => setFilter(s)}
+          aria-pressed={filter === s}
+          style={{
+            padding: "7px 14px", border: "none", borderRadius: 5, cursor: "pointer",
+            fontFamily: F.display, letterSpacing: 1, fontSize: 12,
+            background: filter === s ? C.red : "rgba(255,255,255,0.05)",
+            color: filter === s ? "#fff" : C.muted,
+          }}
+        >
+          {s === "all" ? "ALL" : ROW_STATE_LABELS[s].toUpperCase()} ({counts[s] || 0})
+        </button>
+      ))}
+      <label style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 6, fontSize: 12, color: C.muted, cursor: "pointer" }}>
+        <input type="checkbox" checked={attentionOnly} onChange={(e) => setAttentionOnly(e.target.checked)} />
+        Show only rows needing attention
+      </label>
+    </div>
+  );
+}
+
+function BulkActionsBar({ onSelectAllReady, onExcludeAllErrors, onExcludeAllDuplicates, onBulkApprove, onExcludeVisibleSelected }) {
+  const btnStyle = { fontSize: 11, padding: "7px 14px" };
+  return (
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 18 }}>
+      <Btn variant="ghost" onClick={onSelectAllReady} style={btnStyle}>SELECT ALL READY</Btn>
+      <Btn variant="ghost" onClick={onExcludeAllErrors} style={btnStyle}>EXCLUDE ALL ERRORS</Btn>
+      <Btn variant="ghost" onClick={onExcludeAllDuplicates} style={btnStyle}>EXCLUDE ALL DUPLICATES</Btn>
+      <Btn variant="ghost" onClick={onBulkApprove} style={btnStyle}>BULK APPROVE MATCH SUGGESTIONS</Btn>
+      <Btn variant="ghost" onClick={onExcludeVisibleSelected} style={btnStyle}>EXCLUDE SELECTED (VISIBLE)</Btn>
+    </div>
+  );
+}
+
+function ConfirmationSummary({ items, selected, onBack }) {
+  const importCount = selected.size;
+  const skipCount = items.length - importCount;
+  const groups = useMemo(() => groupSkippedReasons(items, selected), [items, selected]);
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderTop: `3px solid ${C.green}`, borderRadius: 8, padding: 24, marginTop: 20 }}>
+      <div style={{ fontFamily: F.display, fontSize: 18, color: C.white, letterSpacing: 2, marginBottom: 12 }}>CONFIRM SELECTION</div>
+      <div style={{ fontSize: 15, color: C.white, marginBottom: 6 }}>{importCount} row{importCount !== 1 ? "s" : ""} will be imported.</div>
+      <div style={{ fontSize: 15, color: C.muted, marginBottom: 16 }}>{skipCount} row{skipCount !== 1 ? "s" : ""} will be skipped.</div>
+      {groups.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <div style={smallLabelCss}>Why rows are skipped</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 6 }}>
+            {groups.map((g) => (
+              <div key={g.state} style={{ fontSize: 13, color: C.muted, display: "flex", justifyContent: "space-between", maxWidth: 360 }}>
+                <span>{g.label}</span><span style={{ color: C.white }}>{g.count}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <div style={{ fontSize: 13, color: C.amber, marginBottom: 16, maxWidth: 640 }}>
+        Import execution is not implemented yet (Sprint 5C). No gigs, venues, or artists have been created or modified.
+      </div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <Btn disabled style={{ padding: "12px 28px" }}>IMPORT (COMING IN SPRINT 5C)</Btn>
+        <Btn variant="ghost" onClick={onBack} style={{ padding: "12px 20px" }}>← BACK TO REVIEW</Btn>
+      </div>
+    </div>
+  );
+}
+
+function ImportReviewDashboard({ parseResult }) {
   const [status, setStatus] = useState("idle"); // idle | loading | done | error
   const [batch, setBatch] = useState(null);
   const [errorMsg, setErrorMsg] = useState("");
+  const [selected, setSelected] = useState(new Set());
+  const [overrides, setOverrides] = useState({}); // { [rowId]: { venueCandidateId?, artistCandidateId? } }
   const [filter, setFilter] = useState("all");
+  const [attentionOnly, setAttentionOnly] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const isMobile = useIsMobile();
 
   const runReview = async () => {
     setStatus("loading");
@@ -6382,6 +6587,7 @@ function SmartImportReview({ parseResult }) {
         searchFn: (entityType, query) => DB.searchEntities(entityType, query),
       });
       setBatch(matched);
+      setSelected(computeDefaultSelection(matched));
       setStatus("done");
     } catch (e) {
       setErrorMsg(e.message || "Matching failed");
@@ -6389,25 +6595,78 @@ function SmartImportReview({ parseResult }) {
     }
   };
 
-  const counts = useMemo(() => {
-    if (!batch) return {};
-    const c = { all: batch.length };
-    for (const s of Object.values(REVIEW_STATUSES)) c[s] = 0;
-    for (const item of batch) c[item.reviewStatus]++;
-    return c;
-  }, [batch]);
+  // Re-derives each row's state after admin overrides (accepted fuzzy
+  // candidates) are applied -- duplicate detection itself is never
+  // recomputed here: accepting a match candidate doesn't change whether a
+  // row looks like a duplicate, only whether its venue/artist link is
+  // resolved.
+  const resolvedBatch = useMemo(() => {
+    if (!batch) return [];
+    return batch.map((row) => {
+      const withOverrides = withOverridesApplied(row, overrides[row.id]);
+      const rowState = deriveRowState({
+        parserStatus: withOverrides.status,
+        fields: withOverrides.fields,
+        duplicate: withOverrides.duplicate,
+        venueMatch: withOverrides.venueMatch,
+        artistMatch: withOverrides.artistMatch,
+      });
+      return { ...withOverrides, rowState };
+    });
+  }, [batch, overrides]);
 
-  const filtered = batch ? batch.filter((item) => filter === "all" ? true : item.reviewStatus === filter) : [];
+  const counts = useMemo(() => summariseBatch(resolvedBatch, selected), [resolvedBatch, selected]);
+
+  const filterCounts = useMemo(() => {
+    const c = { all: resolvedBatch.length };
+    for (const s of Object.values(ROW_STATES)) c[s] = 0;
+    c[EXCLUDED_MANUALLY] = 0;
+    for (const item of resolvedBatch) {
+      const displayState = resolveDisplayState(item.rowState, selected.has(item.id));
+      c[displayState] = (c[displayState] || 0) + 1;
+    }
+    return c;
+  }, [resolvedBatch, selected]);
+
+  const filtered = useMemo(() => {
+    return resolvedBatch.filter((item) => {
+      const displayState = resolveDisplayState(item.rowState, selected.has(item.id));
+      if (attentionOnly && displayState === ROW_STATES.READY) return false;
+      if (filter === "all") return true;
+      return displayState === filter;
+    });
+  }, [resolvedBatch, selected, filter, attentionOnly]);
+
+  const toggleSelected = (id) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const acceptVenue = (rowId, candidateId) =>
+    setOverrides((prev) => ({ ...prev, [rowId]: { ...prev[rowId], venueCandidateId: candidateId } }));
+  const acceptArtist = (rowId, candidateId) =>
+    setOverrides((prev) => ({ ...prev, [rowId]: { ...prev[rowId], artistCandidateId: candidateId } }));
+  const undoOverride = (rowId, key) =>
+    setOverrides((prev) => {
+      if (!prev[rowId]) return prev;
+      const { [key]: _removed, ...rest } = prev[rowId];
+      const next = { ...prev };
+      if (Object.keys(rest).length) next[rowId] = rest; else delete next[rowId];
+      return next;
+    });
 
   return (
     <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 24, marginTop: 20 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
         <div>
-          <div style={{ fontFamily: F.display, fontSize: 18, color: C.white, letterSpacing: 2 }}>REVIEW — VENUE / ARTIST MATCH</div>
+          <div style={{ fontFamily: F.display, fontSize: 18, color: C.white, letterSpacing: 2 }}>IMPORT REVIEW DASHBOARD</div>
           <div style={{ fontSize: 13, color: C.muted, marginTop: 4, maxWidth: 720 }}>
-            Matches every parsed row against the real venues and artist profiles database, and flags likely
-            duplicates. This only reads the database and never writes to it -- no venue, artist, or gig record is
-            created here.
+            Matches every parsed row against the real venues and artist profiles database, flags likely
+            duplicates, and lets you choose exactly which rows to include. This only reads the database and
+            never writes to it -- no venue, artist, or gig record is created here, and nothing is imported yet.
           </div>
         </div>
         {status !== "done" && (
@@ -6421,41 +6680,79 @@ function SmartImportReview({ parseResult }) {
 
       {status === "done" && batch && (
         <>
-          <div style={{ display: "flex", gap: 6, marginBottom: 18, flexWrap: "wrap" }}>
-            {["all", ...Object.values(REVIEW_STATUSES)].map((s) => (
-              <button
-                key={s}
-                onClick={() => setFilter(s)}
-                style={{
-                  padding: "7px 14px", border: "none", borderRadius: 5, cursor: "pointer",
-                  fontFamily: F.display, letterSpacing: 1, fontSize: 12,
-                  background: filter === s ? C.red : "rgba(255,255,255,0.05)",
-                  color: filter === s ? "#fff" : C.muted,
-                }}
-              >
-                {s === "all" ? "ALL" : REVIEW_STATUS_LABELS[s].toUpperCase()} ({counts[s] || 0})
-              </button>
-            ))}
-          </div>
+          <div aria-live="polite" style={visuallyHiddenCss}>{selected.size} rows selected for import.</div>
+          <BatchSummary counts={counts} />
+          <BulkActionsBar
+            onSelectAllReady={() => setSelected((prev) => selectAllReady(resolvedBatch, prev))}
+            onExcludeAllErrors={() => setSelected((prev) => excludeAllErrors(resolvedBatch, prev))}
+            onExcludeAllDuplicates={() => setSelected((prev) => excludeAllDuplicates(resolvedBatch, prev))}
+            onBulkApprove={() => setOverrides((prev) => ({ ...prev, ...applyBulkApproveSuggestions(resolvedBatch) }))}
+            onExcludeVisibleSelected={() => setSelected((prev) => excludeVisibleSelected(filtered, prev))}
+          />
+          <FilterTabs filter={filter} setFilter={setFilter} counts={filterCounts} attentionOnly={attentionOnly} setAttentionOnly={setAttentionOnly} />
 
           {filtered.length === 0 ? (
             <div style={{ color: C.dim, fontSize: 14 }}>No rows in this category.</div>
+          ) : isMobile ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {filtered.map((item) => {
+                const displayState = resolveDisplayState(item.rowState, selected.has(item.id));
+                return (
+                  <ImportReviewRowCard
+                    key={item.id}
+                    item={item}
+                    displayState={displayState}
+                    selected={selected.has(item.id)}
+                    locked={isLocked(item.rowState)}
+                    reasons={explainRowState(item)}
+                    onToggleSelected={toggleSelected}
+                    onAcceptVenue={(candidateId) => acceptVenue(item.id, candidateId)}
+                    onAcceptArtist={(candidateId) => acceptArtist(item.id, candidateId)}
+                    onUndoVenue={() => undoOverride(item.id, "venueCandidateId")}
+                    onUndoArtist={() => undoOverride(item.id, "artistCandidateId")}
+                  />
+                );
+              })}
+            </div>
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                 <thead>
                   <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                    {["", "STATUS", "ARTIST", "VENUE MATCH", "ARTIST MATCH", "DUPLICATE", "DATE", "TIME"].map((h, i) => (
+                    {["", "STATUS", "ARTIST", "VENUE MATCH", "ARTIST MATCH", "WHY", "DATE", "TIME"].map((h, i) => (
                       <th key={i} style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, color: C.muted, letterSpacing: 2, fontFamily: F.display, whiteSpace: "nowrap" }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map((item) => <SmartImportReviewRow key={item.id} item={item} />)}
+                  {filtered.map((item) => {
+                    const displayState = resolveDisplayState(item.rowState, selected.has(item.id));
+                    return (
+                      <ImportReviewRowDesktop
+                        key={item.id}
+                        item={item}
+                        displayState={displayState}
+                        selected={selected.has(item.id)}
+                        locked={isLocked(item.rowState)}
+                        reasons={explainRowState(item)}
+                        onToggleSelected={toggleSelected}
+                        onAcceptVenue={(candidateId) => acceptVenue(item.id, candidateId)}
+                        onAcceptArtist={(candidateId) => acceptArtist(item.id, candidateId)}
+                        onUndoVenue={() => undoOverride(item.id, "venueCandidateId")}
+                        onUndoArtist={() => undoOverride(item.id, "artistCandidateId")}
+                      />
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           )}
+
+          <div style={{ marginTop: 20 }}>
+            <Btn onClick={() => setConfirmOpen(true)} style={{ padding: "12px 28px" }}>REVIEW SELECTION →</Btn>
+          </div>
+
+          {confirmOpen && <ConfirmationSummary items={resolvedBatch} selected={selected} onBack={() => setConfirmOpen(false)} />}
         </>
       )}
     </div>
@@ -6570,7 +6867,7 @@ function SmartImportPreview() {
         </div>
       )}
 
-      {result && result.rows.length > 0 && <SmartImportReview key={parseId} parseResult={result} />}
+      {result && result.rows.length > 0 && <ImportReviewDashboard key={parseId} parseResult={result} />}
     </div>
   );
 }

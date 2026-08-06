@@ -39,15 +39,15 @@ describe("runMatching", () => {
   it("resolves 'ready' for a row with an exact venue and artist match, no duplicate, parser status ok", async () => {
     const parseResult = { rows: [row("r1", { fields: { artistName: "The Mafia", venueName: "The Brook", city: "Southampton", date: "2026-09-01" } })] };
     const result = await runMatching(parseResult, { venues, artistProfiles });
-    expect(result[0].reviewStatus).toBe("ready");
+    expect(result[0].rowState).toBe("ready");
     expect(result[0].venueMatch.tier).toBe("exact");
     expect(result[0].artistMatch.tier).toBe("exact");
   });
 
-  it("resolves 'new_venue' when there's no exact match and no searchFn is supplied", async () => {
+  it("resolves 'missing_venue' when there's no exact match and no searchFn is supplied", async () => {
     const parseResult = { rows: [row("r1", { fields: { artistName: "The Mafia", venueName: "Totally New Place", city: "Nowhere", date: "2026-09-01" } })] };
     const result = await runMatching(parseResult, { venues, artistProfiles });
-    expect(result[0].reviewStatus).toBe("new_venue");
+    expect(result[0].rowState).toBe("missing_venue");
   });
 
   it("calls searchFn only when there's no local exact match, and resolves 'needs_review' for a fuzzy venue hit", async () => {
@@ -60,7 +60,7 @@ describe("runMatching", () => {
     };
     const result = await runMatching(parseResult, { venues, artistProfiles, searchFn });
     expect(result[0].venueMatch.tier).toBe("fuzzy");
-    expect(result[0].reviewStatus).toBe("needs_review");
+    expect(result[0].rowState).toBe("needs_review");
     expect(searchFn).toHaveBeenCalledWith("venue", "The Brooky");
     // artist was an exact match, so no artist search calls were made
     expect(searchFn).not.toHaveBeenCalledWith("band", expect.anything());
@@ -91,21 +91,21 @@ describe("runMatching", () => {
     expect(searchFn).not.toHaveBeenCalledWith("solo_artist", expect.anything());
   });
 
-  it("resolves 'duplicate' for two rows in the batch that share artist + date + venue, taking precedence over 'ready'", async () => {
+  it("resolves 'exact_duplicate' for two rows in the batch that share artist + date + venue, taking precedence over 'ready'", async () => {
     const fields = { artistName: "The Mafia", venueName: "The Brook", city: "Southampton", date: "2026-09-01" };
     const parseResult = { rows: [row("r1", { fields }), row("r2", { fields })] };
     const result = await runMatching(parseResult, { venues, artistProfiles });
-    expect(result[0].reviewStatus).toBe("duplicate");
-    expect(result[1].reviewStatus).toBe("duplicate");
+    expect(result[0].rowState).toBe("exact_duplicate");
+    expect(result[1].rowState).toBe("exact_duplicate");
   });
 
-  it("resolves 'duplicate' against an existing gig snapshot", async () => {
+  it("resolves 'exact_duplicate' against an existing gig snapshot", async () => {
     const parseResult = {
       rows: [row("r1", { fields: { artistName: "The Mafia", venueName: "The Brook", city: "Southampton", date: "2026-09-01" } })],
     };
     const existingGigs = [{ id: "gig-1", band_name: "The Mafia", date: "2026-09-01", venue_id: "v1", venue: "The Brook" }];
     const result = await runMatching(parseResult, { venues, artistProfiles, existingGigs });
-    expect(result[0].reviewStatus).toBe("duplicate");
+    expect(result[0].rowState).toBe("exact_duplicate");
     expect(result[0].duplicate.existingGigId).toBe("gig-1");
   });
 
@@ -114,7 +114,7 @@ describe("runMatching", () => {
       rows: [row("r1", { status: "needs_review", fields: { artistName: "The Mafia", venueName: "The Brook", city: "Southampton", date: "2026-09-01" } })],
     };
     const result = await runMatching(parseResult, { venues, artistProfiles });
-    expect(result[0].reviewStatus).toBe("needs_review");
+    expect(result[0].rowState).toBe("needs_review");
   });
 
   it("preserves row order in the output even though rows are matched concurrently with staggered searchFn latency", async () => {
@@ -141,7 +141,7 @@ describe("runMatching", () => {
     const parseResult = parseImportText("5 July - The Brook, Southampton", { contextYear: 2030 });
     const result = await runMatching(parseResult, { venues: [], artistProfiles: [], existingGigs: [] });
     expect(result).toHaveLength(1);
-    expect(result[0].reviewStatus).toBe("new_venue");
+    expect(result[0].rowState).toBe("missing_venue");
     expect(result[0].artistMatch.tier).toBe("not_applicable");
   });
 });
