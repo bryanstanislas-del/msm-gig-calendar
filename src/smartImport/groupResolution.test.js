@@ -39,16 +39,31 @@ const missingVenueRow = (id, overrides = {}) =>
   row(id, { venueMatch: { tier: "none", city: null, match: null, candidates: [] }, ...overrides });
 
 describe("applyGroupDecisionToRow -- venue", () => {
-  it("APPROVE_NEW requires a city -- no-ops without one", () => {
+  it("APPROVE_NEW requires a name and a city -- no-ops with neither", () => {
     const decision = { groupId: "g1", kind: "venue_missing", action: VENUE_MISSING_ACTIONS.APPROVE_NEW };
     const resolved = applyGroupDecisionToRow(missingVenueRow("r1"), decision);
     expect(resolved.venueMatch.tier).toBe("none");
   });
 
-  it("APPROVE_NEW with a city resolves the row to approved_new and clears the missing-venue state", () => {
+  it("APPROVE_NEW requires a name -- no-ops with only a city", () => {
     const decision = { groupId: "g1", kind: "venue_missing", action: VENUE_MISSING_ACTIONS.APPROVE_NEW, approvedNewVenueCity: "Fareham" };
     const resolved = applyGroupDecisionToRow(missingVenueRow("r1"), decision);
-    expect(resolved.venueMatch).toMatchObject({ tier: "approved_new", city: "Fareham", match: null });
+    expect(resolved.venueMatch.tier).toBe("none");
+  });
+
+  it("APPROVE_NEW requires a city -- no-ops with only a name", () => {
+    const decision = { groupId: "g1", kind: "venue_missing", action: VENUE_MISSING_ACTIONS.APPROVE_NEW, approvedNewVenueName: "The 1865" };
+    const resolved = applyGroupDecisionToRow(missingVenueRow("r1"), decision);
+    expect(resolved.venueMatch.tier).toBe("none");
+  });
+
+  it("APPROVE_NEW with a name and city resolves the row to approved_new, using the admin-entered name, and clears the missing-venue state", () => {
+    const decision = {
+      groupId: "g1", kind: "venue_missing", action: VENUE_MISSING_ACTIONS.APPROVE_NEW,
+      approvedNewVenueName: "The 1865", approvedNewVenueCity: "Fareham",
+    };
+    const resolved = applyGroupDecisionToRow(missingVenueRow("r1"), decision);
+    expect(resolved.venueMatch).toMatchObject({ tier: "approved_new", query: "The 1865", city: "Fareham", match: null });
     expect(stateOf(resolved)).toBe(ROW_STATES.READY);
   });
 
@@ -139,7 +154,7 @@ describe("invalid-date protection is untouched by any decision", () => {
   it("a row with no date stays INVALID_DATE regardless of venue/artist/duplicate decisions", () => {
     const r = row("r1", { fields: { date: null } });
     const resolved = composeResolvedRow(r, {
-      venueGroupDecision: { kind: "venue_missing", action: VENUE_MISSING_ACTIONS.APPROVE_NEW, approvedNewVenueCity: "X" },
+      venueGroupDecision: { kind: "venue_missing", action: VENUE_MISSING_ACTIONS.APPROVE_NEW, approvedNewVenueName: "The 1865", approvedNewVenueCity: "X" },
       artistGroupDecision: { kind: "artist_missing", action: ARTIST_MISSING_ACTIONS.LEAVE_AS_FREE_TEXT },
     });
     expect(stateOf(resolved)).toBe(ROW_STATES.INVALID_DATE);

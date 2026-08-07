@@ -45,10 +45,20 @@ function applyVenueGroupDecision(venueMatch, decision) {
     case VENUE_MISSING_ACTIONS.APPROVE_NEW:
       // Hard gate: importEngine.js's validateRowForImport already blocks a
       // "New Venue" row with no known city -- never approve one without a
-      // city here either, or the dashboard would show a row as resolved
-      // that the RPC layer would then silently reject.
-      if (!decision.approvedNewVenueCity) return venueMatch;
-      return { ...venueMatch, tier: "approved_new", city: decision.approvedNewVenueCity, match: null, candidates: [] };
+      // name+city here either, or the dashboard would show a row as
+      // resolved that the RPC layer would then silently reject. Requiring
+      // the name here too (not just city) is what lets an admin correct the
+      // raw parsed text before it becomes a real venues.name -- previously
+      // this only asked for city and silently reused venueMatch.query as-is.
+      if (!decision.approvedNewVenueName?.trim() || !decision.approvedNewVenueCity) return venueMatch;
+      return {
+        ...venueMatch,
+        tier: "approved_new",
+        query: decision.approvedNewVenueName.trim(),
+        city: decision.approvedNewVenueCity,
+        match: null,
+        candidates: [],
+      };
     case VENUE_FUZZY_ACTIONS.REJECT_MATCH:
       return { ...venueMatch, tier: "none", match: null, candidates: [] };
     default:

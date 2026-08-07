@@ -6787,11 +6787,16 @@ const groupActionBtnStyle = { fontSize: 11, padding: "5px 10px" };
 
 function VenueMissingGroupRow({ group, decision, rowsById, onDecide, onUndo }) {
   const [mode, setMode] = useState(null); // null | "link" | "approveNew"
+  const [name, setName] = useState(group.sourceText || "");
   const [city, setCity] = useState(group.sourceCity || "");
+  const [address, setAddress] = useState("");
+  const [county, setCounty] = useState("");
+  const [postcode, setPostcode] = useState("");
+  const [website, setWebsite] = useState("");
 
   const decisionLabel = decision && ({
     [VENUE_MISSING_ACTIONS.LINK_EXISTING]: `Linked to "${decision.resolvedVenue?.name}"`,
-    [VENUE_MISSING_ACTIONS.APPROVE_NEW]: `Approved as new venue in ${decision.approvedNewVenueCity}`,
+    [VENUE_MISSING_ACTIONS.APPROVE_NEW]: `Approved as new venue "${decision.approvedNewVenueName}" in ${decision.approvedNewVenueCity}`,
     [VENUE_MISSING_ACTIONS.LEAVE_UNRESOLVED]: "Left unresolved",
     [VENUE_MISSING_ACTIONS.EXCLUDE_AFFECTED]: "Excluded from import",
   }[decision.action]);
@@ -6824,24 +6829,76 @@ function VenueMissingGroupRow({ group, decision, rowsById, onDecide, onUndo }) {
         />
       )}
       {mode === "approveNew" && (
-        <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 8, maxWidth: 420 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Venue name (required)"
+              aria-label="New venue name"
+              style={{ ...inputCss, fontSize: 12, padding: "6px 10px", flex: "1 1 180px" }}
+            />
+            <input
+              type="text"
+              value={city}
+              onChange={(e) => setCity(e.target.value)}
+              placeholder="City (required)"
+              aria-label="New venue city"
+              style={{ ...inputCss, fontSize: 12, padding: "6px 10px", flex: "1 1 140px" }}
+            />
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <input
+              type="text"
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+              placeholder="Address (optional)"
+              aria-label="New venue address"
+              style={{ ...inputCss, fontSize: 12, padding: "6px 10px", flex: "1 1 180px" }}
+            />
+            <input
+              type="text"
+              value={county}
+              onChange={(e) => setCounty(e.target.value)}
+              placeholder="County (optional)"
+              aria-label="New venue county"
+              style={{ ...inputCss, fontSize: 12, padding: "6px 10px", flex: "1 1 120px" }}
+            />
+            <input
+              type="text"
+              value={postcode}
+              onChange={(e) => setPostcode(e.target.value)}
+              placeholder="Postcode (optional)"
+              aria-label="New venue postcode"
+              style={{ ...inputCss, fontSize: 12, padding: "6px 10px", flex: "1 1 100px" }}
+            />
+          </div>
           <input
             type="text"
-            value={city}
-            onChange={(e) => setCity(e.target.value)}
-            placeholder="City (required)"
-            aria-label="New venue city"
-            style={{ ...inputCss, fontSize: 12, padding: "6px 10px", maxWidth: 160 }}
+            value={website}
+            onChange={(e) => setWebsite(e.target.value)}
+            placeholder="Website (optional)"
+            aria-label="New venue website"
+            style={{ ...inputCss, fontSize: 12, padding: "6px 10px" }}
           />
-          <Btn
-            style={{ fontSize: 11, padding: "6px 12px" }}
-            disabled={!city.trim()}
-            onClick={() => {
-              onDecide(group, { groupId: group.id, kind: "venue_missing", action: VENUE_MISSING_ACTIONS.APPROVE_NEW, approvedNewVenueCity: city.trim(), decidedAt: nowIso() });
-              setMode(null);
-            }}
-          >APPROVE</Btn>
-          <button type="button" onClick={() => setMode(null)} style={linkBtnCss}>cancel</button>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <Btn
+              style={{ fontSize: 11, padding: "6px 12px" }}
+              disabled={!name.trim() || !city.trim()}
+              onClick={() => {
+                onDecide(group, {
+                  groupId: group.id, kind: "venue_missing", action: VENUE_MISSING_ACTIONS.APPROVE_NEW,
+                  approvedNewVenueName: name.trim(), approvedNewVenueCity: city.trim(),
+                  approvedNewVenueAddress: address.trim() || null, approvedNewVenueCounty: county.trim() || null,
+                  approvedNewVenuePostcode: postcode.trim() || null, approvedNewVenueWebsite: website.trim() || null,
+                  decidedAt: nowIso(),
+                });
+                setMode(null);
+              }}
+            >APPROVE</Btn>
+            <button type="button" onClick={() => setMode(null)} style={linkBtnCss}>cancel</button>
+          </div>
         </div>
       )}
     </GroupRowShell>
