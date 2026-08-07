@@ -71,6 +71,20 @@ import {
   buildGigInsertPayload,
   runImport,
   summariseImportResult,
+  deriveSelection,
+  groupMissingVenues,
+  groupFuzzyVenues,
+  VENUE_MISSING_ACTIONS,
+  VENUE_FUZZY_ACTIONS,
+  groupMissingArtists,
+  groupFuzzyArtists,
+  ARTIST_MISSING_ACTIONS,
+  ARTIST_FUZZY_ACTIONS,
+  groupDuplicateClusters,
+  DUPLICATE_CLUSTER_ACTIONS,
+  LOCKED_DUPLICATE_TIERS,
+  composeResolvedRow,
+  indexRowsByGroup,
 } from "./smartImport";
 
 // ── Supabase config ────────────────────────────────────────────────
@@ -6436,6 +6450,31 @@ function MatchCell({ match, entityLabel, onAccept, onUndo }) {
       </div>
     );
   }
+  // Sprint 5D: the two tiers a grouped decision can produce that
+  // classifyVenueMatch/classifyArtistMatch themselves never do -- "approved_new"
+  // (a Missing Venue group's "Approve New Venue" action) and
+  // "confirmed_free_text" (a Missing Artist group's default "Leave as Free
+  // Text" action). Undo for these lives in the group panel that made the
+  // decision, not here -- the row table's own onUndo only ever covers this
+  // ROW's individual override (see ImportReviewRowDesktop/Card), which is
+  // why neither branch below wires one up.
+  if (match.tier === "approved_new") {
+    return (
+      <div style={{ fontSize: 12 }}>
+        <span style={{ color: C.green }}>✓</span> New {entityLabel} (approved)
+        {match.city ? <span style={{ color: C.muted }}> — {match.city}</span> : null}
+        <div style={{ color: C.muted, fontSize: 10, marginTop: 2 }}>will be created on import</div>
+      </div>
+    );
+  }
+  if (match.tier === "confirmed_free_text") {
+    return (
+      <div style={{ fontSize: 12 }}>
+        <span style={{ color: C.green }}>✓</span> Free text
+        <div style={{ color: C.muted, fontSize: 10, marginTop: 2 }}>no profile linked</div>
+      </div>
+    );
+  }
   return (
     <div style={{ fontSize: 11 }}>
       <span style={{ color: C.muted }}>New {entityLabel}</span>
@@ -6590,6 +6629,495 @@ function BulkActionsBar({ onSelectAllReady, onExcludeAllErrors, onExcludeAllDupl
   );
 }
 
+// ── Sprint 5D: Grouped Entity Resolution ─────────────────────────────
+// One decision per venue/artist/duplicate-cluster group instead of one per
+// row -- see src/smartImport/groupResolution.js's header comment for the
+// full precedence pipeline. Still no database writes: "Approve New Venue"
+// only queues a venue for creation during Sprint 5C's own import step, it
+// never creates anything here.
+
+// Collapsible panel chrome shared by every group panel below -- replicates
+// the existing "Genre Key" toggle's chevron/border/hover styling verbatim
+// (see ~line 2954) rather than inventing a new pattern, just factored once
+// since Sprint 5D uses it six times instead of that toggle's one.
+function GroupPanelHeader({ title, count, isOpen, onToggle }) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={isOpen}
+      style={{
+        display: "flex", alignItems: "center", gap: 8, width: "100%",
+        background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}`,
+        borderRadius: 6, padding: "10px 14px", cursor: "pointer",
+        fontFamily: F.display, fontSize: 12, letterSpacing: 2, color: C.muted, textAlign: "left",
+      }}
+      onMouseEnter={(e) => (e.currentTarget.style.color = C.white)}
+      onMouseLeave={(e) => (e.currentTarget.style.color = C.muted)}
+    >
+      <span style={{ display: "inline-block", transition: "transform 0.15s", transform: isOpen ? "rotate(90deg)" : "rotate(0deg)" }}>▸</span>
+      <span style={{ flex: 1 }}>{title}</span>
+      <span style={{ color: C.white }}>{count}</span>
+    </button>
+  );
+}
+
+// Debounced venue/artist search reused by every group action that needs to
+// link to a specific existing entity (Link Existing, Choose Different) --
+// the only place Sprint 5D's UI layer talks to the network directly, via
+// the same DB.searchEntities wrapper runMatching()'s searchFn already uses
+// (~line 382). src/smartImport/*.js itself stays framework-free and
+// network-free, same as every prior sprint.
+function EntitySearchPicker({ entityType, onPick, onCancel }) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!query.trim()) { setResults([]); return; }
+    let cancelled = false;
+    setLoading(true);
+    const timer = setTimeout(async () => {
+      try {
+        const q = query.trim();
+        // A parsed billing line never says in advance whether an act is a
+        // solo artist or a full band -- search and merge both, same as
+        // runMatching.js's own matchRow() already does for per-row fuzzy
+        // artist candidates.
+        const data = entityType === "artist"
+          ? (await Promise.all([DB.searchEntities("band", q), DB.searchEntities("solo_artist", q)]))
+              .flat()
+              .sort((a, b) => b.similarity_score - a.similarity_score)
+          : await DB.searchEntities("venue", q);
+        if (!cancelled) setResults(data);
+      } catch {
+        if (!cancelled) setResults([]);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }, 300);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [query, entityType]);
+
+  return (
+    <div style={{ marginTop: 8, padding: 10, background: "rgba(255,255,255,0.02)", border: `1px solid ${C.border}`, borderRadius: 6, maxWidth: 360 }}>
+      <input
+        type="text"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder={`Search ${entityType === "venue" ? "venues" : "artists"}…`}
+        aria-label={`Search existing ${entityType === "venue" ? "venues" : "artists"}`}
+        style={{ ...inputCss, fontSize: 12, padding: "6px 10px" }}
+        autoFocus
+      />
+      {loading && <div style={{ fontSize: 11, color: C.dim, marginTop: 6 }}>Searching…</div>}
+      {!loading && results.length > 0 && (
+        <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+          {results.map((r) => (
+            <button
+              key={r.id}
+              type="button"
+              onClick={() => onPick({ id: r.id, name: r.name, city: r.city })}
+              style={{ textAlign: "left", background: "none", border: "none", padding: "4px 6px", cursor: "pointer", fontSize: 12, color: C.white, borderRadius: 4 }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+            >
+              {r.name}{r.city ? ` — ${r.city}` : ""}
+              {typeof r.similarity_score === "number" && (
+                <span style={{ color: C.dim, marginLeft: 6 }}>({Math.round(r.similarity_score * 100)}%)</span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+      {!loading && query.trim() && results.length === 0 && (
+        <div style={{ fontSize: 11, color: C.dim, marginTop: 6 }}>No matches found.</div>
+      )}
+      <button type="button" onClick={onCancel} style={{ ...linkBtnCss, marginTop: 8, display: "block" }}>cancel</button>
+    </div>
+  );
+}
+
+// Turns a group's sampleRowIds into short "Artist (date)" chips for the
+// "e.g. ..." line every group row shows -- same idea as MatchCell's
+// candidate summary, just for a whole group's worth of rows at once.
+function sampleGigChips(rowIds, rowsById) {
+  return rowIds
+    .map((id) => rowsById.get(id))
+    .filter(Boolean)
+    .map((r) => `${r.fields.artistName || "—"} (${r.fields.date || "no date"})`);
+}
+
+// The shared shell every group row (venue/artist/duplicate) renders inside:
+// title + subtitle + affected-row count + sample gigs, then either the
+// kind-specific action buttons (children) or, once a decision exists, the
+// "Decided: X [undo]" line -- mirroring MatchCell's existing "admin
+// confirmed ... undo" pattern (~line 6420) so a resolved group reads the
+// same way a resolved row already does.
+function GroupRowShell({ title, subtitle, rowCount, sampleRowIds, rowsById, decision, decisionLabel, onUndo, children }) {
+  const samples = sampleGigChips(sampleRowIds, rowsById);
+  return (
+    <div style={{ padding: "10px 12px", borderBottom: `1px solid rgba(255,255,255,0.04)` }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontSize: 13, color: C.white }}>{title}</div>
+          {subtitle && <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{subtitle}</div>}
+        </div>
+        <Badge label={`${rowCount} row${rowCount !== 1 ? "s" : ""}`} color={C.muted} />
+      </div>
+      {samples.length > 0 && (
+        <div style={{ fontSize: 11, color: C.dim, marginTop: 6 }}>
+          e.g. {samples.join(", ")}{rowCount > samples.length ? `, +${rowCount - samples.length} more` : ""}
+        </div>
+      )}
+      <div style={{ marginTop: 8 }}>
+        {decision ? (
+          <div style={{ fontSize: 11, color: C.green }}>
+            Decided: {decisionLabel}
+            <button onClick={onUndo} style={linkBtnCss}>undo</button>
+          </div>
+        ) : children}
+      </div>
+    </div>
+  );
+}
+
+const nowIso = () => new Date().toISOString();
+const groupActionBtnStyle = { fontSize: 11, padding: "5px 10px" };
+
+function VenueMissingGroupRow({ group, decision, rowsById, onDecide, onUndo }) {
+  const [mode, setMode] = useState(null); // null | "link" | "approveNew"
+  const [city, setCity] = useState(group.sourceCity || "");
+
+  const decisionLabel = decision && ({
+    [VENUE_MISSING_ACTIONS.LINK_EXISTING]: `Linked to "${decision.resolvedVenue?.name}"`,
+    [VENUE_MISSING_ACTIONS.APPROVE_NEW]: `Approved as new venue in ${decision.approvedNewVenueCity}`,
+    [VENUE_MISSING_ACTIONS.LEAVE_UNRESOLVED]: "Left unresolved",
+    [VENUE_MISSING_ACTIONS.EXCLUDE_AFFECTED]: "Excluded from import",
+  }[decision.action]);
+
+  return (
+    <GroupRowShell
+      title={group.sourceText}
+      subtitle={group.sourceAddressBlock}
+      rowCount={group.rowIds.length}
+      sampleRowIds={group.sampleRowIds}
+      rowsById={rowsById}
+      decision={decision}
+      decisionLabel={decisionLabel}
+      onUndo={() => onUndo(group)}
+    >
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+        <Btn variant="ghost" style={groupActionBtnStyle} onClick={() => setMode(mode === "link" ? null : "link")}>LINK EXISTING VENUE</Btn>
+        <Btn variant="ghost" style={groupActionBtnStyle} onClick={() => setMode(mode === "approveNew" ? null : "approveNew")}>APPROVE NEW VENUE</Btn>
+        <Btn variant="ghost" style={groupActionBtnStyle} onClick={() => onDecide(group, { groupId: group.id, kind: "venue_missing", action: VENUE_MISSING_ACTIONS.LEAVE_UNRESOLVED, decidedAt: nowIso() })}>LEAVE UNRESOLVED</Btn>
+        <Btn variant="ghost" style={groupActionBtnStyle} onClick={() => onDecide(group, { groupId: group.id, kind: "venue_missing", action: VENUE_MISSING_ACTIONS.EXCLUDE_AFFECTED, decidedAt: nowIso() })}>EXCLUDE AFFECTED ROWS</Btn>
+      </div>
+      {mode === "link" && (
+        <EntitySearchPicker
+          entityType="venue"
+          onCancel={() => setMode(null)}
+          onPick={(venue) => {
+            onDecide(group, { groupId: group.id, kind: "venue_missing", action: VENUE_MISSING_ACTIONS.LINK_EXISTING, resolvedVenue: venue, decidedAt: nowIso() });
+            setMode(null);
+          }}
+        />
+      )}
+      {mode === "approveNew" && (
+        <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            type="text"
+            value={city}
+            onChange={(e) => setCity(e.target.value)}
+            placeholder="City (required)"
+            aria-label="New venue city"
+            style={{ ...inputCss, fontSize: 12, padding: "6px 10px", maxWidth: 160 }}
+          />
+          <Btn
+            style={{ fontSize: 11, padding: "6px 12px" }}
+            disabled={!city.trim()}
+            onClick={() => {
+              onDecide(group, { groupId: group.id, kind: "venue_missing", action: VENUE_MISSING_ACTIONS.APPROVE_NEW, approvedNewVenueCity: city.trim(), decidedAt: nowIso() });
+              setMode(null);
+            }}
+          >APPROVE</Btn>
+          <button type="button" onClick={() => setMode(null)} style={linkBtnCss}>cancel</button>
+        </div>
+      )}
+    </GroupRowShell>
+  );
+}
+
+function VenueFuzzyGroupRow({ group, decision, rowsById, onDecide, onUndo }) {
+  const [mode, setMode] = useState(null); // null | "choose"
+  const top = group.suggestedCandidates[0];
+
+  const decisionLabel = decision && ({
+    [VENUE_FUZZY_ACTIONS.ACCEPT_SUGGESTED]: `Accepted "${decision.resolvedVenue?.name}"`,
+    [VENUE_FUZZY_ACTIONS.CHOOSE_DIFFERENT]: `Linked to "${decision.resolvedVenue?.name}"`,
+    [VENUE_FUZZY_ACTIONS.REJECT_MATCH]: "Rejected suggested match",
+    [VENUE_FUZZY_ACTIONS.LEAVE_UNRESOLVED]: "Left unresolved",
+  }[decision.action]);
+
+  const subtitle = top
+    ? `Suggested: ${top.name}${top.city ? ` — ${top.city}` : ""} (${Math.round(top.similarity_score * 100)}% match)${group.hasCandidateDisagreement ? " -- rows in this group don't all agree on the best match" : ""}`
+    : null;
+
+  return (
+    <GroupRowShell
+      title={group.sourceText}
+      subtitle={subtitle}
+      rowCount={group.rowIds.length}
+      sampleRowIds={group.sampleRowIds}
+      rowsById={rowsById}
+      decision={decision}
+      decisionLabel={decisionLabel}
+      onUndo={() => onUndo(group)}
+    >
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+        {top && (
+          <Btn
+            style={groupActionBtnStyle}
+            onClick={() => onDecide(group, {
+              groupId: group.id, kind: "venue_fuzzy", action: VENUE_FUZZY_ACTIONS.ACCEPT_SUGGESTED,
+              resolvedVenue: { id: top.id, name: top.name, city: top.city }, decidedAt: nowIso(),
+            })}
+          >ACCEPT SUGGESTED MATCH</Btn>
+        )}
+        <Btn variant="ghost" style={groupActionBtnStyle} onClick={() => setMode(mode === "choose" ? null : "choose")}>CHOOSE DIFFERENT VENUE</Btn>
+        <Btn variant="ghost" style={groupActionBtnStyle} onClick={() => onDecide(group, { groupId: group.id, kind: "venue_fuzzy", action: VENUE_FUZZY_ACTIONS.REJECT_MATCH, decidedAt: nowIso() })}>REJECT MATCH</Btn>
+        <Btn variant="ghost" style={groupActionBtnStyle} onClick={() => onDecide(group, { groupId: group.id, kind: "venue_fuzzy", action: VENUE_FUZZY_ACTIONS.LEAVE_UNRESOLVED, decidedAt: nowIso() })}>LEAVE UNRESOLVED</Btn>
+      </div>
+      {mode === "choose" && (
+        <EntitySearchPicker
+          entityType="venue"
+          onCancel={() => setMode(null)}
+          onPick={(venue) => {
+            onDecide(group, { groupId: group.id, kind: "venue_fuzzy", action: VENUE_FUZZY_ACTIONS.CHOOSE_DIFFERENT, resolvedVenue: venue, decidedAt: nowIso() });
+            setMode(null);
+          }}
+        />
+      )}
+    </GroupRowShell>
+  );
+}
+
+function ArtistMissingGroupRow({ group, decision, rowsById, onDecide, onUndo }) {
+  const [mode, setMode] = useState(null); // null | "link"
+
+  const decisionLabel = decision && ({
+    [ARTIST_MISSING_ACTIONS.LEAVE_AS_FREE_TEXT]: "Left as free text (no profile linked)",
+    [ARTIST_MISSING_ACTIONS.LINK_EXISTING]: `Linked to "${decision.resolvedArtist?.name}"`,
+    [ARTIST_MISSING_ACTIONS.LEAVE_UNRESOLVED]: "Left unresolved",
+    [ARTIST_MISSING_ACTIONS.EXCLUDE_AFFECTED]: "Excluded from import",
+  }[decision.action]);
+
+  return (
+    <GroupRowShell
+      title={group.sourceText}
+      rowCount={group.rowIds.length}
+      sampleRowIds={group.sampleRowIds}
+      rowsById={rowsById}
+      decision={decision}
+      decisionLabel={decisionLabel}
+      onUndo={() => onUndo(group)}
+    >
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+        <Btn
+          style={groupActionBtnStyle}
+          onClick={() => onDecide(group, { groupId: group.id, kind: "artist_missing", action: ARTIST_MISSING_ACTIONS.LEAVE_AS_FREE_TEXT, decidedAt: nowIso() })}
+        >LEAVE AS FREE TEXT</Btn>
+        <Btn variant="ghost" style={groupActionBtnStyle} onClick={() => setMode(mode === "link" ? null : "link")}>LINK EXISTING ARTIST</Btn>
+        <Btn variant="ghost" style={groupActionBtnStyle} onClick={() => onDecide(group, { groupId: group.id, kind: "artist_missing", action: ARTIST_MISSING_ACTIONS.LEAVE_UNRESOLVED, decidedAt: nowIso() })}>LEAVE UNRESOLVED</Btn>
+        <Btn variant="ghost" style={groupActionBtnStyle} onClick={() => onDecide(group, { groupId: group.id, kind: "artist_missing", action: ARTIST_MISSING_ACTIONS.EXCLUDE_AFFECTED, decidedAt: nowIso() })}>EXCLUDE AFFECTED ROWS</Btn>
+      </div>
+      {mode === "link" && (
+        <EntitySearchPicker
+          entityType="artist"
+          onCancel={() => setMode(null)}
+          onPick={(artist) => {
+            onDecide(group, { groupId: group.id, kind: "artist_missing", action: ARTIST_MISSING_ACTIONS.LINK_EXISTING, resolvedArtist: artist, decidedAt: nowIso() });
+            setMode(null);
+          }}
+        />
+      )}
+    </GroupRowShell>
+  );
+}
+
+function ArtistFuzzyGroupRow({ group, decision, rowsById, onDecide, onUndo }) {
+  const [mode, setMode] = useState(null); // null | "choose"
+  const top = group.suggestedCandidates[0];
+
+  const decisionLabel = decision && ({
+    [ARTIST_FUZZY_ACTIONS.ACCEPT_SUGGESTED]: `Accepted "${decision.resolvedArtist?.name}"`,
+    [ARTIST_FUZZY_ACTIONS.CHOOSE_DIFFERENT]: `Linked to "${decision.resolvedArtist?.name}"`,
+    [ARTIST_FUZZY_ACTIONS.REJECT_MATCH]: "Rejected suggested match",
+    [ARTIST_FUZZY_ACTIONS.LEAVE_AS_FREE_TEXT]: "Left as free text (no profile linked)",
+  }[decision.action]);
+
+  const subtitle = top
+    ? `Suggested: ${top.name} (${Math.round(top.similarity_score * 100)}% match)${group.hasCandidateDisagreement ? " -- rows in this group don't all agree on the best match" : ""}`
+    : null;
+
+  return (
+    <GroupRowShell
+      title={group.sourceText}
+      subtitle={subtitle}
+      rowCount={group.rowIds.length}
+      sampleRowIds={group.sampleRowIds}
+      rowsById={rowsById}
+      decision={decision}
+      decisionLabel={decisionLabel}
+      onUndo={() => onUndo(group)}
+    >
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+        {top && (
+          <Btn
+            style={groupActionBtnStyle}
+            onClick={() => onDecide(group, {
+              groupId: group.id, kind: "artist_fuzzy", action: ARTIST_FUZZY_ACTIONS.ACCEPT_SUGGESTED,
+              resolvedArtist: { id: top.id, name: top.name, city: top.city }, decidedAt: nowIso(),
+            })}
+          >ACCEPT SUGGESTED MATCH</Btn>
+        )}
+        <Btn variant="ghost" style={groupActionBtnStyle} onClick={() => setMode(mode === "choose" ? null : "choose")}>CHOOSE DIFFERENT ARTIST</Btn>
+        <Btn variant="ghost" style={groupActionBtnStyle} onClick={() => onDecide(group, { groupId: group.id, kind: "artist_fuzzy", action: ARTIST_FUZZY_ACTIONS.REJECT_MATCH, decidedAt: nowIso() })}>REJECT MATCH</Btn>
+        <Btn variant="ghost" style={groupActionBtnStyle} onClick={() => onDecide(group, { groupId: group.id, kind: "artist_fuzzy", action: ARTIST_FUZZY_ACTIONS.LEAVE_AS_FREE_TEXT, decidedAt: nowIso() })}>LEAVE AS FREE TEXT</Btn>
+      </div>
+      {mode === "choose" && (
+        <EntitySearchPicker
+          entityType="artist"
+          onCancel={() => setMode(null)}
+          onPick={(artist) => {
+            onDecide(group, { groupId: group.id, kind: "artist_fuzzy", action: ARTIST_FUZZY_ACTIONS.CHOOSE_DIFFERENT, resolvedArtist: artist, decidedAt: nowIso() });
+            setMode(null);
+          }}
+        />
+      )}
+    </GroupRowShell>
+  );
+}
+
+const DUPLICATE_TIER_LABELS = {
+  exact_in_batch: "Exact Duplicate (repeated in this paste)",
+  exact_existing: "Exact Duplicate (already in the calendar)",
+  near_in_batch: "Possible Duplicate (resembles another row in this paste)",
+  near_existing: "Probable Duplicate (resembles a gig already in the calendar)",
+};
+
+// Exact-tier clusters render with no action buttons at all -- a UI-level
+// enforcement of the same safety boundary groupResolution.js's
+// applyDuplicateGroupDecision() hard-checks structurally (see that file's
+// header comment): there is no escape hatch for an exact-key duplicate,
+// at the group level or the row level, full stop.
+function DuplicateClusterGroupRow({ group, decision, rowsById, onDecide, onUndo }) {
+  const locked = LOCKED_DUPLICATE_TIERS.includes(group.tier);
+  const existingLabel = group.existingGigSummary
+    ? `Matches an existing gig: ${group.existingGigSummary.band_name} at ${group.existingGigSummary.venue} on ${group.existingGigSummary.date}`
+    : "Rows within this paste resemble each other";
+
+  const decisionLabel = decision && ({
+    [DUPLICATE_CLUSTER_ACTIONS.SKIP_EXISTING]: "Will be skipped",
+    [DUPLICATE_CLUSTER_ACTIONS.IMPORT_ANYWAY]: "Import anyway",
+    [DUPLICATE_CLUSTER_ACTIONS.LEAVE_FOR_MANUAL_REVIEW]: "Left for manual row-by-row review",
+  }[decision.action]);
+
+  return (
+    <GroupRowShell
+      title={DUPLICATE_TIER_LABELS[group.tier]}
+      subtitle={existingLabel}
+      rowCount={group.rowIds.length}
+      sampleRowIds={group.sampleRowIds}
+      rowsById={rowsById}
+      decision={decision}
+      decisionLabel={decisionLabel}
+      onUndo={() => onUndo(group)}
+    >
+      {locked ? (
+        <div style={{ fontSize: 11, color: C.red }}>
+          Locked -- these rows will always be skipped and cannot be imported from here. If this is a false
+          positive, edit the source text and re-parse.
+        </div>
+      ) : (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <Btn variant="ghost" style={groupActionBtnStyle} onClick={() => onDecide(group, { groupId: group.id, kind: "duplicate_cluster", action: DUPLICATE_CLUSTER_ACTIONS.SKIP_EXISTING, decidedAt: nowIso() })}>SKIP EXISTING DUPLICATE</Btn>
+          <Btn variant="ghost" style={groupActionBtnStyle} onClick={() => onDecide(group, { groupId: group.id, kind: "duplicate_cluster", action: DUPLICATE_CLUSTER_ACTIONS.IMPORT_ANYWAY, decidedAt: nowIso() })}>IMPORT ANYWAY</Btn>
+          <Btn variant="ghost" style={groupActionBtnStyle} onClick={() => onDecide(group, { groupId: group.id, kind: "duplicate_cluster", action: DUPLICATE_CLUSTER_ACTIONS.LEAVE_FOR_MANUAL_REVIEW, decidedAt: nowIso() })}>LEAVE FOR MANUAL REVIEW</Btn>
+        </div>
+      )}
+    </GroupRowShell>
+  );
+}
+
+// One collapsible panel per group kind -- all five share this shape
+// (header + list of rows), varying only in title and which row component
+// renders each group. Renders nothing at all when there's nothing of that
+// kind to show, so an admin never sees five empty panels for a clean batch.
+function GroupPanel({ title, groups, decisions, rowsById, onDecide, onUndo, isOpen, onToggle, RowComponent, panelRef }) {
+  if (groups.length === 0) return null;
+  return (
+    <div style={{ marginBottom: 10 }} ref={panelRef}>
+      <GroupPanelHeader title={title} count={groups.length} isOpen={isOpen} onToggle={onToggle} />
+      {isOpen && (
+        <div style={{ border: `1px solid ${C.border}`, borderTop: "none", borderRadius: "0 0 6px 6px" }}>
+          {groups.map((group) => (
+            <RowComponent key={group.id} group={group} decision={decisions[group.id]} rowsById={rowsById} onDecide={onDecide} onUndo={onUndo} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// The grouped-decision area's own summary tiles -- answers "what decisions
+// do I still need to make?" without scrolling past hundreds of individual
+// rows first (item 11's core UX requirement). Clicking a tile opens (and
+// scrolls to) the corresponding panel. Exact-duplicate clusters are shown
+// as a plain count, not an "unresolved" count -- there's never anything to
+// resolve about them.
+function GroupedResolutionSummary({ venueMissingGroups, venueFuzzyGroups, artistMissingGroups, artistFuzzyGroups, duplicateGroups, decisions, onJumpTo }) {
+  const unresolvedCount = (groups) => groups.filter((g) => !decisions[g.id]).length;
+  const exactClusters = duplicateGroups.filter((g) => LOCKED_DUPLICATE_TIERS.includes(g.tier));
+  const probableClusters = duplicateGroups.filter((g) => g.tier === "near_existing");
+  const possibleClusters = duplicateGroups.filter((g) => g.tier === "near_in_batch");
+
+  const totalGroups = venueMissingGroups.length + venueFuzzyGroups.length + artistMissingGroups.length + artistFuzzyGroups.length + duplicateGroups.length;
+  if (totalGroups === 0) return null;
+
+  const tiles = [
+    ["Unresolved Venue Groups", unresolvedCount(venueMissingGroups), C.muted, "venueMissing"],
+    ["Fuzzy Venue Groups", unresolvedCount(venueFuzzyGroups), C.amber, "venueFuzzy"],
+    ["Unresolved Artist Groups", unresolvedCount(artistMissingGroups), C.muted, "artistMissing"],
+    ["Fuzzy Artist Groups", unresolvedCount(artistFuzzyGroups), C.amber, "artistFuzzy"],
+    ["Exact Duplicate Clusters", exactClusters.length, C.red, "duplicates"],
+    ["Probable Duplicate Clusters", unresolvedCount(probableClusters), C.amber, "duplicates"],
+    ["Possible Duplicate Clusters", unresolvedCount(possibleClusters), C.amber, "duplicates"],
+  ];
+
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <div style={smallLabelCss}>GROUPED DECISIONS — WHAT DO YOU STILL NEED TO DECIDE?</div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 6 }}>
+        {tiles.map(([label, value, color, panelKey]) => (
+          <button
+            key={label}
+            type="button"
+            onClick={() => onJumpTo(panelKey)}
+            style={{
+              background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}`, borderRadius: 6,
+              padding: "10px 14px", minWidth: 140, textAlign: "left", cursor: "pointer",
+            }}
+          >
+            <div style={smallLabelCss}>{label}</div>
+            <div style={{ fontFamily: F.display, fontSize: 22, color }}>{value}</div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ConfirmationSummary({ items, selected, sourceProfileId, onBack }) {
   const importCount = selected.size;
   const skipCount = items.length - importCount;
@@ -6732,8 +7260,23 @@ function ImportReviewDashboard({ parseResult }) {
   const [status, setStatus] = useState("idle"); // idle | loading | done | error
   const [batch, setBatch] = useState(null);
   const [errorMsg, setErrorMsg] = useState("");
-  const [selected, setSelected] = useState(new Set());
-  const [overrides, setOverrides] = useState({}); // { [rowId]: { venueCandidateId?, artistCandidateId? } }
+  // Sprint 5D: `selected` is no longer state -- it's DERIVED (see
+  // deriveSelection below) from these two provenance sets, so "the system
+  // never included this row" and "the admin explicitly excluded this row"
+  // can never be confused with each other. See batchSelection.js's header
+  // comment for why this matters: it's what lets a manual exclusion survive
+  // a later grouped decision changing the row's state (item 8's
+  // requirement), with no reconciliation effect needed.
+  const [explicitlyIncluded, setExplicitlyIncluded] = useState(new Set());
+  const [explicitlyExcluded, setExplicitlyExcluded] = useState(new Set());
+  const [overrides, setOverrides] = useState({}); // { [rowId]: { venueCandidateId?, artistCandidateId?, ... } }
+  // Sprint 5D: one decision per venue/artist/duplicate group, keyed by
+  // groupId -- see groupResolution.js's header comment for the full
+  // precedence pipeline this composes with `overrides` through.
+  const [groupDecisions, setGroupDecisions] = useState({});
+  const [existingGigs, setExistingGigs] = useState([]); // persisted -- groupDuplicateClusters needs it
+  const [openPanels, setOpenPanels] = useState(new Set());
+  const panelRefs = useRef({});
   const [filter, setFilter] = useState("all");
   const [attentionOnly, setAttentionOnly] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -6743,7 +7286,7 @@ function ImportReviewDashboard({ parseResult }) {
     setStatus("loading");
     setErrorMsg("");
     try {
-      const [venues, artistProfiles, existingGigs] = await Promise.all([
+      const [venues, artistProfiles, gigs] = await Promise.all([
         DB.getVenues(),
         DB.getArtistProfiles(),
         DB.getAllGigs(),
@@ -6751,11 +7294,11 @@ function ImportReviewDashboard({ parseResult }) {
       const matched = await runMatching(parseResult, {
         venues,
         artistProfiles,
-        existingGigs,
+        existingGigs: gigs,
         searchFn: (entityType, query) => DB.searchEntities(entityType, query),
       });
       setBatch(matched);
-      setSelected(computeDefaultSelection(matched));
+      setExistingGigs(gigs);
       setStatus("done");
     } catch (e) {
       setErrorMsg(e.message || "Matching failed");
@@ -6763,25 +7306,62 @@ function ImportReviewDashboard({ parseResult }) {
     }
   };
 
-  // Re-derives each row's state after admin overrides (accepted fuzzy
-  // candidates) are applied -- duplicate detection itself is never
-  // recomputed here: accepting a match candidate doesn't change whether a
-  // row looks like a duplicate, only whether its venue/artist link is
-  // resolved.
+  // Grouping runs exactly once, off the raw runMatching() output -- never
+  // off resolvedBatch -- so a row can't "fall out of" its group because a
+  // decision changed its tier (which would be circular), and these never
+  // recompute on a decision/override/selection change, only when the batch
+  // itself changes (i.e. once, right after matching finishes).
+  const venueMissingGroups = useMemo(() => (batch ? groupMissingVenues(batch) : []), [batch]);
+  const venueFuzzyGroups = useMemo(() => (batch ? groupFuzzyVenues(batch) : []), [batch]);
+  const artistMissingGroups = useMemo(() => (batch ? groupMissingArtists(batch) : []), [batch]);
+  const artistFuzzyGroups = useMemo(() => (batch ? groupFuzzyArtists(batch) : []), [batch]);
+  const duplicateGroups = useMemo(() => (batch ? groupDuplicateClusters(batch, { existingGigs }) : []), [batch, existingGigs]);
+
+  const venueMissingIndex = useMemo(() => indexRowsByGroup(venueMissingGroups), [venueMissingGroups]);
+  const venueFuzzyIndex = useMemo(() => indexRowsByGroup(venueFuzzyGroups), [venueFuzzyGroups]);
+  const artistMissingIndex = useMemo(() => indexRowsByGroup(artistMissingGroups), [artistMissingGroups]);
+  const artistFuzzyIndex = useMemo(() => indexRowsByGroup(artistFuzzyGroups), [artistFuzzyGroups]);
+  const duplicateIndex = useMemo(() => indexRowsByGroup(duplicateGroups), [duplicateGroups]);
+
+  // The full Sprint 5D precedence pipeline: parsed match -> venue group
+  // decision -> artist group decision -> duplicate group decision -> this
+  // row's own override (always wins for that row only) -> deriveRowState().
+  // A row belongs to at most one venue group (missing OR fuzzy, never
+  // both -- its venueMatch has exactly one tier) and at most one artist
+  // group, so only one of each pair of indexes will ever have an entry for
+  // a given row id.
   const resolvedBatch = useMemo(() => {
     if (!batch) return [];
     return batch.map((row) => {
-      const withOverrides = withOverridesApplied(row, overrides[row.id]);
-      const rowState = deriveRowState({
-        parserStatus: withOverrides.status,
-        fields: withOverrides.fields,
-        duplicate: withOverrides.duplicate,
-        venueMatch: withOverrides.venueMatch,
-        artistMatch: withOverrides.artistMatch,
+      const venueGroupId = venueMissingIndex.get(row.id) ?? venueFuzzyIndex.get(row.id);
+      const artistGroupId = artistMissingIndex.get(row.id) ?? artistFuzzyIndex.get(row.id);
+      const duplicateGroupId = duplicateIndex.get(row.id);
+      const composed = composeResolvedRow(row, {
+        venueGroupDecision: venueGroupId ? groupDecisions[venueGroupId] : undefined,
+        artistGroupDecision: artistGroupId ? groupDecisions[artistGroupId] : undefined,
+        duplicateGroupDecision: duplicateGroupId ? groupDecisions[duplicateGroupId] : undefined,
+        override: overrides[row.id],
       });
-      return { ...withOverrides, rowState };
+      const rowState = deriveRowState({
+        parserStatus: composed.status,
+        fields: composed.fields,
+        duplicate: composed.duplicate,
+        venueMatch: composed.venueMatch,
+        artistMatch: composed.artistMatch,
+      });
+      return { ...composed, rowState };
     });
-  }, [batch, overrides]);
+  }, [batch, groupDecisions, overrides, venueMissingIndex, venueFuzzyIndex, artistMissingIndex, artistFuzzyIndex, duplicateIndex]);
+
+  const rowsById = useMemo(() => new Map(resolvedBatch.map((r) => [r.id, r])), [resolvedBatch]);
+
+  // The single source of truth for "is this row currently selected" -- a
+  // pure derivation, not an imperatively-patched Set, so a row drops back
+  // out of selection the instant its rowState or exclusion status changes.
+  const selected = useMemo(
+    () => deriveSelection(resolvedBatch, { explicitlyIncluded, explicitlyExcluded }),
+    [resolvedBatch, explicitlyIncluded, explicitlyExcluded]
+  );
 
   const counts = useMemo(() => summariseBatch(resolvedBatch, selected), [resolvedBatch, selected]);
 
@@ -6806,11 +7386,23 @@ function ImportReviewDashboard({ parseResult }) {
   }, [resolvedBatch, selected, filter, attentionOnly]);
 
   const toggleSelected = (id) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
+    if (selected.has(id)) {
+      setExplicitlyIncluded((prev) => { const next = new Set(prev); next.delete(id); return next; });
+      setExplicitlyExcluded((prev) => new Set(prev).add(id));
+    } else {
+      setExplicitlyExcluded((prev) => { const next = new Set(prev); next.delete(id); return next; });
+      setExplicitlyIncluded((prev) => new Set(prev).add(id));
+    }
+  };
+
+  // Shared by all four whole-batch/visible-scoped bulk actions -- each of
+  // selectAllReady/excludeAllErrors/excludeAllDuplicates/excludeVisibleSelected
+  // now takes/returns the { explicitlyIncluded, explicitlyExcluded } pair
+  // instead of a raw selected Set (see batchSelection.js's header comment).
+  const applySelectionChange = (updateFn, items) => {
+    const next = updateFn(items, { explicitlyIncluded, explicitlyExcluded });
+    setExplicitlyIncluded(next.explicitlyIncluded);
+    setExplicitlyExcluded(next.explicitlyExcluded);
   };
 
   const acceptVenue = (rowId, candidateId) =>
@@ -6825,6 +7417,40 @@ function ImportReviewDashboard({ parseResult }) {
       if (Object.keys(rest).length) next[rowId] = rest; else delete next[rowId];
       return next;
     });
+
+  // Recording a group decision. EXCLUDE_AFFECTED is the one action with a
+  // real selection-level side effect (every other action only changes
+  // match/duplicate data, handled entirely by composeResolvedRow) -- it
+  // adds the group's own rowIds (already in hand, no re-lookup needed) to
+  // explicitlyExcluded so those rows stay out of `selected` even if a
+  // later, different decision would otherwise have made them Ready.
+  const handleGroupDecide = (group, decision) => {
+    setGroupDecisions((prev) => ({ ...prev, [group.id]: decision }));
+    if (decision.action === VENUE_MISSING_ACTIONS.EXCLUDE_AFFECTED) {
+      setExplicitlyIncluded((prev) => { const next = new Set(prev); for (const id of group.rowIds) next.delete(id); return next; });
+      setExplicitlyExcluded((prev) => { const next = new Set(prev); for (const id of group.rowIds) next.add(id); return next; });
+    }
+  };
+
+  // Undo: removing the decision reverts resolvedBatch on the next render
+  // (composeResolvedRow simply has nothing to apply for this group
+  // anymore) -- for EXCLUDE_AFFECTED specifically, also un-excludes the
+  // group's rows so they return to whatever deriveSelection would
+  // otherwise say for them now.
+  const handleGroupUndo = (group) => {
+    const decision = groupDecisions[group.id];
+    setGroupDecisions((prev) => { const next = { ...prev }; delete next[group.id]; return next; });
+    if (decision?.action === VENUE_MISSING_ACTIONS.EXCLUDE_AFFECTED) {
+      setExplicitlyExcluded((prev) => { const next = new Set(prev); for (const id of group.rowIds) next.delete(id); return next; });
+    }
+  };
+
+  const togglePanel = (key) =>
+    setOpenPanels((prev) => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; });
+  const jumpToPanel = (key) => {
+    setOpenPanels((prev) => new Set(prev).add(key));
+    requestAnimationFrame(() => panelRefs.current[key]?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  };
 
   return (
     <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 24, marginTop: 20 }}>
@@ -6850,12 +7476,53 @@ function ImportReviewDashboard({ parseResult }) {
         <>
           <div aria-live="polite" style={visuallyHiddenCss}>{selected.size} rows selected for import.</div>
           <BatchSummary counts={counts} />
+
+          <GroupedResolutionSummary
+            venueMissingGroups={venueMissingGroups}
+            venueFuzzyGroups={venueFuzzyGroups}
+            artistMissingGroups={artistMissingGroups}
+            artistFuzzyGroups={artistFuzzyGroups}
+            duplicateGroups={duplicateGroups}
+            decisions={groupDecisions}
+            onJumpTo={jumpToPanel}
+          />
+          <GroupPanel
+            title="MISSING VENUES" groups={venueMissingGroups} decisions={groupDecisions} rowsById={rowsById}
+            onDecide={handleGroupDecide} onUndo={handleGroupUndo}
+            isOpen={openPanels.has("venueMissing")} onToggle={() => togglePanel("venueMissing")}
+            RowComponent={VenueMissingGroupRow} panelRef={(el) => (panelRefs.current.venueMissing = el)}
+          />
+          <GroupPanel
+            title="FUZZY VENUE MATCHES" groups={venueFuzzyGroups} decisions={groupDecisions} rowsById={rowsById}
+            onDecide={handleGroupDecide} onUndo={handleGroupUndo}
+            isOpen={openPanels.has("venueFuzzy")} onToggle={() => togglePanel("venueFuzzy")}
+            RowComponent={VenueFuzzyGroupRow} panelRef={(el) => (panelRefs.current.venueFuzzy = el)}
+          />
+          <GroupPanel
+            title="MISSING ARTISTS" groups={artistMissingGroups} decisions={groupDecisions} rowsById={rowsById}
+            onDecide={handleGroupDecide} onUndo={handleGroupUndo}
+            isOpen={openPanels.has("artistMissing")} onToggle={() => togglePanel("artistMissing")}
+            RowComponent={ArtistMissingGroupRow} panelRef={(el) => (panelRefs.current.artistMissing = el)}
+          />
+          <GroupPanel
+            title="FUZZY ARTIST MATCHES" groups={artistFuzzyGroups} decisions={groupDecisions} rowsById={rowsById}
+            onDecide={handleGroupDecide} onUndo={handleGroupUndo}
+            isOpen={openPanels.has("artistFuzzy")} onToggle={() => togglePanel("artistFuzzy")}
+            RowComponent={ArtistFuzzyGroupRow} panelRef={(el) => (panelRefs.current.artistFuzzy = el)}
+          />
+          <GroupPanel
+            title="DUPLICATE CLUSTERS" groups={duplicateGroups} decisions={groupDecisions} rowsById={rowsById}
+            onDecide={handleGroupDecide} onUndo={handleGroupUndo}
+            isOpen={openPanels.has("duplicates")} onToggle={() => togglePanel("duplicates")}
+            RowComponent={DuplicateClusterGroupRow} panelRef={(el) => (panelRefs.current.duplicates = el)}
+          />
+
           <BulkActionsBar
-            onSelectAllReady={() => setSelected((prev) => selectAllReady(resolvedBatch, prev))}
-            onExcludeAllErrors={() => setSelected((prev) => excludeAllErrors(resolvedBatch, prev))}
-            onExcludeAllDuplicates={() => setSelected((prev) => excludeAllDuplicates(resolvedBatch, prev))}
+            onSelectAllReady={() => applySelectionChange(selectAllReady, resolvedBatch)}
+            onExcludeAllErrors={() => applySelectionChange(excludeAllErrors, resolvedBatch)}
+            onExcludeAllDuplicates={() => applySelectionChange(excludeAllDuplicates, resolvedBatch)}
             onBulkApprove={() => setOverrides((prev) => ({ ...prev, ...applyBulkApproveSuggestions(resolvedBatch) }))}
-            onExcludeVisibleSelected={() => setSelected((prev) => excludeVisibleSelected(filtered, prev))}
+            onExcludeVisibleSelected={() => applySelectionChange(excludeVisibleSelected, filtered)}
           />
           <FilterTabs filter={filter} setFilter={setFilter} counts={filterCounts} attentionOnly={attentionOnly} setAttentionOnly={setAttentionOnly} />
 
