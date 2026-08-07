@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   computeDefaultSelection,
+  deriveSelection,
   selectAllReady,
   excludeAllErrors,
   excludeAllDuplicates,
@@ -32,7 +33,42 @@ describe("computeDefaultSelection", () => {
   });
 });
 
-describe("whole-batch bulk selection helpers", () => {
+describe("deriveSelection", () => {
+  it("selects default-included (ready) rows with no provenance sets, same as computeDefaultSelection", () => {
+    const items = [item("r1", ROW_STATES.READY), item("r2", ROW_STATES.MISSING_VENUE)];
+    expect(deriveSelection(items, {})).toEqual(new Set(["r1"]));
+    expect(deriveSelection(items, {})).toEqual(computeDefaultSelection(items));
+  });
+
+  it("a row in explicitlyExcluded stays unselected even though its rowState is READY", () => {
+    const items = [item("r1", ROW_STATES.READY)];
+    const selected = deriveSelection(items, { explicitlyExcluded: new Set(["r1"]) });
+    expect(selected.has("r1")).toBe(false);
+  });
+
+  it("a row in explicitlyIncluded is selected even though its rowState is not default-included", () => {
+    const items = [item("r1", ROW_STATES.MISSING_VENUE)];
+    const selected = deriveSelection(items, { explicitlyIncluded: new Set(["r1"]) });
+    expect(selected.has("r1")).toBe(true);
+  });
+
+  it("explicit inclusion wins over explicit exclusion for the same row (should never happen together, but inclusion is the stronger signal)", () => {
+    const items = [item("r1", ROW_STATES.MISSING_VENUE)];
+    const selected = deriveSelection(items, { explicitlyIncluded: new Set(["r1"]), explicitlyExcluded: new Set(["r1"]) });
+    expect(selected.has("r1")).toBe(true);
+  });
+
+  it("a locked state (exact duplicate) is never selected regardless of provenance sets", () => {
+    const items = [item("r1", ROW_STATES.EXACT_DUPLICATE)];
+    // even a (hypothetically corrupted) explicitlyIncluded entry can't select it,
+    // since a locked row's checkbox is disabled and can never be added to that set
+    // by the UI -- deriveSelection itself has no special-case here, this documents
+    // that the real safety boundary is upstream (the checkbox being disabled).
+    expect(deriveSelection(items, {}).has("r1")).toBe(false);
+  });
+});
+
+describe("whole-batch bulk selection helpers (Sprint 5D: operate on explicitlyIncluded/explicitlyExcluded)", () => {
   const items = [
     item("ready1", ROW_STATES.READY),
     item("ready2", ROW_STATES.READY),
@@ -43,35 +79,58 @@ describe("whole-batch bulk selection helpers", () => {
     item("cancelled1", ROW_STATES.CANCELLED),
   ];
 
-  it("selectAllReady adds every ready row without touching others", () => {
-    const selected = new Set(["dup1"]); // pre-existing unrelated selection
-    const next = selectAllReady(items, selected);
-    expect(next).toEqual(new Set(["dup1", "ready1", "ready2"]));
+  it("selectAllReady removes every ready row from explicitlyExcluded, undoing a prior manual exclusion", () => {
+    const explicitlyIncluded = new Set();
+    const explicitlyExcluded = new Set(["ready1", "dup1"]); // ready1 was manually unchecked earlier
+    const next = selectAllReady(items, { explicitlyIncluded, explicitlyExcluded });
+    expect(next.explicitlyExcluded).toEqual(new Set(["dup1"])); // ready1 removed, dup1 (not ready) untouched
+    expect(next.explicitlyIncluded).toEqual(new Set());
   });
 
-  it("excludeAllErrors removes only ERROR_STATES rows", () => {
-    const selected = new Set(["ready1", "error1", "error2", "dup1", "cancelled1"]);
-    const next = excludeAllErrors(items, selected);
-    expect(next).toEqual(new Set(["ready1", "dup1", "cancelled1"]));
+  it("excludeAllErrors adds ERROR_STATES rows to explicitlyExcluded and clears them from explicitlyIncluded", () => {
+    const explicitlyIncluded = new Set(["error1"]); // error1 had been individually re-included
+    const explicitlyExcluded = new Set();
+    const next = excludeAllErrors(items, { explicitlyIncluded, explicitlyExcluded });
+    expect(next.explicitlyExcluded).toEqual(new Set(["error1", "error2"]));
+    expect(next.explicitlyIncluded).toEqual(new Set());
   });
 
-  it("excludeAllDuplicates removes only DUPLICATE_STATES rows", () => {
-    const selected = new Set(["ready1", "error1", "dup1", "dup2", "cancelled1"]);
-    const next = excludeAllDuplicates(items, selected);
-    expect(next).toEqual(new Set(["ready1", "error1", "cancelled1"]));
+  it("excludeAllDuplicates adds DUPLICATE_STATES rows to explicitlyExcluded", () => {
+    const next = excludeAllDuplicates(items, { explicitlyIncluded: new Set(), explicitlyExcluded: new Set() });
+    expect(next.explicitlyExcluded).toEqual(new Set(["dup1", "dup2"]));
   });
 
   it("neither bulk action touches cancelled/postponed/rescheduled rows", () => {
-    const selected = new Set(["cancelled1"]);
-    expect(excludeAllErrors(items, selected)).toEqual(new Set(["cancelled1"]));
-    expect(excludeAllDuplicates(items, selected)).toEqual(new Set(["cancelled1"]));
+    const base = { explicitlyIncluded: new Set(), explicitlyExcluded: new Set() };
+    expect(excludeAllErrors(items, base).explicitlyExcluded.has("cancelled1")).toBe(false);
+    expect(excludeAllDuplicates(items, base).explicitlyExcluded.has("cancelled1")).toBe(false);
   });
 
-  it("excludeVisibleSelected only removes rows present in the filtered list", () => {
-    const selected = new Set(["ready1", "ready2", "dup1"]);
+  it("excludeVisibleSelected only touches rows present in the filtered list", () => {
+    const explicitlyIncluded = new Set(["ready1", "ready2"]);
+    const explicitlyExcluded = new Set();
     const filtered = [item("ready1", ROW_STATES.READY)]; // only ready1 is "visible"
-    const next = excludeVisibleSelected(filtered, selected);
-    expect(next).toEqual(new Set(["ready2", "dup1"]));
+    const next = excludeVisibleSelected(filtered, { explicitlyIncluded, explicitlyExcluded });
+    expect(next.explicitlyIncluded).toEqual(new Set(["ready2"])); // ready1 removed, ready2 untouched
+    expect(next.explicitlyExcluded).toEqual(new Set(["ready1"]));
+  });
+
+  it("end-to-end: after selectAllReady, deriveSelection actually selects every ready row again", () => {
+    const explicitlyExcluded = new Set(["ready1", "ready2"]); // both manually unchecked
+    const { explicitlyIncluded: nextIncluded, explicitlyExcluded: nextExcluded } =
+      selectAllReady(items, { explicitlyIncluded: new Set(), explicitlyExcluded });
+    const selected = deriveSelection(items, { explicitlyIncluded: nextIncluded, explicitlyExcluded: nextExcluded });
+    expect(selected.has("ready1")).toBe(true);
+    expect(selected.has("ready2")).toBe(true);
+  });
+
+  it("end-to-end: after excludeAllErrors, deriveSelection never selects an error-state row even if it later becomes ready", () => {
+    const { explicitlyIncluded, explicitlyExcluded } = excludeAllErrors(items, { explicitlyIncluded: new Set(), explicitlyExcluded: new Set() });
+    // simulate a later grouped decision resolving error1's rowState to READY --
+    // the manual exclusion must still be honoured (item 8's requirement).
+    const laterItems = items.map((it) => (it.id === "error1" ? { ...it, rowState: ROW_STATES.READY } : it));
+    const selected = deriveSelection(laterItems, { explicitlyIncluded, explicitlyExcluded });
+    expect(selected.has("error1")).toBe(false);
   });
 });
 

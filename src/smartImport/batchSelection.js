@@ -4,58 +4,100 @@
 // skipped, and why." Pure and synchronous, like every other Sprint 5A/5B
 // module: no React, no Supabase, plain data in and out.
 //
-// Two pieces of admin-driven state live outside a row's own computed
-// fields, both owned by the caller (ImportReviewDashboard in App.jsx):
-//   - `selected`: a Set<rowId> of which rows are currently included.
-//   - `overrides`: a plain object `{ [rowId]: { venueCandidateId?,
-//     artistCandidateId? } }` recording an admin's accepted fuzzy-match
-//     candidate for a row, if any.
-// Every function below takes these as plain arguments and returns a new
-// value rather than mutating -- consistent with how the rest of this
+// Sprint 5D change: `selected` is no longer state the caller mutates
+// directly -- it's DERIVED (see deriveSelection below) from two provenance
+// sets, `explicitlyIncluded`/`explicitlyExcluded`, both owned by the caller
+// (ImportReviewDashboard in App.jsx). This exists specifically so "the
+// system never auto-included this row" and "the admin explicitly excluded
+// this row" can never be confused with each other -- a single undifferen-
+// tiated Set couldn't tell them apart, which made it impossible to
+// guarantee a manual exclusion survives a later grouped decision changing
+// the row's state (see groupResolution.js's header comment and Sprint 5D's
+// plan doc, "Composing with existing state"). `overrides`: a plain object
+// `{ [rowId]: { venueCandidateId?, artistCandidateId?, ... } }` recording
+// an admin's accepted fuzzy-match candidate (and, as of Sprint 5D, other
+// one-off row-level resolution fields -- see groupResolution.js) for a row,
+// if any. Every function below takes these as plain arguments and returns
+// a new value rather than mutating -- consistent with how the rest of this
 // module tree treats data.
 import { ROW_STATES, EXCLUDED_MANUALLY, DUPLICATE_STATES, ERROR_STATES, DEFAULT_INCLUDED_STATES, ROW_STATE_LABELS, resolveDisplayState } from "./reviewBatch.js";
 
-export function computeDefaultSelection(items) {
+// The single source of truth for "is this row currently selected": a row is
+// selected iff it was explicitly included, OR its own rowState is one of
+// the default-included states and it was NOT explicitly excluded. Because
+// this is a pure derivation (not an imperatively-patched Set), a row
+// dropped back out of selection the instant its rowState or its exclusion
+// status changes -- no reconciliation step needed, and a manual exclusion
+// can never be silently lost when a later decision changes the row's state.
+export function deriveSelection(items, { explicitlyIncluded = new Set(), explicitlyExcluded = new Set() } = {}) {
   const selected = new Set();
   for (const item of items) {
-    if (DEFAULT_INCLUDED_STATES.includes(item.rowState)) selected.add(item.id);
+    const included =
+      explicitlyIncluded.has(item.id) ||
+      (DEFAULT_INCLUDED_STATES.includes(item.rowState) && !explicitlyExcluded.has(item.id));
+    if (included) selected.add(item.id);
   }
   return selected;
 }
 
+// The very first render, before any admin action: equivalent to
+// deriveSelection with both provenance sets empty.
+export function computeDefaultSelection(items) {
+  return deriveSelection(items, {});
+}
+
 // Whole-batch bulk actions -- always operate on every row regardless of
 // the current filter, so their effect is predictable no matter what the
-// admin happens to be looking at.
-export function selectAllReady(items, selected) {
-  const next = new Set(selected);
+// admin happens to be looking at. All four now take/return the
+// { explicitlyIncluded, explicitlyExcluded } pair instead of a raw
+// `selected` Set -- a real semantic change from Sprint 5B.5, not just a
+// rename: "select"/"exclude" now record a durable decision (which
+// `deriveSelection` will keep honouring even after a later rowState change)
+// rather than a one-time patch to whatever the selected Set happened to
+// contain at the time.
+export function selectAllReady(items, { explicitlyIncluded, explicitlyExcluded }) {
+  const nextIncluded = new Set(explicitlyIncluded);
+  const nextExcluded = new Set(explicitlyExcluded);
   for (const item of items) {
-    if (item.rowState === ROW_STATES.READY) next.add(item.id);
+    if (item.rowState === ROW_STATES.READY) nextExcluded.delete(item.id);
   }
-  return next;
+  return { explicitlyIncluded: nextIncluded, explicitlyExcluded: nextExcluded };
 }
 
-export function excludeAllErrors(items, selected) {
-  const next = new Set(selected);
+export function excludeAllErrors(items, { explicitlyIncluded, explicitlyExcluded }) {
+  const nextIncluded = new Set(explicitlyIncluded);
+  const nextExcluded = new Set(explicitlyExcluded);
   for (const item of items) {
-    if (ERROR_STATES.includes(item.rowState)) next.delete(item.id);
+    if (ERROR_STATES.includes(item.rowState)) {
+      nextIncluded.delete(item.id);
+      nextExcluded.add(item.id);
+    }
   }
-  return next;
+  return { explicitlyIncluded: nextIncluded, explicitlyExcluded: nextExcluded };
 }
 
-export function excludeAllDuplicates(items, selected) {
-  const next = new Set(selected);
+export function excludeAllDuplicates(items, { explicitlyIncluded, explicitlyExcluded }) {
+  const nextIncluded = new Set(explicitlyIncluded);
+  const nextExcluded = new Set(explicitlyExcluded);
   for (const item of items) {
-    if (DUPLICATE_STATES.includes(item.rowState)) next.delete(item.id);
+    if (DUPLICATE_STATES.includes(item.rowState)) {
+      nextIncluded.delete(item.id);
+      nextExcluded.add(item.id);
+    }
   }
-  return next;
+  return { explicitlyIncluded: nextIncluded, explicitlyExcluded: nextExcluded };
 }
 
 // The one selection-scoped bulk action: only touches rows currently in
 // view (`filteredItems`), unlike the whole-batch actions above.
-export function excludeVisibleSelected(filteredItems, selected) {
-  const next = new Set(selected);
-  for (const item of filteredItems) next.delete(item.id);
-  return next;
+export function excludeVisibleSelected(filteredItems, { explicitlyIncluded, explicitlyExcluded }) {
+  const nextIncluded = new Set(explicitlyIncluded);
+  const nextExcluded = new Set(explicitlyExcluded);
+  for (const item of filteredItems) {
+    nextIncluded.delete(item.id);
+    nextExcluded.add(item.id);
+  }
+  return { explicitlyIncluded: nextIncluded, explicitlyExcluded: nextExcluded };
 }
 
 // Accepts a specific fuzzy candidate for one match (venue or artist),

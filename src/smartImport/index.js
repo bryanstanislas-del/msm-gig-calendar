@@ -35,6 +35,7 @@ export {
 } from "./reviewBatch.js";
 export {
   computeDefaultSelection,
+  deriveSelection,
   selectAllReady,
   excludeAllErrors,
   excludeAllDuplicates,
@@ -53,3 +54,18 @@ export {
 // importEngine.js's header comment.
 export { validateRowForImport, buildGigInsertPayload, runImport, summariseImportResult } from "./importEngine.js";
 export { mapWithConcurrency } from "./concurrency.js";
+
+// Sprint 5D: grouped entity resolution. Groups rows sharing the same source
+// venue/artist text (or the same duplicate cluster) into one decision
+// instead of many -- still no database writes anywhere below this line,
+// same as everything above. See resolutionGroupUtils.js's and
+// groupResolution.js's header comments.
+export { GROUP_SAMPLE_SIZE, buildGroupId, sortGroups, indexRowsByGroup } from "./resolutionGroupUtils.js";
+export { groupMissingVenues, groupFuzzyVenues, VENUE_MISSING_ACTIONS, VENUE_FUZZY_ACTIONS } from "./venueResolutionGroups.js";
+export { groupMissingArtists, groupFuzzyArtists, ARTIST_MISSING_ACTIONS, ARTIST_FUZZY_ACTIONS } from "./artistResolutionGroups.js";
+export {
+  groupDuplicateClusters,
+  DUPLICATE_CLUSTER_ACTIONS,
+  LOCKED_DUPLICATE_TIERS,
+} from "./duplicateResolutionGroups.js";
+export { applyGroupDecisionToRow, composeResolvedRow } from "./groupResolution.js";
