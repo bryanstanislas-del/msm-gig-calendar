@@ -2414,7 +2414,7 @@ function SubmitGigForm({ user, profile, onSubmitted, onEditProfile }) {
         await fetch("/api/notify", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...form, type: "gig_submission" }),
+          body: JSON.stringify({ ...form, type: "gig_submission", submitter_email: user?.email || null }),
         });
       } catch(emailErr) { console.error("Moderation email failed to send:", emailErr); }
       setStatus("success");
