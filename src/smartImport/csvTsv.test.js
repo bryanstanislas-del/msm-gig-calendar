@@ -96,6 +96,34 @@ describe("parseDelimited", () => {
     expect(records[0].notes).toBe("Line one\nLine two");
   });
 
+  it("maps an explicit Genre header column alongside the base five", () => {
+    const csv = "Artist,Venue,City,Date,Time,Genre\nThe Mafia,The Obelisk,Woolston,2026-06-06,20:00,Punk";
+    const { records, mapping } = parseDelimited(csv, ",");
+    expect(mapping.genre).toBe(5);
+    expect(records[0].genre).toBe("Punk");
+  });
+
+  it("maps an optional 6th positional column to genre when no header is recognized, without flagging ordinary 5-column rows as a mismatch", () => {
+    const sixCol = "Fleetingwood Mac,The Wedgewood Rooms,Portsmouth,2026-12-04,19:30,Tribute";
+    const { records: sixRecords, usedPositionalFallback } = parseDelimited(sixCol, ",");
+    expect(usedPositionalFallback).toBe(true);
+    expect(sixRecords[0].genre).toBe("Tribute");
+    expect(sixRecords[0].columnCountMismatch).toBe(false);
+
+    // The existing 5-column shape (no genre) must keep working exactly as
+    // before -- no genre column attempted, no spurious mismatch flag.
+    const fiveCol = "The Mafia,The Obelisk,Woolston,2026-06-06,20:00";
+    const { records: fiveRecords } = parseDelimited(fiveCol, ",");
+    expect(fiveRecords[0].genre).toBeNull();
+    expect(fiveRecords[0].columnCountMismatch).toBe(false);
+  });
+
+  it("leaves genre null (not an empty string) when the Genre column exists but the cell is blank", () => {
+    const csv = "Artist,Venue,City,Date,Time,Genre\nThe Mafia,The Obelisk,Woolston,2026-06-06,20:00,";
+    const { records } = parseDelimited(csv, ",");
+    expect(records[0].genre).toBeNull();
+  });
+
   it("every alias variant maps to its target field", () => {
     for (const [field, aliases] of Object.entries(COLUMN_ALIASES)) {
       for (const alias of aliases) {

@@ -9,6 +9,7 @@ import { sniffDelimitedFormat, parseDelimited } from "./csvTsv.js";
 import { filterPageFurniture } from "./furniture.js";
 import { detectSourceProfile, parseDateWithConfidence, formatDateISO, detectFestivalOrTribute, detectCancelled, detectPostponed, detectRescheduled, detectSoldOut } from "./sourceProfiles.js";
 import { DATE_CONFIDENCE, TEXT_FIELD_CONFIDENCE, assembleEventRow } from "./confidence.js";
+import { normalizeGenre } from "../genres.js";
 
 function emptyResult() {
   return {
@@ -32,12 +33,21 @@ function eventRowFromDelimitedRecord(record) {
     artistName: record.artistName ? TEXT_FIELD_CONFIDENCE.EXPLICIT : TEXT_FIELD_CONFIDENCE.MISSING,
   };
 
+  // A genre cell that doesn't match the canonical taxonomy (see
+  // src/genres.js) is treated the same as no genre at all -- never
+  // silently defaulted to a specific genre -- but it's still surfaced as
+  // an issue so an admin reviewing the batch knows why a supplied value
+  // didn't take.
+  const normalizedGenre = normalizeGenre(record.genre);
+  const genreUnrecognized = !!record.genre && !normalizedGenre;
+
   const issues = [];
   if (!dateResult.parsed) issues.push("Date unclear");
   if (!record.venueName) issues.push("No venue");
   if (!record.city) issues.push("No city");
   if (!record.artistName) issues.push("No artist");
   if (record.columnCountMismatch) issues.push("Row has fewer columns than the header row");
+  if (genreUnrecognized) issues.push(`Unrecognized genre "${record.genre}" -- no genre assigned`);
 
   const fields = {
     artistName: record.artistName || null,
@@ -47,7 +57,7 @@ function eventRowFromDelimitedRecord(record) {
     date: dateResult.parsed ? formatDateISO(dateResult.parsed) : null,
     dateRaw: record.date || "",
     time: record.time || null,
-    genre: null,
+    genre: normalizedGenre,
     ticketUrl: record.ticketUrl || null,
     notes: record.notes || null,
     isFestivalOrTribute: detectFestivalOrTribute(`${record.artistName || ""} ${record.notes || ""}`),
@@ -70,7 +80,7 @@ function parseDelimitedInput(rawText, detectedFormat) {
     if (usedPositionalFallback) {
       row.issues = [
         ...row.issues,
-        "No header row detected -- columns mapped positionally (Artist, Venue, City, Date, Time). Please verify.",
+        "No header row detected -- columns mapped positionally (Artist, Venue, City, Date, Time, and Genre if a 6th column is present). Please verify.",
       ];
     }
     return row;
