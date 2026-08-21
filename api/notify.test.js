@@ -12,14 +12,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import handler from "./notify.js";
 
-function fakeReq(body) {
-  return { method: "POST", body };
+const ALLOWED_ORIGIN = "https://calendar.musicscenemagazine.co.uk";
+
+function fakeReq(body, { method = "POST", origin } = {}) {
+  return { method, body, headers: origin ? { origin } : {} };
 }
 function fakeRes() {
-  const res = {};
+  const res = { headers: {} };
   res.status = vi.fn(() => res);
   res.json = vi.fn(() => res);
   res.end = vi.fn(() => res);
+  res.setHeader = vi.fn((name, value) => { res.headers[name] = value; });
   return res;
 }
 
@@ -41,11 +44,64 @@ describe("api/notify.js", () => {
     delete process.env.MODERATION_NOTIFY_EMAIL;
   });
 
-  it("rejects non-POST requests without calling Resend", async () => {
+  it("rejects non-POST, non-OPTIONS requests without calling Resend", async () => {
     const res = fakeRes();
-    await handler({ method: "GET" }, res);
+    await handler(fakeReq(undefined, { method: "GET" }), res);
     expect(res.status).toHaveBeenCalledWith(405);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  describe("CORS", () => {
+    it("an OPTIONS preflight from an allowed origin succeeds (204) instead of the previous bare 405, and carries the required CORS headers", async () => {
+      const res = fakeRes();
+      await handler(fakeReq(undefined, { method: "OPTIONS", origin: ALLOWED_ORIGIN }), res);
+
+      expect(res.status).toHaveBeenCalledWith(204);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(res.headers["Access-Control-Allow-Origin"]).toBe(ALLOWED_ORIGIN);
+      expect(res.headers["Access-Control-Allow-Methods"]).toContain("POST");
+      expect(res.headers["Access-Control-Allow-Methods"]).toContain("OPTIONS");
+      expect(res.headers["Access-Control-Allow-Headers"]).toContain("Content-Type");
+    });
+
+    it("a POST from an allowed origin still succeeds and carries the CORS header the browser needs to accept the response", async () => {
+      const res = fakeRes();
+      await handler(
+        fakeReq({ type: "gig_submission", band_name: "X", venue: "Y", city: "Z", date: "2026-01-01", time: "20:00" }, { origin: ALLOWED_ORIGIN }),
+        res
+      );
+
+      expect(res.headers["Access-Control-Allow-Origin"]).toBe(ALLOWED_ORIGIN);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    it("a request from an origin not on the allow-list gets no Access-Control-Allow-Origin header at all", async () => {
+      const res = fakeRes();
+      await handler(
+        fakeReq({ type: "gig_submission", band_name: "X", venue: "Y", city: "Z", date: "2026-01-01", time: "20:00" }, { origin: "https://evil.example.com" }),
+        res
+      );
+
+      expect(res.headers["Access-Control-Allow-Origin"]).toBeUndefined();
+    });
+
+    it("a request with no Origin header (same-origin / non-browser caller) is unaffected -- no CORS headers, normal behaviour", async () => {
+      const res = fakeRes();
+      await handler(fakeReq({ type: "gig_submission", band_name: "X", venue: "Y", city: "Z", date: "2026-01-01", time: "20:00" }), res);
+
+      expect(res.headers["Access-Control-Allow-Origin"]).toBeUndefined();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    it("an unsupported method from an allowed origin is still rejected with 405, even though CORS headers are present", async () => {
+      const res = fakeRes();
+      await handler(fakeReq(undefined, { method: "DELETE", origin: ALLOWED_ORIGIN }), res);
+
+      expect(res.status).toHaveBeenCalledWith(405);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
   });
 
   it("a public gig_submission sends exactly one Resend call, subject 'Calendar Moderation', PENDING content, and the submitter's contact", async () => {

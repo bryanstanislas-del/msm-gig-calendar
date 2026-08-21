@@ -13,7 +13,34 @@ function row(label, value) {
 const FROM_EMAIL = process.env.RESEND_FROM_EMAIL || "MSM Gig Calendar <onboarding@resend.dev>";
 const TO_EMAIL = process.env.MODERATION_NOTIFY_EMAIL || "submissions@musicscenemagazine.co.uk";
 
+// CORS, scoped to this endpoint only: it's called directly from the browser
+// (SubmitGigForm, ConfirmationSummary in App.jsx), and the app is legitimately
+// served from more than one origin (the custom domain, and the underlying
+// Vercel deployment URL vercel.json redirects from). A cross-origin POST with
+// a JSON body always triggers a browser preflight (OPTIONS) first -- this
+// endpoint previously had no OPTIONS handling at all and fell straight into
+// the "reject unsupported method" branch below, returning 405 to the
+// preflight itself. A failed preflight means the browser never sends the
+// real POST, which is exactly what Vercel's logs showed (OPTIONS 405, "No
+// outgoing requests" -- Resend was never even contacted). No other route
+// needs or gets CORS headers, and this never touches RESEND_API_KEY or moves
+// sending client-side -- only which origins may call this one endpoint.
+const ALLOWED_ORIGINS = new Set(
+  ["https://calendar.musicscenemagazine.co.uk", "https://msm-gig-calendar.vercel.app", process.env.VITE_BASE_URL].filter(Boolean)
+);
+
+function applyCors(req, res) {
+  const origin = req.headers.origin;
+  if (!origin || !ALLOWED_ORIGINS.has(origin)) return;
+  res.setHeader("Access-Control-Allow-Origin", origin);
+  res.setHeader("Vary", "Origin");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+}
+
 export default async function handler(req, res) {
+  applyCors(req, res);
+  if (req.method === "OPTIONS") return res.status(204).end();
   if (req.method !== "POST") return res.status(405).end();
 
   const { type, ...data } = req.body;
