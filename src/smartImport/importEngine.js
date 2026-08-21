@@ -96,8 +96,11 @@ function buildMatchDecisions(item) {
 
 // Maps one resolved dashboard row to import_gig_row's RPC parameters.
 // time/genre are passed through as-is, including null/empty -- the RPC
-// itself coalesces those to their DB defaults ('Time TBC'/'Indie Rock'),
-// so that default logic exists in exactly one place, not duplicated here.
+// itself coalesces empty time to its DB default ('Time TBC'). genre has no
+// such fallback: a missing or unrecognised genre (see parser.js's
+// normalizeGenre) stays null all the way into gigs.genre, which is
+// nullable with no default -- an unclassified gig must never be silently
+// mislabeled with a specific genre.
 // band_profile_id is only ever set for exact/confirmed artist matches --
 // "Missing Artist" rows always import as free text with no profile link
 // (confirmed decision: Sprint 5C never auto-creates artist profiles, only

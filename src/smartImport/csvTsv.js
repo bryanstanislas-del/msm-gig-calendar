@@ -12,13 +12,29 @@ export const COLUMN_ALIASES = {
   city: ["city", "town", "location"],
   date: ["date", "gig date", "event date"],
   time: ["time", "doors", "start time", "start"],
+  genre: ["genre"],
   ticketUrl: ["tickets", "ticket link", "ticket url", "tickets url"],
   notes: ["notes", "description", "info"],
 };
 
 // Positional fallback order when no header row is detected, matching the
-// most common "Artist, Venue, City, Date, Time" export shape.
+// most common "Artist, Venue, City, Date, Time" export shape -- genre is
+// deliberately not in this base order: it's an optional 6th column, and
+// including it unconditionally would inflate expectedColumnCount (see
+// positionalOrderFor below) and flag every ordinary 5-column row as a
+// column-count mismatch.
 const POSITIONAL_FALLBACK_ORDER = ["artistName", "venueName", "city", "date", "time"];
+const POSITIONAL_FALLBACK_ORDER_WITH_GENRE = [...POSITIONAL_FALLBACK_ORDER, "genre"];
+
+// Picks the positional column order to use for a headerless batch, based on
+// its actual column count -- 5 columns keeps today's behaviour exactly as
+// it was; 6 maps the extra column to genre (the "Artist, Venue, City, Date,
+// Time, Genre" shape from the Gig Parse spec).
+function positionalOrderFor(columnCount) {
+  return columnCount >= POSITIONAL_FALLBACK_ORDER_WITH_GENRE.length
+    ? POSITIONAL_FALLBACK_ORDER_WITH_GENRE
+    : POSITIONAL_FALLBACK_ORDER;
+}
 
 function normalizeHeaderCell(cell) {
   return String(cell ?? "").toLowerCase().trim().replace(/\s+/g, " ");
@@ -104,9 +120,10 @@ export function parseDelimited(text, delimiter) {
   }
 
   const hasHeader = looksLikeHeaderRow(rows[0]);
-  const mapping = hasHeader ? detectHeaderMapping(rows[0]) : Object.fromEntries(POSITIONAL_FALLBACK_ORDER.map((f, i) => [f, i]));
+  const positionalOrder = hasHeader ? null : positionalOrderFor(rows[0].length);
+  const mapping = hasHeader ? detectHeaderMapping(rows[0]) : Object.fromEntries(positionalOrder.map((f, i) => [f, i]));
   const dataRows = hasHeader ? rows.slice(1) : rows;
-  const expectedColumnCount = hasHeader ? rows[0].length : POSITIONAL_FALLBACK_ORDER.length;
+  const expectedColumnCount = hasHeader ? rows[0].length : positionalOrder.length;
 
   const records = dataRows.map((row) => {
     const get = (field) => {
@@ -120,6 +137,7 @@ export function parseDelimited(text, delimiter) {
       city: get("city") || null,
       date: get("date") || null,
       time: get("time") || null,
+      genre: get("genre") || null,
       ticketUrl: get("ticketUrl") || null,
       notes: get("notes") || null,
       columnCountMismatch: row.length < expectedColumnCount,

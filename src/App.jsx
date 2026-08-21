@@ -23,7 +23,7 @@
 //    city text not null,
 //    date date not null,
 //    time text not null,
-//    genre text not null,
+//    genre text,   -- nullable: NULL means "no genre assigned", never a default genre
 //    tickets text,
 //    notes text,
 //    status text default 'pending',   -- 'pending' | 'approved' | 'rejected'
@@ -86,6 +86,7 @@ import {
   composeResolvedRow,
   indexRowsByGroup,
 } from "./smartImport";
+import { GENRES, GENRE_COLORS, genreColor, genreLabel, NO_GENRE_OPTION } from "./genres";
 
 // ── Supabase config ────────────────────────────────────────────────
 const SUPABASE_URL = "https://fmlaaiolqwknowhtdeue.supabase.co";
@@ -93,76 +94,14 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 const USE_MOCK = SUPABASE_URL === "YOUR_SUPABASE_URL";
 
 // ── Constants ──────────────────────────────────────────────────────
-// ── Genre system ───────────────────────────────────────────────────
-// Flat sorted list used for dropdowns and filtering
-const GENRES = [
-  "Acoustic","Afrobeat","Alternative","Americana","Bluegrass","Blues","Blues Rock",
-  "Britpop","Celtic","Classic Rock","Classical","Comedy","Country","Covers","Dance",
-  "Electronic","Experimental","Folk","Folk Rock","Funk","Funk Rock","Fusion",
-  "Garage Rock","Gospel","Grunge","Hard Rock","Hardcore","Hip-Hop","Indie Rock",
-  "Jazz","Jazz-Funk","Latin","Metal","Metalcore","New Wave","Original Music",
-  "Pop","Progressive Rock","Psychedelic","Punk","R&B","Reggae","Rock","Shoegaze",
-  "Singer-Songwriter","Ska","Ska Punk","Soul","Southern Rock","Spoken Word",
-  "Tribute","World Music","Other",
-].sort();
+// GENRES / GENRE_COLORS live in ./genres.js -- shared with src/smartImport
+// (the Gig Parse CSV/TSV pipeline) so there is exactly one canonical genre
+// taxonomy, not one per module.
 
-const GENRE_COLORS = {
-  "Acoustic":          "#a5d6a7",
-  "Alternative":       "#ef5350",
-  "Americana":         "#d4a373",
-  "Blues":             "#1a78c2",
-  "Blues Rock":        "#1565c0",
-  "Britpop":           "#7986cb",
-  "Celtic":            "#66bb6a",
-  "Classic Rock":      "#ff8a65",
-  "Classical":         "#90e0ef",
-  "Comedy":            "#ffd600",
-  "Country":           "#c9a227",
-  "Covers":            "#bdbdbd",
-  "Dance":             "#00e5ff",
-  "Electronic":        "#9b5de5",
-  "Experimental":      "#78909c",
-  "Festival":          "#22d3ee",
-  "Folk":              "#f4a261",
-  "Folk Rock":         "#ffb74d",
-  "Funk":              "#ff6f00",
-  "Fusion":            "#26c6da",
-  "Garage Rock":       "#ef9a9a",
-  "Gospel":            "#fff176",
-  "Grunge":            "#8d6e63",
-  "Hard Rock":         "#b71c1c",
-  "Hip-Hop":           "#ff9f1c",
-  "Indie Rock":        "#e8203a",
-  "Jazz":              "#43aa8b",
-  "Jazz-Funk":         "#00897b",
-  "Latin":             "#f06292",
-  "Metal":             "#ff595e",
-  "Metalcore":         "#c62828",
-  "New Wave":          "#ab47bc",
-  "Original Music":    "#29b6f6",
-  "Pop":               "#ff6b9d",
-  "Progressive Rock":  "#5c6bc0",
-  "Psychedelic":       "#ce93d8",
-  "Punk":              "#ff4d00",
-  "R&B":               "#ce93d8",
-  "Reggae":            "#2dc653",
-  "Rock":              "#ff7043",
-  "Shoegaze":          "#c77dff",
-  "Singer-Songwriter": "#a1887f",
-  "Ska":               "#ffee58",
-  "Ska Punk":          "#d4e157",
-  "Soul":              "#e040fb",
-  "Southern Rock":     "#ffa726",
-  "Spoken Word":       "#90a4ae",
-  "Tribute":           "#b0bec5",
-  "World Music":       "#52b788",
-  "Afrobeat":          "#f4a261",
-  "Bluegrass":         "#a5c27c",
-  "Funk Rock":         "#ff8c42",
-  "Hardcore":          "#d32f2f",
-  "Ska Punk":          "#d4e157",
-  "Other":             "#888888",
-};
+// A gig's own genre <select> (as opposed to a band profile's primary/
+// secondary/tertiary genre, which stays required) leads with an explicit
+// "no genre assigned" choice -- selecting it saves NULL, not a genre string.
+const GIG_GENRE_OPTIONS = [{ value: NO_GENRE_OPTION, label: "–" }, ...GENRES];
 
 const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const DAYS   = ["SUN","MON","TUE","WED","THU","FRI","SAT"];
@@ -606,6 +545,7 @@ const DB = {
     }
     const { data, error } = await supabase.from("gigs").insert({
       ...gig,
+      genre:           gig.genre || null,
       submitted_by:    userId,
       status:          "pending",
       band_profile_id: bandProfileId || null,
@@ -1529,7 +1469,7 @@ function exportICal(gigs) {
       `SUMMARY:${esc(g.band_name)} @ ${esc(g.venue)}`,
       `LOCATION:${esc(g.venue + ", " + g.city)}`,
       `DESCRIPTION:${esc([g.genre, g.notes, g.tickets].filter(Boolean).join(" | "))}`,
-      `CATEGORIES:${esc(g.genre)}`,
+      ...(g.genre ? [`CATEGORIES:${esc(g.genre)}`] : []),
       "END:VEVENT",
     );
   });
@@ -1653,11 +1593,19 @@ const Input = ({ label, value, onChange, type="text", required, error, placehold
   </div>
 );
 
+// o.value ?? o (not o.value||o): an object option with value:"" (e.g. a
+// "no genre assigned" placeholder) must keep that empty string, not fall
+// through to the whole object just because "" is falsy.
 const Select = ({ label, value, onChange, options }) => (
   <div>
     {label && <label style={{ display:"block", fontSize:13, color:"#ffffff", letterSpacing:2, marginBottom:6, fontFamily:F.display }}>{label}</label>}
     <select value={value} onChange={onChange} style={{ ...inputCss, cursor:"pointer" }}>
-      {options.map(o => <option key={o.value||o} value={o.value||o}>{o.label||o}</option>)}
+      {options.map(o => {
+        const isObj = o !== null && typeof o === "object";
+        const val = isObj ? o.value : o;
+        const lbl = isObj ? o.label : o;
+        return <option key={val} value={val}>{lbl}</option>;
+      })}
     </select>
   </div>
 );
@@ -2439,7 +2387,7 @@ function AuthPanel({ onAuth, onBack }) {
 //  SUBMIT GIG FORM
 // ════════════════════════════════════════════════════════════════════
 function SubmitGigForm({ user, profile, onSubmitted, onEditProfile }) {
-  const empty = { band_name: profile?.band_name||"", venue:"", city:"", date:"", end_date:"", time:TIME_TBC, genre:"Indie Rock", tickets:"", notes:"", is_recurring:false, recurrence:"none", spotify: profile?.spotify||"" };
+  const empty = { band_name: profile?.band_name||"", venue:"", city:"", date:"", end_date:"", time:TIME_TBC, genre:NO_GENRE_OPTION, tickets:"", notes:"", is_recurring:false, recurrence:"none", spotify: profile?.spotify||"" };
   const [form, setForm]     = useState(empty);
   const [errors, setErrors] = useState({});
   const [status, setStatus] = useState("idle"); // idle | loading | success | error
@@ -2520,7 +2468,7 @@ function SubmitGigForm({ user, profile, onSubmitted, onEditProfile }) {
         <Input label="END DATE (OPTIONAL — FOR MULTI-DAY EVENTS)" type="date" value={form.end_date} onChange={set("end_date")} />
         <TimeField label="DOORS / START TIME" value={form.time} onChange={set("time")} />
         <div style={{ gridColumn:"1/-1" }}>
-          <Select label="GENRE" value={form.genre} onChange={set("genre")} options={GENRES} />
+          <Select label="GENRE" value={form.genre} onChange={set("genre")} options={GIG_GENRE_OPTIONS} />
         </div>
         <div style={{ gridColumn:"1/-1" }}>
           <Input label="TICKET LINK (OPTIONAL)" type="url" value={form.tickets} onChange={set("tickets")} placeholder="https://" />
@@ -2636,7 +2584,7 @@ function AdminPanel({ allGigs, onRefresh, bands=[] }) {
       city:         g.city         || "",
       date:         g.date         || "",
       time:         g.time         || TIME_TBC,
-      genre:        g.genre        || "Other",
+      genre:        g.genre        || NO_GENRE_OPTION,
       status:       g.status       || "pending",
       notes:        g.notes        || "",
       description:  g.description  || "",
@@ -2659,7 +2607,7 @@ function AdminPanel({ allGigs, onRefresh, bands=[] }) {
         extra.band_profile_id = bp?.[0]?.id || null;
       }
       // venue_id handled by trigger on venue/city update
-      await DB.updateGig(editing.id, { ...editForm, ...extra, festival_profile_id: editForm.festival_profile_id || null });
+      await DB.updateGig(editing.id, { ...editForm, ...extra, genre: editForm.genre || null, festival_profile_id: editForm.festival_profile_id || null });
       await logActivity("gig_edited", "gig", editForm.band_name, editing.id);
       setEditMsg("✓ Gig updated");
       await onRefresh();
@@ -2690,7 +2638,7 @@ function AdminPanel({ allGigs, onRefresh, bands=[] }) {
           <Input label="CITY"   value={editForm.city}  onChange={e=>setEditForm(f=>({...f,city:e.target.value}))} />
           <Input label="DATE"   type="date" value={editForm.date} onChange={e=>setEditForm(f=>({...f,date:e.target.value}))} />
           <TimeField label="TIME" value={editForm.time} onChange={e=>setEditForm(f=>({...f,time:e.target.value}))} />
-          <Select label="GENRE" value={editForm.genre} onChange={e=>setEditForm(f=>({...f,genre:e.target.value}))} options={GENRES} />
+          <Select label="GENRE" value={editForm.genre} onChange={e=>setEditForm(f=>({...f,genre:e.target.value}))} options={GIG_GENRE_OPTIONS} />
           <Select label="STATUS" value={editForm.status} onChange={e=>setEditForm(f=>({...f,status:e.target.value}))}
             options={[{value:"pending",label:"Pending"},{value:"approved",label:"Approved"},{value:"rejected",label:"Rejected"}]}
           />
@@ -2750,7 +2698,7 @@ function AdminPanel({ allGigs, onRefresh, bands=[] }) {
       {visible.length === 0 && <div style={{ color:C.dim, fontSize:13, padding:"24px 0" }}>No gigs in this category.</div>}
       <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
         {visible.map(g => {
-          const color = GENRE_COLORS[g.genre]||"#888";
+          const color = genreColor(g.genre);
           const spin  = loading[g.id];
           return (
             <div key={g.id} style={{ background:C.surfaceHigh, border:`1px solid ${C.border}`, borderLeft:`3px solid ${color}`, borderRadius:6, padding:"14px 16px" }}>
@@ -2759,7 +2707,7 @@ function AdminPanel({ allGigs, onRefresh, bands=[] }) {
                   <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", marginBottom:4 }}>
                     {(() => { const bp = g.band_profile_id ? bands.find(b=>b.id===g.band_profile_id) : bands.find(b=>b.band_name?.toLowerCase()===g.band_name?.toLowerCase()); return bp?.band_slug ? <Link to={`/artist/${bp.band_slug}`} style={{ fontFamily:F.display, fontSize:16, letterSpacing:1.5, color:C.white, textDecoration:"none" }} onMouseEnter={e=>e.currentTarget.style.color=C.red} onMouseLeave={e=>e.currentTarget.style.color=C.white}>{g.band_name}</Link> : <span style={{ fontFamily:F.display, fontSize:16, letterSpacing:1.5, color:C.white }}>{g.band_name}</span>; })()}
                     <StatusBadge status={g.status} />
-                    <Badge label={g.genre} color={color} />
+                    <Badge label={genreLabel(g.genre)} color={color} />
                     {g.featured && <Badge label="★ FEATURED" color={C.amber} />}
                     {g.is_recurring && <Badge label="↻" color={C.amber} />}
                   </div>
@@ -2938,17 +2886,17 @@ function CalendarView({ gigs, onGigClick, bands=[] }) {
                     className="msm-gig-label"
                     style={{
                       display:"flex", alignItems:"center", gap:4,
-                      background:`${GENRE_COLORS[g.genre]||"#888"}40`,
-                      borderLeft:`3px solid ${GENRE_COLORS[g.genre]||"#888"}`,
+                      background:`${genreColor(g.genre)}40`,
+                      borderLeft:`3px solid ${genreColor(g.genre)}`,
                       borderRadius:2, padding:"3px 6px",
                       cursor:"pointer", textDecoration:"none",
                     }}
-                    onMouseEnter={e=>e.currentTarget.style.background=`${GENRE_COLORS[g.genre]||"#888"}65`}
-                    onMouseLeave={e=>e.currentTarget.style.background=`${GENRE_COLORS[g.genre]||"#888"}40`}
+                    onMouseEnter={e=>e.currentTarget.style.background=`${genreColor(g.genre)}65`}
+                    onMouseLeave={e=>e.currentTarget.style.background=`${genreColor(g.genre)}40`}
                   >
                     <span className="msm-gig-dot" style={{
                       width:6, height:6, borderRadius:"50%", flexShrink:0,
-                      background:GENRE_COLORS[g.genre]||"#888",
+                      background:genreColor(g.genre),
                       display:"inline-block",
                     }} />
                     <span style={{
@@ -3007,7 +2955,7 @@ function ListView({ gigs, onGigClick, bands=[] }) {
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
       {sorted.map(g => {
-        const color = GENRE_COLORS[g.genre]||"#888";
+        const color = genreColor(g.genre);
         return (
           <Link key={g.id} to={g.isFestivalItem ? `/festival/${g.festival_slug}` : `/gig/${g.slug}`}
             onClick={e=>{ if (!g.isFestivalItem) { e.preventDefault(); onGigClick(g); } }}
@@ -3024,7 +2972,7 @@ function ListView({ gigs, onGigClick, bands=[] }) {
               <div className="msm-list-artist" style={{ fontFamily:F.display, fontSize:15, letterSpacing:1.5, color:C.white }}>{g.band_name}</div>
               <div className="msm-list-venue" style={{ fontSize:11, color:C.muted, marginTop:2 }}>{g.venue} · {g.city}</div>
             </div>
-            <Badge label={g.genre} color={color} />
+            <Badge label={genreLabel(g.genre)} color={color} />
             <div style={{ textAlign:"right", minWidth:90 }}>
               <div className="msm-list-date" style={{ fontSize:12, color:C.red, fontFamily:F.display, letterSpacing:1 }}>
                 {fmtDate(g.date)}{g.end_date ? ` — ${fmtDate(g.end_date)}` : ""}
@@ -3043,7 +2991,7 @@ function ListView({ gigs, onGigClick, bands=[] }) {
 // ════════════════════════════════════════════════════════════════════
 function GigModal({ gig, onClose, bands=[], venues=[] }) {
   if (!gig) return null;
-  const color    = GENRE_COLORS[gig.genre]||"#888";
+  const color    = genreColor(gig.genre);
   // Find matching band profile for artist page link
   // Prefer ID-based lookup, fall back to name matching
   const bandProfile = gig.band_profile_id
@@ -3058,7 +3006,7 @@ function GigModal({ gig, onClose, bands=[], venues=[] }) {
         boxShadow:`0 0 60px rgba(232,32,58,0.15)`,
       }}>
         <button onClick={onClose} style={{ position:"absolute", top:14, right:16, background:"none", border:"none", color:C.muted, fontSize:20, cursor:"pointer" }}>✕</button>
-        <Badge label={gig.genre} color={color} />
+        <Badge label={genreLabel(gig.genre)} color={color} />
         {gig.is_recurring && <Badge label={`↻ ${gig.recurrence}`} color={C.amber} />}
         <div style={{ fontFamily:F.display, fontSize:30, letterSpacing:2, color:C.white, marginTop:10, lineHeight:1 }}>
           {gig.slug
@@ -3165,7 +3113,7 @@ function StatsPanel({ gigs }) {
   const topCities  = Object.entries(cityCounts).sort((a,b)=>b[1]-a[1]).slice(0,8);
 
   // Top genres
-  const genreCounts = gigs.reduce((acc, g) => { acc[g.genre] = (acc[g.genre]||0)+1; return acc; }, {});
+  const genreCounts = gigs.reduce((acc, g) => { const genre = genreLabel(g.genre); acc[genre] = (acc[genre]||0)+1; return acc; }, {});
   const topGenres   = Object.entries(genreCounts).sort((a,b)=>b[1]-a[1]);
 
   // Top bands
@@ -3242,7 +3190,7 @@ function StatsPanel({ gigs }) {
         {topGenres.length === 0 && <div style={{ color:C.dim, fontSize:13 }}>No data yet</div>}
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"0 32px" }}>
           {topGenres.map(([genre, count]) => (
-            <Bar key={genre} label={genre} count={count} max={topGenres[0]?.[1]||1} color={GENRE_COLORS[genre]||C.red} />
+            <Bar key={genre} label={genre} count={count} max={topGenres[0]?.[1]||1} color={genreColor(genre)} />
           ))}
         </div>
       </div>
@@ -3492,7 +3440,7 @@ function AdminDashboard({ bands, festivals=[], allGigs, venues, onNav, onEditGig
             </thead>
             <tbody>
               {upcoming10.map(g => {
-                const color = GENRE_COLORS[g.genre]||"#888";
+                const color = genreColor(g.genre);
                 return (
                   <tr key={g.id} style={{ borderBottom:`1px solid ${C.border}`, cursor:"pointer" }}
                     onMouseEnter={e=>e.currentTarget.style.background="rgba(255,255,255,0.03)"}
@@ -3503,7 +3451,7 @@ function AdminDashboard({ bands, festivals=[], allGigs, venues, onNav, onEditGig
                     <td style={{ padding:"10px 14px", color:C.white }}>{g.band_name}</td>
                     <td style={{ padding:"10px 14px", color:"#ccc" }}>{g.venue}</td>
                     <td style={{ padding:"10px 14px", color:C.muted }}>{g.city}</td>
-                    <td style={{ padding:"10px 14px" }}><Badge label={g.genre} color={color} /></td>
+                    <td style={{ padding:"10px 14px" }}><Badge label={genreLabel(g.genre)} color={color} /></td>
                     <td style={{ padding:"10px 14px" }}>
                       {g.slug && <Link to={`/gig/${g.slug}`} target="_blank" onClick={e=>e.stopPropagation()} style={{ fontSize:11, color:C.muted, textDecoration:"none" }}>↗</Link>}
                     </td>
@@ -4593,7 +4541,7 @@ function GigDetailPage() {
     </div>
   );
 
-  const color   = GENRE_COLORS[gig.genre] || C.red;
+  const color   = genreColor(gig.genre);
   const gigUrl   = `${BASE_URL}/gig/${gig.slug}`;
   const ogUrl    = `${BASE_URL}/api/og?type=gig&slug=${encodeURIComponent(gig.slug)}`;
   const fbShare  = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(ogUrl)}`;
@@ -4636,12 +4584,12 @@ function GigDetailPage() {
     <Link to={`/gig/${g.slug}`} style={{ textDecoration:"none", flex:1, minWidth:200 }}>
       <div style={{
         padding:"14px 18px", background:C.surface, border:`1px solid ${C.border}`,
-        borderTop:`2px solid ${GENRE_COLORS[g.genre]||C.red}`, borderRadius:8,
+        borderTop:`2px solid ${genreColor(g.genre)}`, borderRadius:8,
         cursor:"pointer",
         transition:"border-color 0.2s",
       }}
         onMouseEnter={e=>e.currentTarget.style.borderColor=C.red}
-        onMouseLeave={e=>e.currentTarget.style.borderColor=GENRE_COLORS[g.genre]||C.red}
+        onMouseLeave={e=>e.currentTarget.style.borderColor=genreColor(g.genre)}
       >
         <div style={{ fontSize:10, color:C.dim, letterSpacing:2, fontFamily:F.display, marginBottom:6 }}>
           {dir === "prev" ? "← PREVIOUS GIG" : "NEXT GIG →"}
@@ -4674,7 +4622,7 @@ function GigDetailPage() {
         padding:"48px 32px 40px",
       }}>
         <div style={{ maxWidth:900, margin:"0 auto" }}>
-          <Badge label={gig.genre} color={color} />
+          <Badge label={genreLabel(gig.genre)} color={color} />
           {gig.is_recurring && <Badge label={`↻ ${gig.recurrence}`} color={C.amber} />}
           <div style={{ fontFamily:F.display, fontSize:52, letterSpacing:2, color:C.white, lineHeight:1, margin:"12px 0 8px" }}>
             {band?.band_slug
@@ -4796,7 +4744,7 @@ function GigDetailPage() {
                 { label:"DOORS", val: gig.time },
                 { label:"VENUE", val: gig.venue },
                 { label:"CITY",  val: gig.city  },
-                { label:"GENRE", val: gig.genre  },
+                { label:"GENRE", val: genreLabel(gig.genre)  },
               ].map(({ label, val }) => (
                 <div key={label}>
                   <div style={{ fontSize:9, color:C.dim, letterSpacing:2, fontFamily:F.display, marginBottom:4 }}>{label}</div>
@@ -4841,7 +4789,7 @@ function GigDetailPage() {
             <SectionLabel>OTHER GIGS AT {gig.venue.toUpperCase()}</SectionLabel>
             <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
               {venueGigs.map(g => {
-                const gc = GENRE_COLORS[g.genre] || "#888";
+                const gc = genreColor(g.genre);
                 return (
                   <Link key={g.id} to={`/gig/${g.slug}`} style={{ textDecoration:"none" }}>
                     <div style={{
@@ -4856,9 +4804,9 @@ function GigDetailPage() {
                       <div style={{ fontFamily:F.display, fontSize:15, color:C.red, minWidth:110 }}>{fmtDate(g.date)}</div>
                       <div style={{ flex:1 }}>
                         <div style={{ fontSize:15, color:C.white }}>{g.band_name}</div>
-                        <div style={{ fontSize:11, color:C.muted }}>{g.genre} · {g.time}</div>
+                        <div style={{ fontSize:11, color:C.muted }}>{genreLabel(g.genre)} · {g.time}</div>
                       </div>
-                      <Badge label={g.genre} color={gc} />
+                      <Badge label={genreLabel(g.genre)} color={gc} />
                     </div>
                   </Link>
                 );
@@ -5175,7 +5123,7 @@ function VenueProfilePage() {
           ) : (
             <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
               {upcomingGigs.map(g => {
-                const color = GENRE_COLORS[g.genre] || "#888";
+                const color = genreColor(g.genre);
                 return (
                   <div key={g.id} style={{
                     display:"flex", alignItems:"center", gap:16, padding:"14px 18px",
@@ -5186,7 +5134,7 @@ function VenueProfilePage() {
                       <div style={{ fontFamily:F.display, fontSize:16, color:C.red, letterSpacing:1, minWidth:120 }}>{fmtDate(g.date)}</div>
                       <div style={{ flex:1 }}>
                         <div style={{ fontSize:15, color:C.white }}>{g.band_name}</div>
-                        <div style={{ fontSize:12, color:C.muted }}>{g.genre} · {g.time}</div>
+                        <div style={{ fontSize:12, color:C.muted }}>{genreLabel(g.genre)} · {g.time}</div>
                       </div>
                     </Link>
                     <div style={{ display:"flex", gap:8 }}>
@@ -5218,7 +5166,7 @@ function VenueProfilePage() {
                     <div style={{ fontFamily:F.display, fontSize:14, color:C.dim, minWidth:120 }}>{fmtDate(g.date)}</div>
                     <div style={{ flex:1 }}>
                       <span style={{ fontSize:14, color:"#aaa" }}>{g.band_name}</span>
-                      <span style={{ fontSize:12, color:C.dim, marginLeft:8 }}>{g.genre}</span>
+                      <span style={{ fontSize:12, color:C.dim, marginLeft:8 }}>{genreLabel(g.genre)}</span>
                     </div>
                   </div>
                 </Link>
@@ -8845,7 +8793,7 @@ function MyFollowingPage({ userId, allGigs }) {
           ) : (
             <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
               {upcoming.map(g => {
-                const color = GENRE_COLORS[g.genre] || "#888";
+                const color = genreColor(g.genre);
                 return (
                   <Link key={g.id} to={g.slug ? `/gig/${g.slug}` : "#"} style={{
                     display:"flex", alignItems:"center", gap:14, padding:"13px 16px",
@@ -8857,7 +8805,7 @@ function MyFollowingPage({ userId, allGigs }) {
                       <div style={{ fontFamily:F.display, fontSize:15, letterSpacing:1.5, color:C.white }}>{g.band_name}</div>
                       <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>{g.venue} · {g.city}</div>
                     </div>
-                    <Badge label={g.genre} color={color} />
+                    <Badge label={genreLabel(g.genre)} color={color} />
                     <div style={{ textAlign:"right", minWidth:90 }}>
                       <div style={{ fontSize:12, color:C.red, fontFamily:F.display, letterSpacing:1 }}>{fmtDate(g.date)}</div>
                       <div style={{ fontSize:11, color:C.dim }}>{g.time}</div>
