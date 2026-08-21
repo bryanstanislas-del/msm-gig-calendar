@@ -71,6 +71,7 @@ import {
   buildGigInsertPayload,
   runImport,
   summariseImportResult,
+  buildModerationNotificationPayload,
   deriveSelection,
   groupMissingVenues,
   groupFuzzyVenues,
@@ -2405,14 +2406,17 @@ function SubmitGigForm({ user, profile, onSubmitted, onEditProfile }) {
     setStatus("loading");
     try {
       await DB.submitGig(form, user.id, profile?.id);
-      // Send email notification
+      // Moderation notification: only reachable after the gig has actually
+      // been written to gigs as `pending` above -- a failure here must never
+      // roll back or block the submission itself (already committed), but
+      // must not fail silently either, so it's logged.
       try {
         await fetch("/api/notify", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(form),
+          body: JSON.stringify({ ...form, type: "gig_submission" }),
         });
-      } catch(emailErr) { console.warn("Email notification failed:", emailErr); }
+      } catch(emailErr) { console.error("Moderation email failed to send:", emailErr); }
       setStatus("success");
       setMsg("Gig submitted! It will appear on the calendar once approved by our team.");
       setForm(empty);
@@ -7144,8 +7148,25 @@ function ConfirmationSummary({ items, selected, sourceProfileId, onBack }) {
         importRowFn: (row) => DB.importGigRow(row),
         completeRunFn: ({ importRunId: id, succeeded, failed }) => DB.completeImportRun({ importRunId: id, succeeded, failed }),
       });
-      setImportResult({ importRunId, summary: summariseImportResult({ results, blocked }) });
+      const summary = summariseImportResult({ results, blocked });
+      setImportResult({ importRunId, summary });
       setPhase("done");
+
+      // Moderation notification: one email per completed batch, never one
+      // per row, and only when at least one row genuinely reached `pending`
+      // -- a batch that was entirely duplicates/invalid/failed sends nothing.
+      // Failure here must never affect the import itself (already committed
+      // above), but must not fail silently either, so it's logged.
+      if (summary.created > 0) {
+        try {
+          const payload = buildModerationNotificationPayload({ results, groups, blocked });
+          await fetch("/api/notify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ type: "gig_import_batch", ...payload }),
+          });
+        } catch (emailErr) { console.error("Moderation batch email failed to send:", emailErr); }
+      }
     } catch (e) {
       setErrorMsg(e.message || "Import failed");
       setPhase("error");

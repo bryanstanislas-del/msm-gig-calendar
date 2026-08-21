@@ -52,7 +52,7 @@ export {
 // module calls via injected functions (startRunFn/importRowFn/
 // completeRunFn), never a direct supabase.from(...).insert(). See
 // importEngine.js's header comment.
-export { validateRowForImport, buildGigInsertPayload, runImport, summariseImportResult } from "./importEngine.js";
+export { validateRowForImport, buildGigInsertPayload, runImport, summariseImportResult, buildModerationNotificationPayload } from "./importEngine.js";
 export { mapWithConcurrency } from "./concurrency.js";
 
 // Sprint 5D: grouped entity resolution. Groups rows sharing the same source
