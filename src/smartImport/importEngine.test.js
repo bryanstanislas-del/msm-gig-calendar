@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { validateRowForImport, buildGigInsertPayload, runImport, summariseImportResult } from "./importEngine.js";
+import { validateRowForImport, buildGigInsertPayload, runImport, summariseImportResult, buildModerationNotificationPayload } from "./importEngine.js";
 import { ROW_STATES } from "./reviewBatch.js";
 
 function item(overrides = {}) {
@@ -271,5 +271,55 @@ describe("summariseImportResult", () => {
     const summary = summariseImportResult({ results, blocked: [] });
     expect(summary.failureReasons).toEqual([]);
     expect(summary.blockedReasons).toEqual([]);
+  });
+});
+
+describe("buildModerationNotificationPayload", () => {
+  const created = (id, venueName) => ({
+    item: item({ id, fields: { ...item().fields, venueName } }),
+    outcome: "created",
+    gigId: `gig-${id}`,
+    error: null,
+  });
+  const failed = (id) => ({ item: item({ id }), outcome: "failed", gigId: null, error: "boom" });
+
+  it("counts only created rows, and de-duplicates their venues", () => {
+    const results = [created("r1", "The Brook"), created("r2", "The Brook"), created("r3", "The Joiners"), failed("r4")];
+    const payload = buildModerationNotificationPayload({ results, groups: [], blocked: [] });
+    expect(payload.created).toBe(3);
+    expect(payload.venues).toEqual(["The Brook", "The Joiners"]);
+  });
+
+  it("omits a created row with no venue name from the venues list without affecting the count", () => {
+    const results = [created("r1", null)];
+    const payload = buildModerationNotificationPayload({ results, groups: [], blocked: [] });
+    expect(payload.created).toBe(1);
+    expect(payload.venues).toEqual([]);
+  });
+
+  it("sums duplicate-state groups into duplicatesSkipped, and every other group into otherExcluded", () => {
+    const groups = [
+      { state: ROW_STATES.EXACT_DUPLICATE, label: "Exact Duplicate", count: 3 },
+      { state: ROW_STATES.POSSIBLE_DUPLICATE, label: "Possible Duplicate", count: 2 },
+      { state: ROW_STATES.MISSING_VENUE, label: "Missing Venue", count: 4 },
+      { state: ROW_STATES.INVALID_DATE, label: "Invalid Date", count: 1 },
+    ];
+    const payload = buildModerationNotificationPayload({ results: [created("r1", "The Brook")], groups, blocked: [] });
+    expect(payload.duplicatesSkipped).toBe(5);
+    expect(payload.otherExcluded).toBe(5);
+  });
+
+  it("folds rows the RPC layer itself blocked (selected but never attempted) into otherExcluded", () => {
+    const blocked = [
+      { item: item({ id: "r9" }), reason: "New venue has no known city -- cannot be created without one." },
+    ];
+    const payload = buildModerationNotificationPayload({ results: [created("r1", "The Brook")], groups: [], blocked });
+    expect(payload.otherExcluded).toBe(1);
+  });
+
+  it("reports zero duplicates/excluded for a clean, fully-selected batch", () => {
+    const payload = buildModerationNotificationPayload({ results: [created("r1", "The Brook")], groups: [], blocked: [] });
+    expect(payload.duplicatesSkipped).toBe(0);
+    expect(payload.otherExcluded).toBe(0);
   });
 });

@@ -12,7 +12,7 @@
 // rowState }, with venueMatch/artistMatch possibly at tier "confirmed" if
 // the admin accepted a fuzzy candidate (see batchSelection.js's
 // applyMatchOverride).
-import { isLocked, ROW_STATE_LABELS } from "./reviewBatch.js";
+import { isLocked, ROW_STATE_LABELS, DUPLICATE_STATES } from "./reviewBatch.js";
 import { mapWithConcurrency } from "./concurrency.js";
 
 // import_gig_row RPC calls are independent per-row transactions (see the
@@ -148,6 +148,30 @@ export function summariseImportResult({ results, blocked }) {
     failureReasons: groupReasons(results.filter((r) => r.outcome !== "created").map((r) => r.error || "Unknown error")),
     blockedReasons: groupReasons(blocked.map((b) => b.reason)),
   };
+}
+
+// Pure aggregation of one completed import run into exactly the fields the
+// moderation batch email needs (see api/notify.js's "gig_import_batch"
+// type) -- one email per completed batch, never one per row, and only
+// meaningful when created > 0 (the caller's own gate: a batch that was
+// entirely duplicates/invalid/failed sends nothing). `groups` is
+// batchSelection.js's groupSkippedReasons(items, selected) output -- every
+// row the admin's selection itself excluded, already grouped by state;
+// `blocked` (from runImport) is the separate, smaller set of *selected*
+// rows the RPC layer would still have rejected (e.g. a New Venue row with
+// no known city). Kept here, not inline in App.jsx's ConfirmationSummary,
+// so this aggregation is testable the same way as the rest of Smart Import
+// -- App.jsx has no test coverage of its own (see importEngine.js's header
+// comment on why this module exists at all).
+export function buildModerationNotificationPayload({ results, groups, blocked }) {
+  const created = results.filter((r) => r.outcome === "created");
+  const venues = [...new Set(created.map((r) => r.item.fields.venueName).filter(Boolean))];
+  const duplicatesSkipped = groups
+    .filter((g) => DUPLICATE_STATES.includes(g.state))
+    .reduce((sum, g) => sum + g.count, 0);
+  const otherExcluded =
+    groups.filter((g) => !DUPLICATE_STATES.includes(g.state)).reduce((sum, g) => sum + g.count, 0) + blocked.length;
+  return { created: created.length, venues, duplicatesSkipped, otherExcluded };
 }
 
 // startRunFn({ sourceProfileId, totalRows }) -> Promise<importRunId>
