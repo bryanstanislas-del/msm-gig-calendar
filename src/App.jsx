@@ -1488,6 +1488,21 @@ const getDays = (y,m) => new Date(y,m+1,0).getDate();
 const getFirst= (y,m) => new Date(y,m,1).getDay();
 const today   = () => new Date().toISOString().slice(0,10);
 
+// List View's default upcoming-only, chronological ordering: today's gigs
+// first, then future gigs date-ascending. Past gigs (end_date, or date for
+// single-day gigs, before `todayStr`) are dropped -- but only when the
+// caller hasn't set an explicit From Date, so a deliberately-chosen past
+// date range still works. `todayStr` is passed in (rather than computed
+// here) so this stays a pure, easily-testable function and callers control
+// exactly when "today" is evaluated -- e.g. recomputed on every render
+// rather than memoized, so a PWA/tab left open across midnight doesn't
+// keep showing yesterday's cutoff.
+export function selectListViewGigs(gigs, { dateFrom, todayStr } = {}) {
+  const sorted = [...gigs].sort((a, b) => a.date.localeCompare(b.date));
+  if (dateFrom) return sorted;
+  return sorted.filter(g => (g.end_date || g.date) >= todayStr);
+}
+
 // ════════════════════════════════════════════════════════════════════
 //  DESIGN TOKENS
 // ════════════════════════════════════════════════════════════════════
@@ -9237,6 +9252,15 @@ function MainApp() {
     return true;
   }), [calendarSource, filters, search]);
 
+  // List View defaults to upcoming gigs only (today forward) so it doesn't
+  // open on the oldest gigs in the dataset -- CalendarView is left on
+  // `filteredGigs` untouched since its own month grid already navigates to
+  // the current month. Not memoized on `today()` so a PWA/tab left open
+  // across midnight recomputes the cutoff on the next render instead of
+  // keeping a stale one.
+  const listGigs = selectListViewGigs(filteredGigs, { dateFrom: filters.dateFrom, todayStr: today() });
+  const displayedGigs = tab === "list" ? listGigs : filteredGigs;
+
   // If user clicked Submit Gig or Admin tab and isn't logged in, show auth panel
   if (!auth && (tab === "submit" || tab === "admin")) {
     return <AuthPanel onAuth={handleAuth} onBack={()=>setTab("calendar")} />;
@@ -9493,18 +9517,18 @@ function MainApp() {
                         gigs={gigs}
                         filters={filters}
                         setFilters={setFilters}
-                        onExport={()=>exportICal(filteredGigs)}
+                        onExport={()=>exportICal(displayedGigs)}
                       />
                     </div>
                   </div>
                   {tab==="calendar"
                     ? <CalendarView gigs={filteredGigs} onGigClick={setSelGig} bands={bands} />
-                    : <ListView     gigs={filteredGigs} onGigClick={setSelGig} bands={bands} />
+                    : <ListView     gigs={listGigs}     onGigClick={setSelGig} bands={bands} />
                   }
                   <div style={{ marginTop:16, fontSize:13, color:C.dim }}>
-                    Showing {filteredGigs.length} of {gigs.length} gigs
-                    {filteredGigs.length>0 && (
-                      <span> · <span style={{ color:C.red, cursor:"pointer" }} onClick={()=>exportICal(filteredGigs)}>Export all to iCal</span></span>
+                    Showing {displayedGigs.length} of {gigs.length} gigs
+                    {displayedGigs.length>0 && (
+                      <span> · <span style={{ color:C.red, cursor:"pointer" }} onClick={()=>exportICal(displayedGigs)}>Export all to iCal</span></span>
                     )}
                   </div>
                 </>
