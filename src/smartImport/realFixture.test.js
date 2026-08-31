@@ -30,7 +30,20 @@ describe("real Gig Guide fixture, end-to-end through the 5B.5 row-state model", 
     }
   });
 
-  it("resolves the known exact-duplicate clusters (Jamie Webster, Transvision Vamp, Overpass/overpass, Avatar)", async () => {
+  // The msm-gig-guide free-text profile never captures a performance time at
+  // all (its 5-line Title/Date/Venue/Address/View-Details record has no time
+  // line -- see sourceProfiles.js's extractMsmGigGuideRow, fields.time is
+  // always null here). Exact duplicate identity now requires a meaningful,
+  // matching time on BOTH sides (see duplicateDetection.js), specifically so
+  // that two genuinely separate performances of the same act at the same
+  // venue/date (the real Music in the City "Freya Golding" case) are never
+  // locked together just because a time happened to be unavailable. So these
+  // same-artist/venue/date clusters -- with no time on either side -- now
+  // correctly resolve as a non-locked Possible Duplicate warning, not a
+  // locked Exact Duplicate: an admin can still see and decide on them, but
+  // Smart Import no longer assumes with certainty that they're the same
+  // listing typed twice.
+  it("resolves the known identical-name clusters (Jamie Webster, Transvision Vamp, Overpass/overpass, Avatar) as non-locked Possible Duplicates, since this source never captures a performance time", async () => {
     const parseResult = parseImportText(fixture);
     const batch = await runMatching(parseResult, { venues: [], artistProfiles: [], existingGigs: [] });
 
@@ -41,8 +54,10 @@ describe("real Gig Guide fixture, end-to-end through the 5B.5 row-state model", 
       [216, 218], // Avatar, non-adjacent (Del Amitri between them)
     ];
     for (const [a, b] of clusters) {
-      expect(batch[a].rowState).toBe(ROW_STATES.EXACT_DUPLICATE);
-      expect(batch[b].rowState).toBe(ROW_STATES.EXACT_DUPLICATE);
+      expect(batch[a].fields.time).toBeNull();
+      expect(batch[b].fields.time).toBeNull();
+      expect(batch[a].rowState).toBe(ROW_STATES.POSSIBLE_DUPLICATE);
+      expect(batch[b].rowState).toBe(ROW_STATES.POSSIBLE_DUPLICATE);
     }
   });
 

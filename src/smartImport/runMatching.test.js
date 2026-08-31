@@ -91,19 +91,25 @@ describe("runMatching", () => {
     expect(searchFn).not.toHaveBeenCalledWith("solo_artist", expect.anything());
   });
 
-  it("resolves 'exact_duplicate' for two rows in the batch that share artist + date + venue, taking precedence over 'ready'", async () => {
-    const fields = { artistName: "The Mafia", venueName: "The Brook", city: "Southampton", date: "2026-09-01" };
+  it("resolves 'exact_duplicate' for two rows in the batch that share artist + date + venue + time, taking precedence over 'ready'", async () => {
+    // Exact duplicate identity requires a matching, meaningful performance
+    // time too (see duplicateDetection.js) -- without one, two rows that
+    // only share artist+date+venue are a non-locked warning, not a locked
+    // Exact Duplicate (the real Music in the City "Freya Golding" regression
+    // this guards against: two genuinely separate performances at different
+    // times must never be locked together just because a time was omitted).
+    const fields = { artistName: "The Mafia", venueName: "The Brook", city: "Southampton", date: "2026-09-01", time: "20:00" };
     const parseResult = { rows: [row("r1", { fields }), row("r2", { fields })] };
     const result = await runMatching(parseResult, { venues, artistProfiles });
     expect(result[0].rowState).toBe("exact_duplicate");
     expect(result[1].rowState).toBe("exact_duplicate");
   });
 
-  it("resolves 'exact_duplicate' against an existing gig snapshot", async () => {
+  it("resolves 'exact_duplicate' against an existing gig snapshot when the time also matches", async () => {
     const parseResult = {
-      rows: [row("r1", { fields: { artistName: "The Mafia", venueName: "The Brook", city: "Southampton", date: "2026-09-01" } })],
+      rows: [row("r1", { fields: { artistName: "The Mafia", venueName: "The Brook", city: "Southampton", date: "2026-09-01", time: "20:00" } })],
     };
-    const existingGigs = [{ id: "gig-1", band_name: "The Mafia", date: "2026-09-01", venue_id: "v1", venue: "The Brook" }];
+    const existingGigs = [{ id: "gig-1", band_name: "The Mafia", date: "2026-09-01", time: "20:00", venue_id: "v1", venue: "The Brook" }];
     const result = await runMatching(parseResult, { venues, artistProfiles, existingGigs });
     expect(result[0].rowState).toBe("exact_duplicate");
     expect(result[0].duplicate.existingGigId).toBe("gig-1");
