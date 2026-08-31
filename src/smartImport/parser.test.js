@@ -57,6 +57,20 @@ describe("parseImportText", () => {
       expect(result.rows[0].fields).toMatchObject({ isCancelled: true, isPostponed: false, isRescheduled: true, isSoldOut: false });
     });
 
+    describe("optional Venue Address column (structured bulk imports)", () => {
+      it("maps an explicit Address header into fields.venueAddress", () => {
+        const csv = "Artist,Venue,Address,City,Date,Time\nThe Mafia,Southampton 1865,Above Bar Street,Southampton,2026-06-06,20:00";
+        const result = parseImportText(csv);
+        expect(result.rows[0].fields.venueAddress).toBe("Above Bar Street");
+      });
+
+      it("leaves fields.venueAddress null when no Address column is present -- existing 5-column CSVs are unaffected", () => {
+        const result = parseImportText(fixture("csv-basic.csv"));
+        expect(result.rows.every((r) => r.fields.venueAddress === null)).toBe(true);
+        expect(result.rows.every((r) => r.status === "ok")).toBe(true);
+      });
+    });
+
     describe("optional Genre column", () => {
       it("passes through a recognized genre value, canonicalized to the taxonomy's casing", () => {
         const csv = "Artist,Venue,City,Date,Time,Genre\nThe Mafia,The Obelisk,Woolston,2026-06-06,20:00,blues";

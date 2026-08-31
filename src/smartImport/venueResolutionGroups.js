@@ -46,6 +46,14 @@ function buildVenueGroups(rows, { kindPrefix, kind, includeCandidates }) {
         // discards everything after the first comma when building `query`,
         // so this is the only place the street address survives for display).
         sourceAddressBlock: row.fields.venueBlock || null,
+        // A clean, already-separated address string -- only ever populated
+        // by an explicit "Address" header column in a structured CSV/TSV
+        // import (see csvTsv.js's COLUMN_ALIASES), never guessed at or
+        // split out of sourceAddressBlock's combined free text. Kept
+        // distinct from sourceAddressBlock (which stays a display-only hint
+        // for the msm-gig-guide profile) because this one is trustworthy
+        // enough to prefill the Approve New Venue address field with.
+        suggestedAddress: row.fields.venueAddress || null,
         rowIds: [],
         suggestedCandidates: includeCandidates ? row.venueMatch.candidates : [],
         hasCandidateDisagreement: false,

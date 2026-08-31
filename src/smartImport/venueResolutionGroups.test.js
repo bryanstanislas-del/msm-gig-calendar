@@ -62,6 +62,23 @@ describe("groupMissingVenues", () => {
     expect(groupMissingVenues(rows)[0].sourceAddressBlock).toBeNull();
   });
 
+  it("captures suggestedAddress from fields.venueAddress when a structured CSV/TSV import supplied one", () => {
+    const rows = [row("r1", { fields: { venueAddress: "1 Example Street" } })];
+    expect(groupMissingVenues(rows)[0].suggestedAddress).toBe("1 Example Street");
+  });
+
+  it("uses null suggestedAddress when the row has no venueAddress", () => {
+    const rows = [row("r1")];
+    expect(groupMissingVenues(rows)[0].suggestedAddress).toBeNull();
+  });
+
+  it("keeps suggestedAddress distinct from sourceAddressBlock -- the msm-gig-guide free-text venueBlock is never treated as a clean, trustworthy address", () => {
+    const rows = [row("r1", { fields: { venueBlock: "Southampton 1865, Brunswick Square" } })];
+    const group = groupMissingVenues(rows)[0];
+    expect(group.sourceAddressBlock).toBe("Southampton 1865, Brunswick Square");
+    expect(group.suggestedAddress).toBeNull();
+  });
+
   it("caps sampleRowIds at GROUP_SAMPLE_SIZE while rowIds keeps every affected row", () => {
     const rows = Array.from({ length: 83 }, (_, i) => row(`r${i}`));
     const group = groupMissingVenues(rows)[0];

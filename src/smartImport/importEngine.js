@@ -54,11 +54,31 @@ export function validateRowForImport(item) {
 // just a best effort). For "New Venue" rows (tier "none"), the raw parsed
 // name/city is written and the trigger creates the venue fresh -- the same
 // mechanism BulkImport already implicitly relies on today.
+// Address/postcode/website ride alongside venue/city here, but ONLY for
+// tier "approved_new" -- the one tier that means an admin explicitly
+// reviewed and approved a brand-new venue through the grouped resolution
+// UI (see groupResolution.js's applyVenueGroupDecision). For "exact"/
+// "confirmed" (a matched EXISTING venue) they're always null, so an
+// imported address can never reach, let alone overwrite, an existing
+// venue's own record -- the RPC layer only ever uses these three fields
+// when it's about to create a venue that doesn't exist yet. Plain tier
+// "none" (a new venue imported without ever going through explicit
+// approval) also gets null here, matching today's existing behaviour
+// exactly: only a reviewed-and-approved venue gets an address attached.
 function resolveVenueFields(venueMatch) {
   if (venueMatch.tier === "exact" || venueMatch.tier === "confirmed") {
-    return { venue: venueMatch.match.name, city: venueMatch.match.city };
+    return { venue: venueMatch.match.name, city: venueMatch.match.city, venueAddress: null, venuePostcode: null, venueWebsite: null };
   }
-  return { venue: venueMatch.query, city: venueMatch.city };
+  if (venueMatch.tier === "approved_new") {
+    return {
+      venue: venueMatch.query,
+      city: venueMatch.city,
+      venueAddress: venueMatch.address || null,
+      venuePostcode: venueMatch.postcode || null,
+      venueWebsite: venueMatch.website || null,
+    };
+  }
+  return { venue: venueMatch.query, city: venueMatch.city, venueAddress: null, venuePostcode: null, venueWebsite: null };
 }
 
 // Snapshot of exactly what the admin's review decided for this row, kept
@@ -107,7 +127,7 @@ function buildMatchDecisions(item) {
 // venues, since only venues have an existing, already-proven auto-create
 // trigger to build on).
 export function buildGigInsertPayload(item) {
-  const { venue, city } = resolveVenueFields(item.venueMatch);
+  const { venue, city, venueAddress, venuePostcode, venueWebsite } = resolveVenueFields(item.venueMatch);
   const bandProfileId =
     item.artistMatch.tier === "exact" || item.artistMatch.tier === "confirmed" ? item.artistMatch.match.id : null;
 
@@ -124,6 +144,9 @@ export function buildGigInsertPayload(item) {
     raw_text: item.raw,
     parsed_fields: item.fields,
     match_decisions: buildMatchDecisions(item),
+    venue_address: venueAddress,
+    venue_postcode: venuePostcode,
+    venue_website: venueWebsite,
   };
 }
 

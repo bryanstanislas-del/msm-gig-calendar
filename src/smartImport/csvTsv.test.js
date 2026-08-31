@@ -124,6 +124,40 @@ describe("parseDelimited", () => {
     expect(records[0].genre).toBeNull();
   });
 
+  describe("Venue Address column (header-based only, structured bulk imports)", () => {
+    it("maps an explicit Address header alongside the base columns", () => {
+      const csv = "Artist,Venue,Address,City,Date,Time\nThe Mafia,Southampton 1865,Above Bar Street,Southampton,2026-06-06,20:00";
+      const { records, mapping } = parseDelimited(csv, ",");
+      expect(mapping.venueAddress).toBe(2);
+      expect(records[0].venueAddress).toBe("Above Bar Street");
+    });
+
+    it("recognizes every Venue Address alias (address, venue address, street address)", () => {
+      for (const alias of COLUMN_ALIASES.venueAddress) {
+        const header = ["Artist", "Venue", alias, "City"];
+        const { mapping } = parseDelimited(`${header.join(",")}\nThe Mafia,Southampton 1865,1 Test St,Southampton`, ",");
+        expect(mapping.venueAddress).toBe(2);
+      }
+    });
+
+    it("leaves venueAddress null when no Address column is present -- existing 5/6-column CSVs are unaffected", () => {
+      const { records } = parseDelimited(fixture("csv-basic.csv"), ",");
+      expect(records.every((r) => r.venueAddress === null)).toBe(true);
+    });
+
+    it("never infers venueAddress from a headerless/positional import, even with a 6th column present", () => {
+      // A 6-column headerless row maps positionally to Artist/Venue/City/
+      // Date/Time/Genre (POSITIONAL_FALLBACK_ORDER_WITH_GENRE) -- there is
+      // no positional slot for address by design, so it must never appear
+      // here, keeping every existing positional import unaffected.
+      const sixCol = "The Mafia,The Obelisk,Woolston,2026-06-06,20:00,Punk";
+      const { records, usedPositionalFallback } = parseDelimited(sixCol, ",");
+      expect(usedPositionalFallback).toBe(true);
+      expect(records[0].venueAddress).toBeNull();
+      expect(records[0].genre).toBe("Punk"); // the 6th column is still genre, not address
+    });
+  });
+
   it("every alias variant maps to its target field", () => {
     for (const [field, aliases] of Object.entries(COLUMN_ALIASES)) {
       for (const alias of aliases) {

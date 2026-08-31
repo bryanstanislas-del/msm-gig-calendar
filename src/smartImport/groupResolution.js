@@ -56,6 +56,17 @@ function applyVenueGroupDecision(venueMatch, decision) {
         tier: "approved_new",
         query: decision.approvedNewVenueName.trim(),
         city: decision.approvedNewVenueCity,
+        // Previously dropped here even though VenueMissingGroupRow's
+        // Approve New Venue form already collects them -- carried through
+        // now so importEngine.js can pass them on to venue creation.
+        // Address/postcode/website only ever apply to a genuinely NEW venue
+        // (this whole branch only runs for a "New Venue" group); an
+        // existing matched venue's own record is never touched by any of
+        // this. approvedNewVenueCounty is deliberately NOT carried through
+        // -- venues has no county column (pre-existing, unrelated gap).
+        address: decision.approvedNewVenueAddress || null,
+        postcode: decision.approvedNewVenuePostcode || null,
+        website: decision.approvedNewVenueWebsite || null,
         match: null,
         candidates: [],
       };

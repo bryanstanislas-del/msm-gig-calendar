@@ -157,6 +157,57 @@ describe("buildGigInsertPayload", () => {
   });
 });
 
+describe("buildGigInsertPayload -- venue address (structured bulk import)", () => {
+  it("includes venue_address/venue_postcode/venue_website for an approved new venue", () => {
+    const result = buildGigInsertPayload(
+      item({
+        venueMatch: {
+          tier: "approved_new", query: "The 1865", city: "Fareham",
+          address: "12 High Street", postcode: "PO16 0AA", website: "https://the1865.example",
+          match: null, candidates: [],
+        },
+      })
+    );
+    expect(result.venue_address).toBe("12 High Street");
+    expect(result.venue_postcode).toBe("PO16 0AA");
+    expect(result.venue_website).toBe("https://the1865.example");
+  });
+
+  it("defaults venue_address/venue_postcode/venue_website to null for an approved new venue with none supplied -- address stays optional", () => {
+    const result = buildGigInsertPayload(
+      item({ venueMatch: { tier: "approved_new", query: "The 1865", city: "Fareham", match: null, candidates: [] } })
+    );
+    expect(result.venue_address).toBeNull();
+    expect(result.venue_postcode).toBeNull();
+    expect(result.venue_website).toBeNull();
+  });
+
+  it("never sends a venue address for an EXISTING matched venue (exact tier), even if venueMatch somehow carried one -- guards against ever overwriting a real venue's own address", () => {
+    const result = buildGigInsertPayload(
+      item({
+        venueMatch: { tier: "exact", query: "The Brook", city: "Southampton", address: "should never be sent", match: { id: "v1", name: "The Brook", city: "Southampton" }, candidates: [] },
+      })
+    );
+    expect(result.venue_address).toBeNull();
+  });
+
+  it("never sends a venue address for a confirmed (admin-accepted fuzzy) EXISTING venue match either", () => {
+    const result = buildGigInsertPayload(
+      item({
+        venueMatch: { tier: "confirmed", query: "The Brooky", city: null, address: "should never be sent", match: { id: "v9", name: "The Brooke Inn", city: "Winchester" }, candidates: [] },
+      })
+    );
+    expect(result.venue_address).toBeNull();
+  });
+
+  it("never sends a venue address for a plain New Venue (tier none) row that was never explicitly approved", () => {
+    const result = buildGigInsertPayload(
+      item({ venueMatch: { tier: "none", query: "Totally New Place", city: "Fareham", match: null, candidates: [] } })
+    );
+    expect(result.venue_address).toBeNull();
+  });
+});
+
 describe("runImport", () => {
   it("starts a run, imports each row via the concurrency pool, and completes the run with correct counts", async () => {
     const rows = [item({ id: "r1" }), item({ id: "r2" }), item({ id: "r3" })];
