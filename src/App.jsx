@@ -86,6 +86,7 @@ import {
   LOCKED_DUPLICATE_TIERS,
   composeResolvedRow,
   indexRowsByGroup,
+  entitySearchTargets,
 } from "./smartImport";
 import { GENRES, GENRE_COLORS, genreColor, genreLabel, NO_GENRE_OPTION } from "./genres";
 
@@ -6663,12 +6664,17 @@ function EntitySearchPicker({ entityType, onPick, onCancel }) {
         // A parsed billing line never says in advance whether an act is a
         // solo artist or a full band -- search and merge both, same as
         // runMatching.js's own matchRow() already does for per-row fuzzy
-        // artist candidates.
-        const data = entityType === "artist"
-          ? (await Promise.all([DB.searchEntities("band", q), DB.searchEntities("solo_artist", q)]))
+        // artist candidates. entitySearchTargets() is what actually decides
+        // which search_entities entity type(s) this picker's entityType
+        // maps to -- previously this hardcoded "venue" as the fallback for
+        // anything that wasn't "artist", which silently searched venues
+        // for entityType="festival" instead of festivals.
+        const targets = entitySearchTargets(entityType);
+        const data = targets.length > 1
+          ? (await Promise.all(targets.map((t) => DB.searchEntities(t, q))))
               .flat()
               .sort((a, b) => b.similarity_score - a.similarity_score)
-          : await DB.searchEntities("venue", q);
+          : await DB.searchEntities(targets[0], q);
         if (!cancelled) setResults(data);
       } catch {
         if (!cancelled) setResults([]);
@@ -6679,14 +6685,16 @@ function EntitySearchPicker({ entityType, onPick, onCancel }) {
     return () => { cancelled = true; clearTimeout(timer); };
   }, [query, entityType]);
 
+  const entityLabel = entityType === "venue" ? "venues" : entityType === "festival" ? "festivals" : "artists";
+
   return (
     <div style={{ marginTop: 8, padding: 10, background: "rgba(255,255,255,0.02)", border: `1px solid ${C.border}`, borderRadius: 6, maxWidth: 360 }}>
       <input
         type="text"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        placeholder={`Search ${entityType === "venue" ? "venues" : "artists"}…`}
-        aria-label={`Search existing ${entityType === "venue" ? "venues" : "artists"}`}
+        placeholder={`Search ${entityLabel}…`}
+        aria-label={`Search existing ${entityLabel}`}
         style={{ ...inputCss, fontSize: 12, padding: "6px 10px" }}
         autoFocus
       />
