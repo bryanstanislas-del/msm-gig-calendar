@@ -67,6 +67,29 @@ describe("applyGroupDecisionToRow -- venue", () => {
     expect(stateOf(resolved)).toBe(ROW_STATES.READY);
   });
 
+  it("APPROVE_NEW carries address/postcode/website through onto the resolved venueMatch when supplied -- previously silently dropped here", () => {
+    const decision = {
+      groupId: "g1", kind: "venue_missing", action: VENUE_MISSING_ACTIONS.APPROVE_NEW,
+      approvedNewVenueName: "The 1865", approvedNewVenueCity: "Fareham",
+      approvedNewVenueAddress: "12 High Street", approvedNewVenuePostcode: "PO16 0AA", approvedNewVenueWebsite: "https://the1865.example",
+    };
+    const resolved = applyGroupDecisionToRow(missingVenueRow("r1"), decision);
+    expect(resolved.venueMatch).toMatchObject({
+      tier: "approved_new", query: "The 1865", city: "Fareham",
+      address: "12 High Street", postcode: "PO16 0AA", website: "https://the1865.example",
+    });
+  });
+
+  it("APPROVE_NEW without an address/postcode/website still resolves cleanly -- these stay optional, never required", () => {
+    const decision = {
+      groupId: "g1", kind: "venue_missing", action: VENUE_MISSING_ACTIONS.APPROVE_NEW,
+      approvedNewVenueName: "The 1865", approvedNewVenueCity: "Fareham",
+    };
+    const resolved = applyGroupDecisionToRow(missingVenueRow("r1"), decision);
+    expect(resolved.venueMatch).toMatchObject({ tier: "approved_new", address: null, postcode: null, website: null });
+    expect(stateOf(resolved)).toBe(ROW_STATES.READY);
+  });
+
   it("LINK_EXISTING resolves to a confirmed match against the given venue", () => {
     const decision = {
       groupId: "g1", kind: "venue_missing", action: VENUE_MISSING_ACTIONS.LINK_EXISTING,
@@ -172,6 +195,19 @@ describe("composeResolvedRow -- one grouped decision updates every member row id
     const resolvedRows = rows.map((r) => composeResolvedRow(r, { venueGroupDecision: decision }));
     for (const resolved of resolvedRows) {
       expect(resolved.venueMatch).toMatchObject({ tier: "confirmed", match: { id: "v1" } });
+      expect(stateOf(resolved)).toBe(ROW_STATES.READY);
+    }
+  });
+
+  it("one grouped APPROVE_NEW decision with an address applies identically to every row -- a repeated new venue resolves once and shares the same approved address", () => {
+    const decision = {
+      kind: "venue_missing", action: VENUE_MISSING_ACTIONS.APPROVE_NEW,
+      approvedNewVenueName: "The 1865", approvedNewVenueCity: "Fareham", approvedNewVenueAddress: "12 High Street",
+    };
+    const rows = [missingVenueRow("r1"), missingVenueRow("r2"), missingVenueRow("r3")];
+    const resolvedRows = rows.map((r) => composeResolvedRow(r, { venueGroupDecision: decision }));
+    for (const resolved of resolvedRows) {
+      expect(resolved.venueMatch).toMatchObject({ tier: "approved_new", query: "The 1865", city: "Fareham", address: "12 High Street" });
       expect(stateOf(resolved)).toBe(ROW_STATES.READY);
     }
   });

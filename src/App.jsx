@@ -356,7 +356,7 @@ const DB = {
     return data;
   },
 
-  async importGigRow({ importRunId, band_name, venue, city, date, time, genre, notes, tickets, band_profile_id, raw_text, parsed_fields, match_decisions }) {
+  async importGigRow({ importRunId, band_name, venue, city, date, time, genre, notes, tickets, band_profile_id, raw_text, parsed_fields, match_decisions, venue_address, venue_postcode, venue_website }) {
     if (USE_MOCK) return { outcome: "created", gig_id: `mock-gig-${Date.now()}` };
     const { data, error } = await supabase.rpc("import_gig_row", {
       p_import_run_id: importRunId,
@@ -372,6 +372,14 @@ const DB = {
       p_raw_text: raw_text,
       p_parsed_fields: parsed_fields ?? null,
       p_match_decisions: match_decisions ?? null,
+      // Sprint: structured venue address support -- only ever set for a
+      // freshly-approved new venue (see importEngine.js's
+      // resolveVenueFields); null for every other row, which the RPC
+      // treats as "nothing to pre-create", leaving an existing venue's own
+      // record completely untouched.
+      p_venue_address: venue_address ?? null,
+      p_venue_postcode: venue_postcode ?? null,
+      p_venue_website: venue_website ?? null,
     });
     if (error) throw new Error(error.message);
     return data;
@@ -6756,7 +6764,12 @@ function VenueMissingGroupRow({ group, decision, rowsById, onDecide, onUndo }) {
   const [mode, setMode] = useState(null); // null | "link" | "approveNew"
   const [name, setName] = useState(group.sourceText || "");
   const [city, setCity] = useState(group.sourceCity || "");
-  const [address, setAddress] = useState("");
+  // Prefilled from a structured "Address" import column when the source
+  // data supplied one (see venueResolutionGroups.js's suggestedAddress) --
+  // still a plain editable field, so the admin can review/correct it
+  // before approving, exactly like name/city above. Address stays optional:
+  // an empty string here is a valid choice, not an error.
+  const [address, setAddress] = useState(group.suggestedAddress || "");
   const [county, setCounty] = useState("");
   const [postcode, setPostcode] = useState("");
   const [website, setWebsite] = useState("");

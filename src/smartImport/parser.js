@@ -53,6 +53,10 @@ function eventRowFromDelimitedRecord(record) {
     artistName: record.artistName || null,
     venueName: record.venueName || null,
     venueBlock: null,
+    // Header-mapped only (see csvTsv.js's COLUMN_ALIASES comment) -- never
+    // populated for a headerless/positional row or for a free-text profile,
+    // so this stays optional and additive for every existing import shape.
+    venueAddress: record.venueAddress || null,
     city: record.city || null,
     date: dateResult.parsed ? formatDateISO(dateResult.parsed) : null,
     dateRaw: record.date || "",

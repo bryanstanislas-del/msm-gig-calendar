@@ -6,9 +6,16 @@
 import Papa from "papaparse";
 
 // field -> accepted header names, lowercase/whitespace-normalized
+// venueAddress is header-mapped only -- deliberately absent from
+// POSITIONAL_FALLBACK_ORDER below, so a headerless paste never guesses that
+// some column is an address. It only ever takes effect when a pasted
+// CSV/TSV has an explicit recognized header cell naming it, keeping every
+// existing 5/6-column (headered or positional) import byte-for-byte
+// unaffected.
 export const COLUMN_ALIASES = {
   artistName: ["artist", "band", "act", "performer", "headliner"],
   venueName: ["venue", "venue name", "location name"],
+  venueAddress: ["address", "venue address", "street address"],
   city: ["city", "town", "location"],
   date: ["date", "gig date", "event date"],
   time: ["time", "doors", "start time", "start"],
@@ -134,6 +141,7 @@ export function parseDelimited(text, delimiter) {
       raw: row.join(delimiter === "\t" ? "\t" : ", "),
       artistName: get("artistName") || null,
       venueName: get("venueName") || null,
+      venueAddress: get("venueAddress") || null,
       city: get("city") || null,
       date: get("date") || null,
       time: get("time") || null,
