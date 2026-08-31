@@ -40,6 +40,8 @@ export {
   excludeAllErrors,
   excludeAllDuplicates,
   excludeVisibleSelected,
+  selectAllVisible,
+  deselectAllVisible,
   applyMatchOverride,
   withOverridesApplied,
   applyBulkApproveSuggestions,

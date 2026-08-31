@@ -20,7 +20,7 @@
 // if any. Every function below takes these as plain arguments and returns
 // a new value rather than mutating -- consistent with how the rest of this
 // module tree treats data.
-import { ROW_STATES, EXCLUDED_MANUALLY, DUPLICATE_STATES, ERROR_STATES, DEFAULT_INCLUDED_STATES, ROW_STATE_LABELS, resolveDisplayState } from "./reviewBatch.js";
+import { ROW_STATES, EXCLUDED_MANUALLY, DUPLICATE_STATES, ERROR_STATES, DEFAULT_INCLUDED_STATES, ROW_STATE_LABELS, resolveDisplayState, isLocked } from "./reviewBatch.js";
 
 // The single source of truth for "is this row currently selected": a row is
 // selected iff it was explicitly included, OR its own rowState is one of
@@ -94,6 +94,38 @@ export function excludeVisibleSelected(filteredItems, { explicitlyIncluded, expl
   const nextIncluded = new Set(explicitlyIncluded);
   const nextExcluded = new Set(explicitlyExcluded);
   for (const item of filteredItems) {
+    nextIncluded.delete(item.id);
+    nextExcluded.add(item.id);
+  }
+  return { explicitlyIncluded: nextIncluded, explicitlyExcluded: nextExcluded };
+}
+
+// The other selection-scoped bulk pair: SELECT/DESELECT ALL VISIBLE, both
+// operating on the same `filteredItems` the caller already computes for
+// excludeVisibleSelected above (App.jsx's `filtered` -- whatever the active
+// filter tab currently shows), so "visible" means exactly the same thing
+// everywhere in the dashboard. A locked row's checkbox is disabled in the
+// UI and so can never reach explicitlyIncluded that way (see
+// deriveSelection's own header comment) -- but unlike the single-row
+// toggle, a bulk sweep has no per-row disabled state to lean on, so both
+// functions explicitly skip isLocked() rows themselves rather than
+// assuming the caller filtered them out first.
+export function selectAllVisible(filteredItems, { explicitlyIncluded, explicitlyExcluded }) {
+  const nextIncluded = new Set(explicitlyIncluded);
+  const nextExcluded = new Set(explicitlyExcluded);
+  for (const item of filteredItems) {
+    if (isLocked(item.rowState)) continue;
+    nextExcluded.delete(item.id);
+    nextIncluded.add(item.id);
+  }
+  return { explicitlyIncluded: nextIncluded, explicitlyExcluded: nextExcluded };
+}
+
+export function deselectAllVisible(filteredItems, { explicitlyIncluded, explicitlyExcluded }) {
+  const nextIncluded = new Set(explicitlyIncluded);
+  const nextExcluded = new Set(explicitlyExcluded);
+  for (const item of filteredItems) {
+    if (isLocked(item.rowState)) continue;
     nextIncluded.delete(item.id);
     nextExcluded.add(item.id);
   }
