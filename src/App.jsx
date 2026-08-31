@@ -48,7 +48,7 @@ import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import React from "react";
 import { BrowserRouter, Routes, Route, useParams, useNavigate, Link } from "react-router-dom";
 import { DEFAULT_NOTIFICATION_PREFS, describeNotificationEvent, formatNotificationDate } from "./notificationHelpers";
-import { selectVisiblePendingGigs, bulkApproveGigs } from "./moderationHelpers";
+import { selectVisiblePendingGigs, bulkApproveGigs, finaliseBulkApproveOutcome } from "./moderationHelpers";
 import {
   parseImportText,
   runMatching,
@@ -2623,22 +2623,41 @@ function AdminPanel({ allGigs, onRefresh, bands=[] }) {
   // batch settles, not once per gig -- looping a full getAllGigs()+
   // getBands() refetch hundreds of times would be the real unnecessary
   // load, not the individual approve calls themselves.
+  //
+  // The approval batch and the post-batch refresh are two independent
+  // operations and must never be conflated: onRefresh() only re-fetches
+  // the admin's on-screen list, it doesn't touch any gig, so a refresh
+  // failure can never mean the approvals themselves failed -- and it must
+  // never be allowed to swallow an already-computed, already-correct
+  // result or leave the panel stuck disabled. It gets its own try/catch
+  // (never re-running bulkApproveGigs -- no retry, no second approval
+  // attempt), and setBulkRunning(false) lives in `finally` so it always
+  // fires, however either the batch or the refresh behaves.
   const runBulkApprove = async () => {
     if (bulkRunning) return; // guards against a double-click launching a second batch
     const eligibleNow = selectVisiblePendingGigs(visible);
     setBulkConfirming(false);
     setBulkRunning(true);
     setBulkResult(null);
-    const result = await bulkApproveGigs(eligibleNow, {
-      approveFn: async (gig) => {
-        await DB.updateGigStatus(gig.id, "approved");
-        await logActivity("gig_approved", "gig", gig.band_name, gig.id);
-        await recordGigNotificationEvents(gig, "gig_added");
-      },
-    });
-    await onRefresh();
-    setBulkResult(result);
-    setBulkRunning(false);
+    try {
+      const result = await bulkApproveGigs(eligibleNow, {
+        approveFn: async (gig) => {
+          await DB.updateGigStatus(gig.id, "approved");
+          await logActivity("gig_approved", "gig", gig.band_name, gig.id);
+          await recordGigNotificationEvents(gig, "gig_added");
+        },
+      });
+      let refreshError = null;
+      try {
+        await onRefresh();
+      } catch (e) {
+        refreshError = e;
+        console.warn("Post-bulk-approve refresh failed:", e);
+      }
+      setBulkResult(finaliseBulkApproveOutcome(result, refreshError));
+    } finally {
+      setBulkRunning(false);
+    }
   };
 
   const remove = async (gigId, bandName) => {
@@ -2791,6 +2810,15 @@ function AdminPanel({ allGigs, onRefresh, bands=[] }) {
                 <li key={f.gig.id} style={{ fontSize:12 }}>{f.gig.band_name} — {f.gig.venue}: {f.error}</li>
               ))}
             </ul>
+          )}
+          {bulkResult.refreshError && (
+            // A refresh failure is a SEPARATE fact from the approval result
+            // above -- the gigs were already approved (or not) regardless of
+            // this, so it gets its own line/colour rather than altering the
+            // success/failure wording above it.
+            <div style={{ marginTop:8, paddingTop:8, borderTop:`1px solid ${C.border}`, color:C.amber, fontSize:12 }}>
+              ⚠ The moderation list could not be refreshed. Refresh the page to see the latest status.
+            </div>
           )}
           <span onClick={()=>setBulkResult(null)} style={{ display:"inline-block", marginTop:8, fontSize:11, color:C.muted, cursor:"pointer", textDecoration:"underline" }}>Dismiss</span>
         </div>

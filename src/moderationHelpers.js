@@ -61,3 +61,17 @@ export async function bulkApproveGigs(gigs, { approveFn, concurrency = BULK_APPR
 
   return { succeeded, failed, skipped };
 }
+
+// Combines an already-completed bulkApproveGigs() result with the outcome
+// of the separate, subsequent "refresh the admin's view" step (App.jsx's
+// onRefresh) -- two unrelated operations that must never be confused with
+// each other. The approvals themselves either happened or didn't (that's
+// entirely `result`'s own succeeded/failed/skipped, untouched here); a
+// refresh failure only means the admin's on-screen list may now be stale,
+// it does not mean, and must never be reported as, an approval failure.
+// Takes no approve callback of its own and performs no I/O, so by
+// construction it can never trigger a second approval attempt -- it only
+// ever combines two values the caller already computed.
+export function finaliseBulkApproveOutcome(result, refreshError = null) {
+  return { ...result, refreshError: refreshError ? refreshError.message || String(refreshError) : null };
+}

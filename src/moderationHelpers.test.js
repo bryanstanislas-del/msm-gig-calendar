@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { selectVisiblePendingGigs, bulkApproveGigs, BULK_APPROVE_CONCURRENCY } from "./moderationHelpers.js";
+import { selectVisiblePendingGigs, bulkApproveGigs, BULK_APPROVE_CONCURRENCY, finaliseBulkApproveOutcome } from "./moderationHelpers.js";
 
 function gig(id, status, overrides = {}) {
   return { id, status, band_name: `Band ${id}`, venue: `Venue ${id}`, ...overrides };
@@ -152,5 +152,59 @@ describe("bulkApproveGigs", () => {
     expect(result.succeeded).toHaveLength(6);
     expect(result.failed).toHaveLength(3);
     expect(result.failed.map((f) => f.gig.id).sort()).toEqual(["g1", "g4", "g7"]);
+  });
+});
+
+// Regression coverage for the "post-batch onRefresh() failure" blocker: the
+// approval batch and the subsequent refresh-the-admin's-view step are two
+// independent operations, and a failure in the second must never be
+// reported as, or allowed to overwrite/discard, the first's already-correct
+// result.
+describe("finaliseBulkApproveOutcome", () => {
+  it("A: successful batch + successful refresh -> unchanged result, no refresh error", () => {
+    const result = { succeeded: [gig("g1", "pending"), gig("g2", "pending")], failed: [], skipped: [] };
+    const outcome = finaliseBulkApproveOutcome(result, null);
+    expect(outcome.succeeded).toEqual(result.succeeded);
+    expect(outcome.failed).toEqual([]);
+    expect(outcome.skipped).toEqual([]);
+    expect(outcome.refreshError).toBeNull();
+  });
+
+  it("B: successful batch + failed refresh -> approval result stays successful, refresh failure kept separate", () => {
+    const result = { succeeded: [gig("g1", "pending"), gig("g2", "pending")], failed: [], skipped: [] };
+    const outcome = finaliseBulkApproveOutcome(result, new Error("network timeout"));
+    expect(outcome.succeeded).toHaveLength(2); // still both approved -- unaffected by the refresh failing
+    expect(outcome.failed).toHaveLength(0); // must NOT be reported as an approval failure
+    expect(outcome.refreshError).toBe("network timeout");
+  });
+
+  it("C: partial approval failure + failed refresh -> original succeeded/failed counts preserved, refresh failure additional", () => {
+    const result = {
+      succeeded: [gig("g1", "pending")],
+      failed: [{ gig: gig("g2", "pending"), error: "constraint violation" }],
+      skipped: [],
+    };
+    const outcome = finaliseBulkApproveOutcome(result, new Error("fetch failed"));
+    expect(outcome.succeeded).toHaveLength(1);
+    expect(outcome.failed).toHaveLength(1);
+    expect(outcome.failed[0].error).toBe("constraint violation"); // untouched by the refresh failure
+    expect(outcome.refreshError).toBe("fetch failed");
+  });
+
+  it("D: takes no approve callback and performs no I/O, so it cannot itself trigger a second approval attempt", () => {
+    expect(finaliseBulkApproveOutcome.length).toBeLessThanOrEqual(2); // (result, refreshError) only -- no approveFn parameter
+    const result = { succeeded: [], failed: [], skipped: [] };
+    const outcome = finaliseBulkApproveOutcome(result, new Error("x"));
+    expect(Object.keys(outcome).sort()).toEqual(["failed", "refreshError", "skipped", "succeeded"]);
+  });
+
+  it("accepts a non-Error refresh failure value safely", () => {
+    const result = { succeeded: [], failed: [], skipped: [] };
+    expect(finaliseBulkApproveOutcome(result, "plain string failure").refreshError).toBe("plain string failure");
+  });
+
+  it("defaults refreshError to null when omitted", () => {
+    const result = { succeeded: [], failed: [], skipped: [] };
+    expect(finaliseBulkApproveOutcome(result).refreshError).toBeNull();
   });
 });
