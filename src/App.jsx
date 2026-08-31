@@ -48,6 +48,7 @@ import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import React from "react";
 import { BrowserRouter, Routes, Route, useParams, useNavigate, Link } from "react-router-dom";
 import { DEFAULT_NOTIFICATION_PREFS, describeNotificationEvent, formatNotificationDate } from "./notificationHelpers";
+import { selectVisiblePendingGigs, bulkApproveGigs, finaliseBulkApproveOutcome } from "./moderationHelpers";
 import {
   parseImportText,
   runMatching,
@@ -2578,11 +2579,23 @@ function AdminPanel({ allGigs, onRefresh, bands=[] }) {
   const [saving,  setSaving]  = useState(false);
   const [editMsg, setEditMsg] = useState("");
   const [festivalOptions, setFestivalOptions] = useState([]); // for "Part of a festival?" picker
+  // APPROVE ALL VISIBLE: bulkConfirming just gates whether the inline
+  // confirmation panel is shown -- it never captures the eligible gig list
+  // itself, so the count/list it displays is always recomputed from current
+  // props on every render (see visiblePendingGigs below), never a stale
+  // snapshot from the moment the button was clicked.
+  const [bulkConfirming, setBulkConfirming] = useState(false);
+  const [bulkRunning,    setBulkRunning]    = useState(false);
+  const [bulkResult,     setBulkResult]     = useState(null);
 
   useEffect(() => { DB.getFestivals(true).then(setFestivalOptions); }, []);
 
   const visible = allGigs.filter(g => filter === "all" ? true : g.status === filter);
   const counts  = { all:allGigs.length, pending:allGigs.filter(g=>g.status==="pending").length, approved:allGigs.filter(g=>g.status==="approved").length, rejected:allGigs.filter(g=>g.status==="rejected").length };
+  // The only eligible set for bulk approval: derived from `visible` (never
+  // from allGigs), so an active filter/tab is never bypassed -- see
+  // moderationHelpers.js's own header comment.
+  const visiblePendingGigs = selectVisiblePendingGigs(visible);
 
   const action = async (gigId, status) => {
     setLoading(l=>({...l,[gigId]:true}));
@@ -2596,6 +2609,55 @@ function AdminPanel({ allGigs, onRefresh, bands=[] }) {
     if (status === "approved") await recordGigNotificationEvents(gig, "gig_added");
     await onRefresh();
     setLoading(l=>({...l,[gigId]:false}));
+  };
+
+  // APPROVE ALL VISIBLE: re-derives the eligible set right here (not from
+  // any state captured when the confirmation panel was opened), so a gig
+  // that stopped being pending/visible in between is never approved --
+  // "stale confirmation safety". bulkApproveGigs also independently skips
+  // anything not still status==="pending" as a second, defence-in-depth
+  // check. Reuses the exact same three calls the individual APPROVE button
+  // makes (DB.updateGigStatus / logActivity / recordGigNotificationEvents)
+  // per gig -- no separate approval semantics, no raw multi-row UPDATE.
+  // Unlike `action` above, onRefresh() is called ONCE after the whole
+  // batch settles, not once per gig -- looping a full getAllGigs()+
+  // getBands() refetch hundreds of times would be the real unnecessary
+  // load, not the individual approve calls themselves.
+  //
+  // The approval batch and the post-batch refresh are two independent
+  // operations and must never be conflated: onRefresh() only re-fetches
+  // the admin's on-screen list, it doesn't touch any gig, so a refresh
+  // failure can never mean the approvals themselves failed -- and it must
+  // never be allowed to swallow an already-computed, already-correct
+  // result or leave the panel stuck disabled. It gets its own try/catch
+  // (never re-running bulkApproveGigs -- no retry, no second approval
+  // attempt), and setBulkRunning(false) lives in `finally` so it always
+  // fires, however either the batch or the refresh behaves.
+  const runBulkApprove = async () => {
+    if (bulkRunning) return; // guards against a double-click launching a second batch
+    const eligibleNow = selectVisiblePendingGigs(visible);
+    setBulkConfirming(false);
+    setBulkRunning(true);
+    setBulkResult(null);
+    try {
+      const result = await bulkApproveGigs(eligibleNow, {
+        approveFn: async (gig) => {
+          await DB.updateGigStatus(gig.id, "approved");
+          await logActivity("gig_approved", "gig", gig.band_name, gig.id);
+          await recordGigNotificationEvents(gig, "gig_added");
+        },
+      });
+      let refreshError = null;
+      try {
+        await onRefresh();
+      } catch (e) {
+        refreshError = e;
+        console.warn("Post-bulk-approve refresh failed:", e);
+      }
+      setBulkResult(finaliseBulkApproveOutcome(result, refreshError));
+    } finally {
+      setBulkRunning(false);
+    }
   };
 
   const remove = async (gigId, bandName) => {
@@ -2730,6 +2792,71 @@ function AdminPanel({ allGigs, onRefresh, bands=[] }) {
           </button>
         ))}
       </div>
+
+      {bulkResult && (
+        <div style={{
+          marginBottom:16, padding:"12px 16px", borderRadius:6,
+          background: bulkResult.failed.length ? "rgba(232,32,58,0.08)" : "rgba(67,170,139,0.1)",
+          border:`1px solid ${bulkResult.failed.length ? C.red : C.green}`,
+          fontSize:13, color: bulkResult.failed.length ? C.red : C.green,
+        }}>
+          <div>
+            {bulkResult.succeeded.length} gig{bulkResult.succeeded.length===1?"":"s"} approved{bulkResult.failed.length===0 ? " successfully." : "."}
+            {bulkResult.failed.length > 0 && ` ${bulkResult.failed.length} gig${bulkResult.failed.length===1?"":"s"} failed.`}
+          </div>
+          {bulkResult.failed.length > 0 && (
+            <ul style={{ margin:"8px 0 0", paddingLeft:18 }}>
+              {bulkResult.failed.map(f => (
+                <li key={f.gig.id} style={{ fontSize:12 }}>{f.gig.band_name} — {f.gig.venue}: {f.error}</li>
+              ))}
+            </ul>
+          )}
+          {bulkResult.refreshError && (
+            // A refresh failure is a SEPARATE fact from the approval result
+            // above -- the gigs were already approved (or not) regardless of
+            // this, so it gets its own line/colour rather than altering the
+            // success/failure wording above it.
+            <div style={{ marginTop:8, paddingTop:8, borderTop:`1px solid ${C.border}`, color:C.amber, fontSize:12 }}>
+              ⚠ The moderation list could not be refreshed. Refresh the page to see the latest status.
+            </div>
+          )}
+          <span onClick={()=>setBulkResult(null)} style={{ display:"inline-block", marginTop:8, fontSize:11, color:C.muted, cursor:"pointer", textDecoration:"underline" }}>Dismiss</span>
+        </div>
+      )}
+
+      {(visiblePendingGigs.length > 0 || bulkConfirming) && (
+        <div style={{ marginBottom:20 }}>
+          {!bulkConfirming ? (
+            <Btn variant="success" onClick={()=>setBulkConfirming(true)} disabled={bulkRunning} style={{ fontSize:12, padding:"9px 16px" }}>
+              ✓ APPROVE ALL VISIBLE ({visiblePendingGigs.length})
+            </Btn>
+          ) : (
+            <div style={{ background:C.surfaceHigh, border:`1px solid ${C.green}`, borderRadius:6, padding:"14px 16px", maxWidth:480 }}>
+              {visiblePendingGigs.length > 0 ? (
+                <>
+                  <div style={{ fontFamily:F.display, fontSize:14, color:C.white, letterSpacing:1, marginBottom:4 }}>
+                    Approve {visiblePendingGigs.length} gig{visiblePendingGigs.length===1?"":"s"}?
+                  </div>
+                  <div style={{ fontSize:12, color:C.muted, marginBottom:12 }}>
+                    You are about to approve {visiblePendingGigs.length} currently visible pending gig{visiblePendingGigs.length===1?"":"s"}.
+                  </div>
+                </>
+              ) : (
+                <div style={{ fontSize:12, color:C.muted, marginBottom:12 }}>
+                  No pending gigs are currently visible to approve.
+                </div>
+              )}
+              <div style={{ display:"flex", gap:8 }}>
+                <Btn variant="ghost" onClick={()=>setBulkConfirming(false)} disabled={bulkRunning}>CANCEL</Btn>
+                <Btn variant="success" onClick={runBulkApprove} disabled={bulkRunning || visiblePendingGigs.length===0}>
+                  {bulkRunning ? "APPROVING…" : `✓ APPROVE ${visiblePendingGigs.length} GIGS`}
+                </Btn>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {visible.length === 0 && <div style={{ color:C.dim, fontSize:13, padding:"24px 0" }}>No gigs in this category.</div>}
       <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
         {visible.map(g => {
@@ -2751,11 +2878,11 @@ function AdminPanel({ allGigs, onRefresh, bands=[] }) {
                   {g.slug && <div style={{ fontSize:10, color:C.dim, marginTop:2, fontFamily:"monospace" }}>/gig/{g.slug}</div>}
                 </div>
                 <div style={{ display:"flex", gap:6, flexWrap:"wrap", alignItems:"center" }}>
-                  <Btn variant="ghost" onClick={()=>openEdit(g)} disabled={spin} style={{ fontSize:11, padding:"6px 12px" }}>✏️ EDIT</Btn>
+                  <Btn variant="ghost" onClick={()=>openEdit(g)} disabled={spin || bulkRunning} style={{ fontSize:11, padding:"6px 12px" }}>✏️ EDIT</Btn>
                   {g.slug && <Link to={`/gig/${g.slug}`} target="_blank" style={{ ...btnCss("ghost"), fontSize:11, padding:"6px 12px", textDecoration:"none" }}>👁 VIEW</Link>}
-                  {g.status !== "approved" && <Btn variant="success" onClick={()=>action(g.id,"approved")} disabled={spin}>✓ APPROVE</Btn>}
-                  {g.status !== "rejected" && <Btn variant="ghost"   onClick={()=>action(g.id,"rejected")} disabled={spin}>✗ REJECT</Btn>}
-                  <Btn variant="danger" onClick={()=>remove(g.id, g.band_name)} disabled={spin}>🗑</Btn>
+                  {g.status !== "approved" && <Btn variant="success" onClick={()=>action(g.id,"approved")} disabled={spin || bulkRunning}>✓ APPROVE</Btn>}
+                  {g.status !== "rejected" && <Btn variant="ghost"   onClick={()=>action(g.id,"rejected")} disabled={spin || bulkRunning}>✗ REJECT</Btn>}
+                  <Btn variant="danger" onClick={()=>remove(g.id, g.band_name)} disabled={spin || bulkRunning}>🗑</Btn>
                 </div>
               </div>
             </div>
