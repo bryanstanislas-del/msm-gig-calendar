@@ -208,6 +208,73 @@ describe("buildGigInsertPayload -- venue address (structured bulk import)", () =
   });
 });
 
+describe("buildGigInsertPayload -- batch-level festival association", () => {
+  it("defaults festival_profile_id to null when no options are passed -- existing single-arg callers are unaffected", () => {
+    expect(buildGigInsertPayload(item()).festival_profile_id).toBeNull();
+  });
+
+  it("defaults festival_profile_id to null when no festival was selected", () => {
+    const result = buildGigInsertPayload(item(), { festivalProfileId: null });
+    expect(result.festival_profile_id).toBeNull();
+  });
+
+  it("includes the selected festival's UUID when one was chosen at Import Review", () => {
+    const result = buildGigInsertPayload(item(), { festivalProfileId: "festival-123" });
+    expect(result.festival_profile_id).toBe("festival-123");
+  });
+
+  it("attaches the same selected festival regardless of the row's own venue tier -- festival association is orthogonal to venue resolution", () => {
+    const tiers = [
+      { tier: "exact", query: "The Brook", city: "Southampton", match: { id: "v1", name: "The Brook", city: "Southampton" }, candidates: [] },
+      { tier: "confirmed", query: "The Brooky", city: null, match: { id: "v9", name: "The Brooke Inn", city: "Winchester" }, candidates: [] },
+      { tier: "approved_new", query: "The 1865", city: "Fareham", match: null, candidates: [] },
+      { tier: "none", query: "Totally New Place", city: "Fareham", match: null, candidates: [] },
+    ];
+    for (const venueMatch of tiers) {
+      const result = buildGigInsertPayload(item({ venueMatch }), { festivalProfileId: "festival-123" });
+      expect(result.festival_profile_id).toBe("festival-123");
+    }
+  });
+});
+
+describe("runImport -- batch-level festival association", () => {
+  it("no festival selected -- every row's payload carries festival_profile_id null, matching pre-existing behaviour", async () => {
+    const rows = [item({ id: "r1" }), item({ id: "r2" })];
+    const importRowFn = vi.fn(async () => ({ outcome: "created", gig_id: "gig-1" }));
+    await runImport(rows, {
+      startRunFn: async () => "run-1", importRowFn, completeRunFn: async () => {},
+    });
+    for (const call of importRowFn.mock.calls) {
+      expect(call[0].festival_profile_id).toBeNull();
+    }
+  });
+
+  it("festival selected -- the same festival UUID is included in every eligible row's import payload", async () => {
+    const rows = [item({ id: "r1" }), item({ id: "r2" }), item({ id: "r3" })];
+    const importRowFn = vi.fn(async () => ({ outcome: "created", gig_id: "gig-1" }));
+    await runImport(rows, {
+      startRunFn: async () => "run-1", importRowFn, completeRunFn: async () => {},
+      festivalProfileId: "festival-music-in-the-city",
+    });
+    expect(importRowFn).toHaveBeenCalledTimes(3);
+    for (const call of importRowFn.mock.calls) {
+      expect(call[0].festival_profile_id).toBe("festival-music-in-the-city");
+    }
+  });
+
+  it("a blocked row (fails validateRowForImport) never reaches importRowFn, festival selected or not -- Smart Import only ever inserts, it never uses this feature to update an existing/excluded gig", async () => {
+    const rows = [item({ id: "r1", rowState: ROW_STATES.EXACT_DUPLICATE }), item({ id: "r2" })];
+    const importRowFn = vi.fn(async () => ({ outcome: "created", gig_id: "gig-1" }));
+    const result = await runImport(rows, {
+      startRunFn: async () => "run-1", importRowFn, completeRunFn: async () => {},
+      festivalProfileId: "festival-music-in-the-city",
+    });
+    expect(importRowFn).toHaveBeenCalledTimes(1); // only r2 -- r1 is blocked, never attempted
+    expect(result.blocked).toHaveLength(1);
+    expect(result.blocked[0].item.id).toBe("r1");
+  });
+});
+
 describe("runImport", () => {
   it("starts a run, imports each row via the concurrency pool, and completes the run with correct counts", async () => {
     const rows = [item({ id: "r1" }), item({ id: "r2" }), item({ id: "r3" })];

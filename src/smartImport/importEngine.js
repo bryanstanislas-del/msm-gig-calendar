@@ -126,7 +126,15 @@ function buildMatchDecisions(item) {
 // (confirmed decision: Sprint 5C never auto-creates artist profiles, only
 // venues, since only venues have an existing, already-proven auto-create
 // trigger to build on).
-export function buildGigInsertPayload(item) {
+// festivalProfileId is batch-level, not row-derived -- the caller (runImport)
+// passes the one festival an admin optionally picked for the WHOLE import at
+// Import Review, identically for every row, completely independent of that
+// row's own venue/artist tier or duplicate state. Never defaulted from
+// anything in `item` itself: a row carries no festival information of its
+// own (Smart Import has no per-row festival concept, by design -- see the
+// festival-association investigation), so omitting the second argument here
+// always means "no festival", matching today's behaviour exactly.
+export function buildGigInsertPayload(item, { festivalProfileId = null } = {}) {
   const { venue, city, venueAddress, venuePostcode, venueWebsite } = resolveVenueFields(item.venueMatch);
   const bandProfileId =
     item.artistMatch.tier === "exact" || item.artistMatch.tier === "confirmed" ? item.artistMatch.match.id : null;
@@ -147,6 +155,7 @@ export function buildGigInsertPayload(item) {
     venue_address: venueAddress,
     venue_postcode: venuePostcode,
     venue_website: venueWebsite,
+    festival_profile_id: festivalProfileId,
   };
 }
 
@@ -208,7 +217,7 @@ export function buildModerationNotificationPayload({ results, groups, blocked })
 // otherwise reject inside mapWithConcurrency and abort every row still in
 // flight or queued. The try/catch here is what actually guarantees row
 // independence at the JS layer, not just the SQL layer.
-export async function runImport(rows, { startRunFn, importRowFn, completeRunFn, sourceProfileId = null, concurrency = IMPORT_CONCURRENCY } = {}) {
+export async function runImport(rows, { startRunFn, importRowFn, completeRunFn, sourceProfileId = null, festivalProfileId = null, concurrency = IMPORT_CONCURRENCY } = {}) {
   const importable = [];
   const blocked = [];
   for (const item of rows) {
@@ -221,7 +230,7 @@ export async function runImport(rows, { startRunFn, importRowFn, completeRunFn, 
 
   const results = await mapWithConcurrency(importable, concurrency, async (item) => {
     try {
-      const payload = buildGigInsertPayload(item);
+      const payload = buildGigInsertPayload(item, { festivalProfileId });
       const outcome = await importRowFn({ importRunId, ...payload });
       return { item, outcome: outcome.outcome, gigId: outcome.gig_id ?? null, error: null };
     } catch (e) {
