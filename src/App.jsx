@@ -86,6 +86,7 @@ import {
   LOCKED_DUPLICATE_TIERS,
   composeResolvedRow,
   indexRowsByGroup,
+  entitySearchTargets,
 } from "./smartImport";
 import { GENRES, GENRE_COLORS, genreColor, genreLabel, NO_GENRE_OPTION } from "./genres";
 
@@ -356,7 +357,7 @@ const DB = {
     return data;
   },
 
-  async importGigRow({ importRunId, band_name, venue, city, date, time, genre, notes, tickets, band_profile_id, raw_text, parsed_fields, match_decisions, venue_address, venue_postcode, venue_website }) {
+  async importGigRow({ importRunId, band_name, venue, city, date, time, genre, notes, tickets, band_profile_id, raw_text, parsed_fields, match_decisions, venue_address, venue_postcode, venue_website, festival_profile_id }) {
     if (USE_MOCK) return { outcome: "created", gig_id: `mock-gig-${Date.now()}` };
     const { data, error } = await supabase.rpc("import_gig_row", {
       p_import_run_id: importRunId,
@@ -380,6 +381,11 @@ const DB = {
       p_venue_address: venue_address ?? null,
       p_venue_postcode: venue_postcode ?? null,
       p_venue_website: venue_website ?? null,
+      // Batch-level festival association -- the same value on every row of
+      // one import run (see importEngine.js's buildGigInsertPayload); null
+      // when no festival was selected at Import Review, which is exactly
+      // today's behaviour.
+      p_festival_profile_id: festival_profile_id ?? null,
     });
     if (error) throw new Error(error.message);
     return data;
@@ -6658,12 +6664,17 @@ function EntitySearchPicker({ entityType, onPick, onCancel }) {
         // A parsed billing line never says in advance whether an act is a
         // solo artist or a full band -- search and merge both, same as
         // runMatching.js's own matchRow() already does for per-row fuzzy
-        // artist candidates.
-        const data = entityType === "artist"
-          ? (await Promise.all([DB.searchEntities("band", q), DB.searchEntities("solo_artist", q)]))
+        // artist candidates. entitySearchTargets() is what actually decides
+        // which search_entities entity type(s) this picker's entityType
+        // maps to -- previously this hardcoded "venue" as the fallback for
+        // anything that wasn't "artist", which silently searched venues
+        // for entityType="festival" instead of festivals.
+        const targets = entitySearchTargets(entityType);
+        const data = targets.length > 1
+          ? (await Promise.all(targets.map((t) => DB.searchEntities(t, q))))
               .flat()
               .sort((a, b) => b.similarity_score - a.similarity_score)
-          : await DB.searchEntities("venue", q);
+          : await DB.searchEntities(targets[0], q);
         if (!cancelled) setResults(data);
       } catch {
         if (!cancelled) setResults([]);
@@ -6674,14 +6685,16 @@ function EntitySearchPicker({ entityType, onPick, onCancel }) {
     return () => { cancelled = true; clearTimeout(timer); };
   }, [query, entityType]);
 
+  const entityLabel = entityType === "venue" ? "venues" : entityType === "festival" ? "festivals" : "artists";
+
   return (
     <div style={{ marginTop: 8, padding: 10, background: "rgba(255,255,255,0.02)", border: `1px solid ${C.border}`, borderRadius: 6, maxWidth: 360 }}>
       <input
         type="text"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        placeholder={`Search ${entityType === "venue" ? "venues" : "artists"}…`}
-        aria-label={`Search existing ${entityType === "venue" ? "venues" : "artists"}`}
+        placeholder={`Search ${entityLabel}…`}
+        aria-label={`Search existing ${entityLabel}`}
         style={{ ...inputCss, fontSize: 12, padding: "6px 10px" }}
         autoFocus
       />
@@ -7155,7 +7168,50 @@ function GroupedResolutionSummary({ venueMissingGroups, venueFuzzyGroups, artist
   );
 }
 
-function ConfirmationSummary({ items, selected, sourceProfileId, onBack }) {
+// Batch-level festival association -- one optional choice for the WHOLE
+// import run, not a per-row field. Reuses EntitySearchPicker exactly as-is
+// (entityType="festival" already resolves through the existing
+// search_entities RPC, which already supports 'festival' as an entity
+// type -- see search_entities' own definition) so this never invents a new
+// search mechanism, and it can only ever resolve to a REAL existing
+// festival profile's UUID -- there is no free-text entry and no "create
+// new festival" affordance here, unlike the venue flow's deliberate
+// "Approve New Venue" branch. Selection is fully optional and can be
+// cleared before import; leaving it unset (the default) means every
+// imported gig's festival_profile_id stays null, i.e. today's behaviour.
+function FestivalAssociationControl({ selectedFestival, onSelect, onClear }) {
+  const [picking, setPicking] = useState(false);
+
+  return (
+    <div style={{ marginBottom: 18, padding: "14px 16px", background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}`, borderRadius: 8 }}>
+      <div style={smallLabelCss}>ASSOCIATE THIS IMPORT WITH A FESTIVAL (OPTIONAL)</div>
+      <div style={{ fontSize: 13, color: C.muted, marginTop: 2, marginBottom: 10, maxWidth: 640 }}>
+        Select an existing festival and every gig imported from this batch will be linked to that festival.
+      </div>
+      {selectedFestival ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ fontSize: 14, color: C.white }}>Festival: <strong>{selectedFestival.name}</strong></div>
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>Applies to all gigs in this import.</div>
+          </div>
+          <button type="button" onClick={onClear} style={linkBtnCss}>clear</button>
+        </div>
+      ) : picking ? (
+        <EntitySearchPicker
+          entityType="festival"
+          onCancel={() => setPicking(false)}
+          onPick={(festival) => { onSelect(festival); setPicking(false); }}
+        />
+      ) : (
+        <Btn variant="ghost" style={{ fontSize: 11, padding: "6px 12px" }} onClick={() => setPicking(true)}>
+          SEARCH/SELECT FESTIVAL
+        </Btn>
+      )}
+    </div>
+  );
+}
+
+function ConfirmationSummary({ items, selected, sourceProfileId, festivalProfileId, festivalName, onBack }) {
   const importCount = selected.size;
   const skipCount = items.length - importCount;
   const groups = useMemo(() => groupSkippedReasons(items, selected), [items, selected]);
@@ -7172,6 +7228,7 @@ function ConfirmationSummary({ items, selected, sourceProfileId, onBack }) {
       const rows = items.filter((item) => selected.has(item.id));
       const { importRunId, results, blocked } = await runImport(rows, {
         sourceProfileId,
+        festivalProfileId,
         startRunFn: ({ sourceProfileId: spid, totalRows }) => DB.startImportRun({ sourceProfileId: spid, totalRows }),
         importRowFn: (row) => DB.importGigRow(row),
         completeRunFn: ({ importRunId: id, succeeded, failed }) => DB.completeImportRun({ importRunId: id, succeeded, failed }),
@@ -7283,6 +7340,11 @@ function ConfirmationSummary({ items, selected, sourceProfileId, onBack }) {
       <div style={{ fontFamily: F.display, fontSize: 18, color: C.white, letterSpacing: 2, marginBottom: 12 }}>CONFIRM SELECTION</div>
       <div style={{ fontSize: 15, color: C.white, marginBottom: 6 }}>{importCount} row{importCount !== 1 ? "s" : ""} will be imported.</div>
       <div style={{ fontSize: 15, color: C.muted, marginBottom: 16 }}>{skipCount} row{skipCount !== 1 ? "s" : ""} will be skipped.</div>
+      {festivalProfileId && (
+        <div style={{ fontSize: 13, color: C.white, marginBottom: 16 }}>
+          Festival: <strong>{festivalName}</strong> -- every created gig will be linked to this festival.
+        </div>
+      )}
       {groups.length > 0 && (
         <div style={{ marginBottom: 16 }}>
           <div style={smallLabelCss}>Why rows are skipped</div>
@@ -7334,6 +7396,11 @@ function ImportReviewDashboard({ parseResult }) {
   const [filter, setFilter] = useState("all");
   const [attentionOnly, setAttentionOnly] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // Batch-level festival association -- { id, name } | null. Deliberately
+  // NOT parsed-row state and not part of `batch`/`resolvedBatch`: it's one
+  // choice for the whole review session, orthogonal to every row's own
+  // venue/artist/duplicate resolution (see FestivalAssociationControl).
+  const [selectedFestival, setSelectedFestival] = useState(null);
   const isMobile = useIsMobile();
 
   const runReview = async () => {
@@ -7531,6 +7598,12 @@ function ImportReviewDashboard({ parseResult }) {
           <div aria-live="polite" style={visuallyHiddenCss}>{selected.size} rows selected for import.</div>
           <BatchSummary counts={counts} />
 
+          <FestivalAssociationControl
+            selectedFestival={selectedFestival}
+            onSelect={setSelectedFestival}
+            onClear={() => setSelectedFestival(null)}
+          />
+
           <GroupedResolutionSummary
             venueMissingGroups={venueMissingGroups}
             venueFuzzyGroups={venueFuzzyGroups}
@@ -7646,6 +7719,8 @@ function ImportReviewDashboard({ parseResult }) {
               items={resolvedBatch}
               selected={selected}
               sourceProfileId={parseResult?.sourceProfile?.id ?? null}
+              festivalProfileId={selectedFestival?.id ?? null}
+              festivalName={selectedFestival?.name ?? null}
               onBack={() => setConfirmOpen(false)}
             />
           )}

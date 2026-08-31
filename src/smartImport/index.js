@@ -69,3 +69,8 @@ export {
   LOCKED_DUPLICATE_TIERS,
 } from "./duplicateResolutionGroups.js";
 export { applyGroupDecisionToRow, composeResolvedRow } from "./groupResolution.js";
+
+// EntitySearchPicker's routing decision (App.jsx) -- which
+// search_entities entity type(s) to query for a given picker entityType.
+// See entitySearchTargets.js's header comment.
+export { entitySearchTargets } from "./entitySearchTargets.js";
