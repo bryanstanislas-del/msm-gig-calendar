@@ -6,6 +6,8 @@ import {
   excludeAllErrors,
   excludeAllDuplicates,
   excludeVisibleSelected,
+  selectAllVisible,
+  deselectAllVisible,
   applyMatchOverride,
   withOverridesApplied,
   applyBulkApproveSuggestions,
@@ -131,6 +133,114 @@ describe("whole-batch bulk selection helpers (Sprint 5D: operate on explicitlyIn
     const laterItems = items.map((it) => (it.id === "error1" ? { ...it, rowState: ROW_STATES.READY } : it));
     const selected = deriveSelection(laterItems, { explicitlyIncluded, explicitlyExcluded });
     expect(selected.has("error1")).toBe(false);
+  });
+});
+
+describe("SELECT ALL VISIBLE / DESELECT ALL VISIBLE (scoped to the same 'visible' list excludeVisibleSelected uses)", () => {
+  // A realistic active-filter slice: 5 selectable rows of mixed states, as
+  // if the admin were looking at some filter tab other than "all".
+  const visible = [
+    item("v1", ROW_STATES.READY),
+    item("v2", ROW_STATES.NEEDS_REVIEW),
+    item("v3", ROW_STATES.MISSING_VENUE),
+    item("v4", ROW_STATES.POSSIBLE_DUPLICATE),
+    item("v5", ROW_STATES.PROBABLE_DUPLICATE),
+  ];
+  // Rows outside the active filter -- never passed to either function, and
+  // must never end up touched by them, exactly like excludeVisibleSelected's
+  // own "only touches rows present in the filtered list" contract above.
+  const hiddenReady = item("hidden-ready", ROW_STATES.READY);
+  const hiddenMissingVenue = item("hidden-missing-venue", ROW_STATES.MISSING_VENUE);
+  const hiddenExplicitlyIncluded = item("hidden-explicit", ROW_STATES.MISSING_ARTIST);
+
+  it("A: SELECT ALL VISIBLE selects all 5 visible selectable rows", () => {
+    const { explicitlyIncluded } = selectAllVisible(visible, { explicitlyIncluded: new Set(), explicitlyExcluded: new Set() });
+    for (const v of visible) expect(explicitlyIncluded.has(v.id)).toBe(true);
+  });
+
+  it("B: a hidden row's own provenance is untouched -- selectAllVisible never even sees it", () => {
+    const explicitlyExcluded = new Set([hiddenMissingVenue.id]); // hidden row was previously excluded
+    const next = selectAllVisible(visible, { explicitlyIncluded: new Set(), explicitlyExcluded });
+    expect(next.explicitlyExcluded.has(hiddenMissingVenue.id)).toBe(true); // survives, untouched
+  });
+
+  it("C: an already-selected hidden row stays selected after SELECT ALL VISIBLE", () => {
+    const explicitlyIncluded = new Set([hiddenExplicitlyIncluded.id]);
+    const next = selectAllVisible(visible, { explicitlyIncluded, explicitlyExcluded: new Set() });
+    const allItems = [...visible, hiddenExplicitlyIncluded, hiddenReady, hiddenMissingVenue];
+    const selected = deriveSelection(allItems, next);
+    expect(selected.has(hiddenExplicitlyIncluded.id)).toBe(true); // still selected
+    expect(selected.has(hiddenMissingVenue.id)).toBe(false); // hidden, never touched
+  });
+
+  it("D: DESELECT ALL VISIBLE clears only the visible selectable rows, hidden rows untouched", () => {
+    const explicitlyIncluded = new Set([...visible.map((v) => v.id), hiddenExplicitlyIncluded.id]);
+    const next = deselectAllVisible(visible, { explicitlyIncluded, explicitlyExcluded: new Set() });
+    for (const v of visible) {
+      expect(next.explicitlyIncluded.has(v.id)).toBe(false);
+      expect(next.explicitlyExcluded.has(v.id)).toBe(true);
+    }
+    expect(next.explicitlyIncluded.has(hiddenExplicitlyIncluded.id)).toBe(true); // untouched
+  });
+
+  it("E: a locked Exact Duplicate row is never selected by SELECT ALL VISIBLE even if visible", () => {
+    const withLocked = [...visible, item("locked-dup", ROW_STATES.EXACT_DUPLICATE)];
+    const next = selectAllVisible(withLocked, { explicitlyIncluded: new Set(), explicitlyExcluded: new Set() });
+    expect(next.explicitlyIncluded.has("locked-dup")).toBe(false);
+    expect(deriveSelection(withLocked, next).has("locked-dup")).toBe(false);
+  });
+
+  it("E: a locked Invalid Date row is never selected by SELECT ALL VISIBLE either", () => {
+    const withLocked = [...visible, item("locked-date", ROW_STATES.INVALID_DATE)];
+    const next = selectAllVisible(withLocked, { explicitlyIncluded: new Set(), explicitlyExcluded: new Set() });
+    expect(next.explicitlyIncluded.has("locked-date")).toBe(false);
+  });
+
+  it("F: a READY-only filtered view (filter==='ready') only selects/deselects the visible READY rows", () => {
+    const readyOnly = visible.filter((v) => v.rowState === ROW_STATES.READY); // [v1]
+    const explicitlyExcluded = new Set(["v1"]); // v1 manually unchecked earlier
+    const next = selectAllVisible(readyOnly, { explicitlyIncluded: new Set(), explicitlyExcluded });
+    expect(next.explicitlyExcluded.has("v1")).toBe(false); // re-included
+    expect(next.explicitlyIncluded.has("v2")).toBe(false); // never in this filtered slice
+  });
+
+  it("G: a MISSING VENUE filtered view (filter==='missing_venue') behaves correctly", () => {
+    const missingVenueOnly = visible.filter((v) => v.rowState === ROW_STATES.MISSING_VENUE); // [v3]
+    const selectedNext = selectAllVisible(missingVenueOnly, { explicitlyIncluded: new Set(), explicitlyExcluded: new Set() });
+    expect(selectedNext.explicitlyIncluded).toEqual(new Set(["v3"]));
+    const deselectedNext = deselectAllVisible(missingVenueOnly, selectedNext);
+    expect(deselectedNext.explicitlyIncluded.has("v3")).toBe(false);
+  });
+
+  it("G: a NEEDS REVIEW filtered view (filter==='needs_review') behaves correctly", () => {
+    const needsReviewOnly = visible.filter((v) => v.rowState === ROW_STATES.NEEDS_REVIEW); // [v2]
+    const next = selectAllVisible(needsReviewOnly, { explicitlyIncluded: new Set(), explicitlyExcluded: new Set() });
+    expect(next.explicitlyIncluded).toEqual(new Set(["v2"]));
+  });
+
+  it("H: SELECT ALL READY is unaffected by this addition -- still whole-batch, not visible-scoped", () => {
+    const items = [...visible, hiddenReady, hiddenMissingVenue];
+    const explicitlyExcluded = new Set(["v1", hiddenReady.id]); // both ready rows manually unchecked
+    const next = selectAllReady(items, { explicitlyIncluded: new Set(), explicitlyExcluded });
+    expect(next.explicitlyExcluded.has("v1")).toBe(false);
+    expect(next.explicitlyExcluded.has(hiddenReady.id)).toBe(false); // reaches the hidden ready row too
+  });
+
+  it("I: EXCLUDE SELECTED (VISIBLE) is unaffected by this addition", () => {
+    const explicitlyIncluded = new Set(visible.map((v) => v.id));
+    const next = excludeVisibleSelected(visible, { explicitlyIncluded, explicitlyExcluded: new Set() });
+    for (const v of visible) {
+      expect(next.explicitlyIncluded.has(v.id)).toBe(false);
+      expect(next.explicitlyExcluded.has(v.id)).toBe(true);
+    }
+  });
+
+  it("end-to-end: SELECT ALL VISIBLE then DESELECT ALL VISIBLE round-trips to nothing visible selected", () => {
+    const start = { explicitlyIncluded: new Set(), explicitlyExcluded: new Set(["v4"]) };
+    const afterSelect = selectAllVisible(visible, start);
+    const afterDeselect = deselectAllVisible(visible, afterSelect);
+    const selected = deriveSelection(visible, afterDeselect);
+    for (const v of visible) expect(selected.has(v.id)).toBe(false);
   });
 });
 

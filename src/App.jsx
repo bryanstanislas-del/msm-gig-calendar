@@ -63,6 +63,8 @@ import {
   excludeAllErrors,
   excludeAllDuplicates,
   excludeVisibleSelected,
+  selectAllVisible,
+  deselectAllVisible,
   applyBulkApproveSuggestions,
   withOverridesApplied,
   summariseBatch,
@@ -6597,7 +6599,7 @@ function FilterTabs({ filter, setFilter, counts, attentionOnly, setAttentionOnly
   );
 }
 
-function BulkActionsBar({ onSelectAllReady, onExcludeAllErrors, onExcludeAllDuplicates, onBulkApprove, onExcludeVisibleSelected }) {
+function BulkActionsBar({ onSelectAllReady, onExcludeAllErrors, onExcludeAllDuplicates, onBulkApprove, onSelectAllVisible, onDeselectAllVisible, onExcludeVisibleSelected }) {
   const btnStyle = { fontSize: 11, padding: "7px 14px" };
   return (
     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 18 }}>
@@ -6605,6 +6607,8 @@ function BulkActionsBar({ onSelectAllReady, onExcludeAllErrors, onExcludeAllDupl
       <Btn variant="ghost" onClick={onExcludeAllErrors} style={btnStyle}>EXCLUDE ALL ERRORS</Btn>
       <Btn variant="ghost" onClick={onExcludeAllDuplicates} style={btnStyle}>EXCLUDE ALL DUPLICATES</Btn>
       <Btn variant="ghost" onClick={onBulkApprove} style={btnStyle}>BULK APPROVE MATCH SUGGESTIONS</Btn>
+      <Btn variant="ghost" onClick={onSelectAllVisible} style={btnStyle}>SELECT ALL VISIBLE</Btn>
+      <Btn variant="ghost" onClick={onDeselectAllVisible} style={btnStyle}>DESELECT ALL VISIBLE</Btn>
       <Btn variant="ghost" onClick={onExcludeVisibleSelected} style={btnStyle}>EXCLUDE SELECTED (VISIBLE)</Btn>
     </div>
   );
@@ -7649,6 +7653,8 @@ function ImportReviewDashboard({ parseResult }) {
             onExcludeAllErrors={() => applySelectionChange(excludeAllErrors, resolvedBatch)}
             onExcludeAllDuplicates={() => applySelectionChange(excludeAllDuplicates, resolvedBatch)}
             onBulkApprove={() => setOverrides((prev) => ({ ...prev, ...applyBulkApproveSuggestions(resolvedBatch) }))}
+            onSelectAllVisible={() => applySelectionChange(selectAllVisible, filtered)}
+            onDeselectAllVisible={() => applySelectionChange(deselectAllVisible, filtered)}
             onExcludeVisibleSelected={() => applySelectionChange(excludeVisibleSelected, filtered)}
           />
           <FilterTabs filter={filter} setFilter={setFilter} counts={filterCounts} attentionOnly={attentionOnly} setAttentionOnly={setAttentionOnly} />
