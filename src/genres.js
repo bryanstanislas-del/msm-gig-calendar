@@ -91,15 +91,39 @@ export const NO_GENRE_OPTION = "";
 
 const GENRE_LOOKUP = new Map(GENRES.map((g) => [g.toLowerCase(), g]));
 
+// Conservative, explicit aliases for a small number of obvious alternate
+// spellings/punctuation of an EXISTING canonical genre -- never a new
+// genre, never a fuzzy/substring/inferred match. Each entry here is a
+// deliberate, individually-reviewed decision (see the Smart Import Music
+// in the City genre-loss investigation), not a general normalisation rule
+// (e.g. this does NOT treat "&"/"and" as equivalent everywhere -- only for
+// the two specific Rhythm & Blues spellings below). Keys are matched
+// against the same trimmed/lowercased form canonicalizeGenre already uses
+// for the canonical list, so matching stays case-insensitive and
+// whitespace-tolerant for free. Only ever resolves to a genre already in
+// GENRES above -- adding an alias here must never require adding a new
+// canonical genre.
+const GENRE_ALIASES = {
+  "singer songwriter": "Singer-Songwriter",
+  "hip hop": "Hip-Hop",
+  "rhythm & blues": "R&B",
+  "rhythm and blues": "R&B",
+};
+
 // Case-insensitive match against the canonical list, returning the
 // canonical casing. Anything not on the list (including "") returns null.
 export function isValidGenre(value) {
   return typeof value === "string" && GENRE_LOOKUP.has(value.trim().toLowerCase());
 }
 
+// Exact canonical match first, then the small explicit alias map, then
+// null -- an alias can never shadow or override an actual canonical genre
+// (e.g. "Blues" always resolves to "Blues", never anything from the alias
+// map), since the canonical lookup always runs first.
 export function canonicalizeGenre(value) {
   if (typeof value !== "string") return null;
-  return GENRE_LOOKUP.get(value.trim().toLowerCase()) || null;
+  const key = value.trim().toLowerCase();
+  return GENRE_LOOKUP.get(key) || GENRE_ALIASES[key] || null;
 }
 
 // Blank/unrecognised input must never fall back to a default genre --
