@@ -18,6 +18,16 @@ export const GENRES = [
   "Pop","Progressive Rock","Psychedelic","Punk","R&B","Reggae","Rock","Shoegaze",
   "Singer-Songwriter","Ska","Ska Punk","Soul","Southern Rock","Spoken Word",
   "Tribute","World Music","Other",
+  // Added: real-world genre values surfaced by the Music in the City /
+  // Portsmouth-PO source data that warranted a genuine new canonical
+  // genre (as opposed to an alternate spelling of an existing one -- see
+  // GENRE_ALIASES below for those). Purely additive -- see genres.test.js
+  // for the exact-count (65) and no-duplicates assertions. Alphabetised
+  // here for readability; the array itself is always re-sorted below
+  // regardless of source order, so this grouping is cosmetic only.
+  "A Capella","Alternative Rock","Argentine Tango","Brass Band","Choir",
+  "Darkwave","Easy Listening","Indie","Indie Folk","Musical Theatre",
+  "Pipe Band","Protest Songs","Samba Reggae","Sea Shanties",
 ].sort();
 
 export const GENRE_COLORS = {
@@ -76,6 +86,25 @@ export const GENRE_COLORS = {
   "Hardcore":          "#d32f2f",
   "Ska Punk":          "#d4e157",
   "Other":             "#888888",
+  // Added alongside the 14 new canonical genres above -- each needs its
+  // own explicit, non-neutral colour (GENRE_COLORS is a flat lookup map,
+  // not derived/generated -- see genreColor()'s own fallback-to-neutral
+  // behaviour for any genre missing here). None of these reuse
+  // NO_GENRE_COLOR ("#9a9a9a"), and no existing entry above was changed.
+  "A Capella":         "#f8bbd0",
+  "Alternative Rock":  "#f4511e",
+  "Argentine Tango":   "#c2185b",
+  "Brass Band":        "#ffb300",
+  "Choir":             "#b39ddb",
+  "Darkwave":          "#4a148c",
+  "Easy Listening":    "#f0e68c",
+  "Indie":             "#26a69a",
+  "Indie Folk":        "#8bc34a",
+  "Musical Theatre":   "#ec407a",
+  "Pipe Band":         "#3f51b5",
+  "Protest Songs":     "#795548",
+  "Samba Reggae":      "#00c853",
+  "Sea Shanties":      "#0288d1",
 };
 
 // Neutral "no genre assigned" marker -- mirrors the app's existing muted
@@ -108,6 +137,12 @@ const GENRE_ALIASES = {
   "hip hop": "Hip-Hop",
   "rhythm & blues": "R&B",
   "rhythm and blues": "R&B",
+  // Added alongside the taxonomy expansion above -- each maps to a genre
+  // that is now canonical (Brass Band/Indie Folk are new; Metal already
+  // existed). Still explicit, still exact-match-only after normalisation.
+  "heavy metal": "Metal",
+  "indie/folk": "Indie Folk",
+  "brass band (wind/symphony)": "Brass Band",
 };
 
 // Case-insensitive match against the canonical list, returning the
