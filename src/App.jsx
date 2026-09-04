@@ -147,8 +147,60 @@ import ClaimDirectoryPage from './components/ClaimDirectoryPage';
 const followTableFor  = (entityType) => entityType === "venue" ? "venue_follows" : "band_follows";
 const followColumnFor = (entityType) => entityType === "venue" ? "venue_id" : "band_profile_id";
 
+// ── Paginated fetch helper ──────────────────────────────────────────
+// Supabase/PostgREST enforces a project-level max-rows ceiling (Supabase's
+// own default is 1000) on every request, silently truncating any
+// unbounded `.select()` beyond that many rows -- no error, no warning,
+// just a short result. fetchAllPages() is the single, reusable mechanism
+// for any query that may return more rows than that ceiling: it drives an
+// explicit `.range()` loop, requesting `pageSize` rows at a time, and
+// concatenates full pages until a page comes back with fewer than
+// `pageSize` rows (including zero) -- the only reliable "that was the
+// last page" signal `.range()` gives, since PostgREST never reports how
+// many pages there are up front.
+//
+// `fetchPage(from, to)` is caller-supplied (not built in here) so this
+// stays framework-free and trivially testable with a fake page-fetcher --
+// no real Supabase client needed. It must return `{ data, error }`
+// (matching supabase-js's own response shape). On any page's error this
+// throws immediately rather than returning whatever pages already
+// accumulated, so a mid-fetch failure can never look like a complete,
+// merely-smaller-than-expected dataset to the caller -- see the 1,000-row
+// scaling investigation this fixes.
+//
+// Deterministic ordering is the caller's responsibility (via the query
+// `fetchPage` builds): without a stable sort -- a unique tiebreaker
+// alongside any non-unique column like `date` or `created_at` -- paging
+// through rows that share a sort value can silently duplicate or skip
+// rows if two page requests don't see the table in the exact same order.
+// See DB.getApprovedGigs()/getAllGigs() for the orderings actually used.
+export const FETCH_ALL_PAGE_SIZE = 1000;
+
+export async function fetchAllPages(fetchPage, { pageSize = FETCH_ALL_PAGE_SIZE } = {}) {
+  const rows = [];
+  let from = 0;
+  // Guards against a pathological fetchPage that never signals completion
+  // (e.g. always returns exactly pageSize rows) turning this into an
+  // infinite loop -- 1000 pages at the default page size is 1 million
+  // rows, comfortably beyond any realistic near-term MSM scale, so
+  // hitting this cap is itself a bug worth surfacing rather than hanging.
+  const MAX_PAGES = 1000;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const { data, error } = await fetchPage(from, from + pageSize - 1);
+    if (error) throw new Error(error.message);
+    const batch = data || [];
+    rows.push(...batch);
+    if (batch.length < pageSize) return rows;
+    from += pageSize;
+  }
+  throw new Error(`fetchAllPages: exceeded ${MAX_PAGES} pages without reaching a final page -- aborting rather than looping forever`);
+}
+
 // ── DB abstraction (mock or real) ──────────────────────────────────
-const DB = {
+// Exported (in addition to the pure helpers above) so the pagination fix
+// in getApprovedGigs/getAllGigs/getGigCounts can be tested directly
+// against a mocked supabase client -- see dbPagination.test.js.
+export const DB = {
   // PHASE 4 FIX: signUp now passes profile_type in the auth metadata so
   // handle_new_user() knows which kind of account is being created.
   // - band / solo_artist: handle_new_user() auto-creates the profiles row
@@ -541,18 +593,69 @@ const DB = {
     return data || [];
   },
 
+  // Paginated (see fetchAllPages above) so the full approved set is
+  // returned regardless of how far past the API's per-request row
+  // ceiling it grows -- previously this silently truncated at whatever
+  // that ceiling was, dropping every approved gig past it from the
+  // entire public calendar (List View, Calendar View, every filter) and
+  // from Smart Import's duplicate-candidate pool (see getGigCounts below
+  // and runMatching's existingGigs usage). Ordered `date, id` -- `id` is
+  // a real, always-unique tiebreaker for the many gigs sharing a date,
+  // required for stable, non-duplicating, non-skipping pagination; it
+  // doesn't change the calendar's effective display order since existing
+  // per-day sorting already re-sorts by time downstream.
   async getApprovedGigs() {
     if (USE_MOCK) return MOCK_GIGS.filter(g => g.status === "approved");
-    const { data, error } = await supabase.from("gigs").select("*").eq("status","approved").order("date");
-    if (error) throw new Error(error.message);
-    return data;
+    return fetchAllPages((from, to) =>
+      supabase.from("gigs").select("*").eq("status","approved")
+        .order("date", { ascending: true }).order("id", { ascending: true })
+        .range(from, to)
+    );
   },
 
+  // Paginated for the same reason as getApprovedGigs -- admin's "all
+  // gigs" view was silently missing every older-created row past the API
+  // ceiling (moderation, exports, stats). Ordered `created_at desc, id`
+  // -- `id` tiebreaks rows created in the same instant (e.g. a bulk
+  // import batch), same rationale as above.
   async getAllGigs() {
     if (USE_MOCK) return [...MOCK_GIGS];
-    const { data, error } = await supabase.from("gigs").select("*").order("created_at", { ascending: false });
-    if (error) throw new Error(error.message);
-    return data;
+    return fetchAllPages((from, to) =>
+      supabase.from("gigs").select("*")
+        .order("created_at", { ascending: false }).order("id", { ascending: true })
+        .range(from, to)
+    );
+  },
+
+  // True database counts for anything labelled as a total (public "GIGS
+  // LIVE", admin "TOTAL GIGS"/status tabs) -- deliberately NOT derived
+  // from array.length on a fetched page, which is exactly the bug this
+  // whole fix addresses: a counter must stay correct even independent of
+  // whether/how the corresponding row-fetch happened to page. Uses the
+  // same `{ count:"exact", head:true }` pattern already established
+  // elsewhere in this file (see the band-delete gig-count check), with
+  // `head:true` so no row data is transferred just to produce a number.
+  async getGigCounts() {
+    if (USE_MOCK) {
+      const all = MOCK_GIGS;
+      return {
+        total:    all.length,
+        approved: all.filter(g => g.status === "approved").length,
+        pending:  all.filter(g => g.status === "pending").length,
+        rejected: all.filter(g => g.status === "rejected").length,
+      };
+    }
+    const countFor = async (status) => {
+      let q = supabase.from("gigs").select("id", { count: "exact", head: true });
+      if (status) q = q.eq("status", status);
+      const { count, error } = await q;
+      if (error) throw new Error(error.message);
+      return count || 0;
+    };
+    const [total, approved, pending, rejected] = await Promise.all([
+      countFor(null), countFor("approved"), countFor("pending"), countFor("rejected"),
+    ]);
+    return { total, approved, pending, rejected };
   },
 
   async submitGig(gig, userId, bandProfileId) {
@@ -583,6 +686,16 @@ const DB = {
     return data[0];
   },
 
+  // NOTE (scaling): this is an unbounded .select() with no .range()/
+  // pagination, same latent pattern that caused the 1,000-gig truncation
+  // fixed in getApprovedGigs/getAllGigs above -- it will silently truncate
+  // at the project's Max Rows ceiling once the venues table itself grows
+  // past ~1,000 rows. Not fixed here (out of scope for this PR and not yet
+  // hit in production), but worth flagging for whoever builds Venue
+  // Identity & Matching / venue autocomplete next: that work should apply
+  // the same fetchAllPages() treatment (or, better, real server-side
+  // search/typeahead instead of fetching the whole table) rather than
+  // reintroducing this bug at a different table.
   async getVenues() {
     if (USE_MOCK) return [];
     const { data, error } = await supabase
@@ -2617,7 +2730,7 @@ function SubmitGigForm({ user, profile, onSubmitted, onEditProfile }) {
 // ════════════════════════════════════════════════════════════════════
 //  ADMIN PANEL
 // ════════════════════════════════════════════════════════════════════
-function AdminPanel({ allGigs, onRefresh, bands=[] }) {
+function AdminPanel({ allGigs, gigCounts, onRefresh, bands=[] }) {
   const [filter,  setFilter]  = useState("pending");
   const [loading, setLoading] = useState({});
   const [editing, setEditing] = useState(null); // gig being edited
@@ -2637,7 +2750,10 @@ function AdminPanel({ allGigs, onRefresh, bands=[] }) {
   useEffect(() => { DB.getFestivals(true).then(setFestivalOptions); }, []);
 
   const visible = allGigs.filter(g => filter === "all" ? true : g.status === filter);
-  const counts  = { all:allGigs.length, pending:allGigs.filter(g=>g.status==="pending").length, approved:allGigs.filter(g=>g.status==="approved").length, rejected:allGigs.filter(g=>g.status==="rejected").length };
+  // True DB counts (see DB.getGigCounts()), not array.length -- a tab
+  // badge is exactly the kind of "represents an actual database total"
+  // label the 1,000-row scaling fix requires this for.
+  const counts  = { all: gigCounts.total, pending: gigCounts.pending, approved: gigCounts.approved, rejected: gigCounts.rejected };
   // The only eligible set for bulk approval: derived from `visible` (never
   // from allGigs), so an active filter/tab is never bypassed -- see
   // moderationHelpers.js's own header comment.
@@ -3432,7 +3548,7 @@ function StatsPanel({ gigs }) {
 // ════════════════════════════════════════════════════════════════════
 //  ADMIN DASHBOARD
 // ════════════════════════════════════════════════════════════════════
-function AdminDashboard({ bands, festivals=[], allGigs, venues, onNav, onEditGig }) {
+function AdminDashboard({ bands, festivals=[], allGigs, gigCounts, venues, onNav, onEditGig }) {
   const today      = new Date();
   const todayStr   = today.toISOString().slice(0,10);
   const weekStr    = new Date(today.getTime() + 7*24*60*60*1000).toISOString().slice(0,10);
@@ -3447,7 +3563,6 @@ function AdminDashboard({ bands, festivals=[], allGigs, venues, onNav, onEditGig
   }, []);
 
   const approvedGigs    = allGigs.filter(g => g.status === "approved");
-  const pendingGigs     = allGigs.filter(g => g.status === "pending");
   const upcomingWeek    = approvedGigs.filter(g => g.date >= todayStr && g.date <= weekStr);
   const thisMonth       = approvedGigs.filter(g => g.date >= monthStart && g.date <= monthEnd);
   const upcoming10      = approvedGigs.filter(g => g.date >= todayStr).sort((a,b)=>a.date.localeCompare(b.date)||timeSortKey(a.time).localeCompare(timeSortKey(b.time))).slice(0,10);
@@ -3518,13 +3633,13 @@ function AdminDashboard({ bands, festivals=[], allGigs, venues, onNav, onEditGig
       </div>
 
       {/* ── ATTENTION REQUIRED ── */}
-      {(pendingGigs.length > 0 || incompleteBands.length > 0 || !lastExportISO || backupDays >= 7) && (
+      {(gigCounts.pending > 0 || incompleteBands.length > 0 || !lastExportISO || backupDays >= 7) && (
         <div style={{ marginBottom:24, padding:16, background:"rgba(244,162,97,0.06)", border:`1px solid ${C.amber}`, borderRadius:8 }}>
           <div style={{ fontFamily:F.display, fontSize:13, color:C.amber, letterSpacing:2, marginBottom:10 }}>⚠ REQUIRES ATTENTION</div>
           <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-            {pendingGigs.length > 0 && (
+            {gigCounts.pending > 0 && (
               <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
-                <span style={{ fontSize:13, color:"#ccc" }}>📋 {pendingGigs.length} gig{pendingGigs.length!==1?"s":""} pending approval</span>
+                <span style={{ fontSize:13, color:"#ccc" }}>📋 {gigCounts.pending} gig{gigCounts.pending!==1?"s":""} pending approval</span>
                 <Btn variant="ghost" onClick={()=>onNav("admin")} style={{ fontSize:11, padding:"5px 12px" }}>REVIEW →</Btn>
               </div>
             )}
@@ -3551,12 +3666,12 @@ function AdminDashboard({ bands, festivals=[], allGigs, venues, onNav, onEditGig
         <StatCard icon="🎸" label="TOTAL BANDS"     val={bands.filter(b=>!b.disabled).length}   color={C.red}   onClick={()=>onNav("bands")}  sub={`${disabledBands.length} disabled`} />
         <StatCard icon="🎪" label="TOTAL FESTIVALS"  val={festivals ? festivals.filter(f=>!f.disabled).length : 0} color="#9b5de5" onClick={()=>onNav("festivals")} sub="festival profiles" />
         <StatCard icon="📍" label="TOTAL VENUES" val={venues.length}  color={C.amber} onClick={()=>onNav("venues")} sub={`${incompleteVenues.length} need info`} />
-        <StatCard icon="📅" label="TOTAL GIGS"   val={allGigs.length} color={C.red}   sub={`${approvedGigs.length} approved`} />
-        <StatCard icon="⏳" label="PENDING"       val={pendingGigs.length}
-          color={pendingGigs.length>0?C.amber:C.green}
-          onClick={pendingGigs.length>0?()=>onNav("admin"):null}
-          alert={pendingGigs.length>0}
-          badge={pendingGigs.length>0?{text:"ACTION",color:C.amber}:null}
+        <StatCard icon="📅" label="TOTAL GIGS"   val={gigCounts.total} color={C.red}   sub={`${gigCounts.approved} approved`} />
+        <StatCard icon="⏳" label="PENDING"       val={gigCounts.pending}
+          color={gigCounts.pending>0?C.amber:C.green}
+          onClick={gigCounts.pending>0?()=>onNav("admin"):null}
+          alert={gigCounts.pending>0}
+          badge={gigCounts.pending>0?{text:"ACTION",color:C.amber}:null}
         />
       </div>
 
@@ -9387,6 +9502,12 @@ function MainApp() {
   const [auth,    setAuth]    = useState(null); // { user, profile, token }
   const [gigs,    setGigs]    = useState([]);
   const [allGigs, setAllGigs] = useState([]);   // admin only
+  // True DB counts (never array.length) for "GIGS LIVE" and admin's
+  // TOTAL GIGS/status tabs -- see DB.getGigCounts(). Loaded alongside
+  // `gigs` on public mount (this counter is shown to every visitor, not
+  // just admins) and refreshed by refreshAdmin() after any moderation
+  // action so the two never drift apart.
+  const [gigCounts, setGigCounts] = useState({ total:0, approved:0, pending:0, rejected:0 });
   const [bands,     setBands]     = useState([]);    // admin only
   const [festivals, setFestivals] = useState([]);    // FIX 3: festival profiles
   const [venues,  setVenues]  = useState([]);    // admin only
@@ -9460,6 +9581,7 @@ function MainApp() {
   // Load public gigs and bands on mount
   useEffect(() => {
     DB.getApprovedGigs().then(data=>{ setGigs(data); setLoading(false); });
+    DB.getGigCounts().then(setGigCounts);
     DB.getBands().then(setBands);
     DB.getFestivals().then(setFestivals); // FIX 3: load festival profiles
     DB.getVenues().then(setVenues);
@@ -9481,6 +9603,7 @@ function MainApp() {
     setAllGigs(fresh);
     const approvedFresh = fresh.filter(g=>g.status==="approved");
     setGigs(approvedFresh);
+    DB.getGigCounts().then(setGigCounts);
     const freshBands = await DB.getBands(true);
     setBands(freshBands);
     const freshFestivals = await DB.getFestivals(true); // FIX 3
@@ -9543,7 +9666,7 @@ function MainApp() {
     ...(auth ? [{ id:"notifications", label: unreadCount > 0 ? `NOTIFICATIONS (${unreadCount})` : "NOTIFICATIONS" }] : []),
     ...(isAdmin ? [
       { id:"dashboard", label:"DASHBOARD" },
-      { id:"admin",     label:`MODERATION (${allGigs.filter(g=>g.status==="pending").length})` },
+      { id:"admin",     label:`MODERATION (${gigCounts.pending})` },
       { id:"claims",    label:`CLAIMS (${claims.filter(c=>c.status==="pending").length})` },
       { id:"bands",     label:`BANDS (${bands.filter(b=>!b.disabled).length})` },
       { id:"venues",    label:`VENUES (${venues.length})` },
@@ -9603,7 +9726,7 @@ function MainApp() {
             <span key={i} style={{ fontSize:13, color:C.red, letterSpacing:3, fontFamily:F.display }}>{s}{i<2&&<span style={{ color:"rgba(255,255,255,0.1)", margin:"0 8px" }}>|</span>}</span>
           ))}
         </div>
-        <div className="msm-gig-counter" style={{ marginLeft:"auto", fontSize:13, color:C.dim, letterSpacing:1 }}>{gigs.length} GIGS LIVE</div>
+        <div className="msm-gig-counter" style={{ marginLeft:"auto", fontSize:13, color:C.dim, letterSpacing:1 }}>{gigCounts.approved} GIGS LIVE</div>
       </div>
 
       {/* ── Nav tabs ── */}
@@ -9623,7 +9746,7 @@ function MainApp() {
 
         {/* DASHBOARD */}
         {tab==="dashboard" && isAdmin && (
-          <AdminDashboard bands={bands} festivals={festivals} allGigs={allGigs} venues={venues}
+          <AdminDashboard bands={bands} festivals={festivals} allGigs={allGigs} gigCounts={gigCounts} venues={venues}
             onNav={(t) => { if(t==="venues-incomplete"){ setTab("venues"); setVenueFilterMode("incomplete"); } else setTab(t); }}
             onEditGig={(g) => { setTab("admin"); setTimeout(()=>window._editGig&&window._editGig(g),100); }}
           />
@@ -9658,7 +9781,7 @@ function MainApp() {
 
         {/* MODERATION */}
         {tab==="admin" && isAdmin && (
-          <AdminPanel allGigs={allGigs} bands={bands} onRefresh={refreshAdmin} />
+          <AdminPanel allGigs={allGigs} gigCounts={gigCounts} bands={bands} onRefresh={refreshAdmin} />
         )}
 
         {/* CLAIMS (PHASE 4) */}
