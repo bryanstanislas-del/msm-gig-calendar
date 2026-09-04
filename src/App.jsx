@@ -1520,6 +1520,52 @@ export function selectListViewGigs(gigs, { dateFrom, todayStr } = {}) {
   return sorted.filter(g => (g.end_date || g.date) >= todayStr);
 }
 
+// ── CITY filter normalization ──────────────────────────────────────
+// gigs.city is free text (public submit form, admin edit, and Smart
+// Import new-venue creation all write it independently -- see the
+// City/Location data audit), so the exact same real-world city can be
+// stored as e.g. "Southampton" and "Southampton " (stray trailing
+// space). Comparing/deduplicating those raw strings by exact equality
+// (the previous behaviour) makes them silently different, mutually-
+// exclusive dropdown options -- selecting one excludes gigs stored
+// under the other. normalizeCityKey fixes only that: incidental
+// whitespace/casing differences. It deliberately does NOT strip
+// punctuation and does NOT fuzzy-match -- "Town Quay Southampton" and
+// "Town Quay, Southampton" are left as distinct keys on purpose, since
+// collapsing those is a data-quality decision, not a generic UI
+// normalization one.
+export function normalizeCityKey(city) {
+  if (typeof city !== "string") return "";
+  return city.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+// Builds the CITY filter's option list: one entry per distinct
+// normalizeCityKey, so whitespace/case variants of the same city never
+// appear as separate options. Each option is labelled with the first
+// matching raw value's whitespace-cleaned (trimmed/collapsed, original
+// casing) form, so the visible label itself never carries stray
+// whitespace either. Blank/null city values are skipped rather than
+// producing an empty-looking option.
+export function buildCityOptions(gigs) {
+  const labelByKey = new Map();
+  for (const g of gigs) {
+    const key = normalizeCityKey(g.city);
+    if (!key || labelByKey.has(key)) continue;
+    labelByKey.set(key, g.city.trim().replace(/\s+/g, " "));
+  }
+  return ["All", ...Array.from(labelByKey.values()).sort((a, b) => a.localeCompare(b))];
+}
+
+// Shared by the CITY filter predicate: true when `gig`'s city
+// normalizes to the same key as the selected filter value, so
+// selecting "Southampton" matches every raw variant that normalizes to
+// it, not just the one exact string that happened to become the
+// dropdown's label.
+export function gigMatchesCityFilter(gig, filterCity) {
+  if (!filterCity || filterCity === "All") return true;
+  return normalizeCityKey(gig.city) === normalizeCityKey(filterCity);
+}
+
 // ════════════════════════════════════════════════════════════════════
 //  DESIGN TOKENS
 // ════════════════════════════════════════════════════════════════════
@@ -2898,7 +2944,7 @@ function AdminPanel({ allGigs, onRefresh, bands=[] }) {
 //  FILTERS BAR
 // ════════════════════════════════════════════════════════════════════
 function FiltersBar({ gigs, filters, setFilters, onExport }) {
-  const cities  = ["All", ...Array.from(new Set(gigs.map(g=>g.city))).sort()];
+  const cities  = buildCityOptions(gigs);
   const genres  = ["All", ...GENRES];
   const venues  = ["All", ...Array.from(new Set(gigs.map(g=>g.venue))).sort()];
 
@@ -9459,7 +9505,7 @@ function MainApp() {
   );
 
   const filteredGigs = useMemo(() => calendarSource.filter(g => {
-    if (filters.city  !== "All" && g.city  !== filters.city)  return false;
+    if (!gigMatchesCityFilter(g, filters.city)) return false;
     if (filters.venue !== "All" && g.venue !== filters.venue) return false;
     if (filters.genre !== "All" && g.genre !== filters.genre) return false;
     if (filters.dateFrom && g.date < filters.dateFrom) return false;
