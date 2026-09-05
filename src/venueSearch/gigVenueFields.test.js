@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { pickerReducer, createInitialPickerState, PICKER_STATUS } from "./pickerState.js";
-import { venueFieldsFromPickerState, cityConflictsWithSelection, buildVenueUpdatePayload } from "./gigVenueFields.js";
+import {
+  venueFieldsFromPickerState,
+  cityConflictsWithSelection,
+  buildVenueUpdatePayload,
+  computeVenueEditSeed,
+} from "./gigVenueFields.js";
 
 const platformTavern = { id: "v-platform", name: "Platform Tavern", city: "Southampton", address: "Town Quay", postcode: "SO14 2NY" };
 
@@ -117,6 +122,84 @@ describe("Phase 2C payload shapes align with gig_auto_venue's PR #29 guards", ()
     const payload = buildVenueUpdatePayload(fields);
     expect("venue_id" in payload).toBe(false);
     expect(payload).toEqual({ venue: "Totally New Venue", city: "Southampton" });
+  });
+});
+
+describe("computeVenueEditSeed", () => {
+  it("a linked gig seeds a full existing selection", () => {
+    expect(computeVenueEditSeed({ venue_id: "v-platform", venue: "Platform Tavern", city: "Southampton" }))
+      .toEqual({ venue_id: "v-platform", name: "Platform Tavern", city: "Southampton" });
+  });
+
+  it("a free-text gig with no real link seeds plain text, no venue_id", () => {
+    expect(computeVenueEditSeed({ venue_id: null, venue: "Some Old Venue", city: "Southampton" }))
+      .toEqual({ venue_id: null, name: "Some Old Venue", city: "Southampton" });
+  });
+
+  it("null/no gig seeds nothing", () => {
+    expect(computeVenueEditSeed(null)).toBeNull();
+    expect(computeVenueEditSeed({})).toBeNull();
+  });
+});
+
+describe("Admin Edit city-conflict remount: the seed/remount decision logic itself (regression for the confirmed resurrection bug)", () => {
+  // Models the ACTUAL App.jsx flow end-to-end using plain local variables
+  // standing in for openEdit()'s `venueSeedRef`/`editForm` and the
+  // remount cycle it drives -- not just cityConflictsWithSelection() in
+  // isolation, which alone cannot catch this bug (the bug was never in
+  // that function; it was in re-deriving the remount's seed from the
+  // wrong, immutable source). This proves the fix: a city-conflict
+  // remount must seed from an explicitly-cleared value, never recomputed
+  // from the original gig row.
+  function openEdit(gig) {
+    return { editForm: { venue_id: gig.venue_id, venue: gig.venue, city: gig.city }, venueSeed: computeVenueEditSeed(gig) };
+  }
+  function mountAndSyncOnChange(venueSeed, editForm) {
+    const pickerState = createInitialPickerState(venueSeed);
+    const fields = venueFieldsFromPickerState(pickerState, { fallbackCity: editForm.city });
+    return { ...editForm, venue_id: fields.venue_id, venue: fields.venue, city: fields.venue_id ? fields.city : editForm.city };
+  }
+
+  it("a city conflict clears venue_id AND stays cleared through the remount (does not resurrect the gig's original venue)", () => {
+    const gigA = { id: "gig-1", venue_id: "v-platform", venue: "Platform Tavern", city: "Southampton" };
+    let { editForm, venueSeed } = openEdit(gigA);
+    editForm = mountAndSyncOnChange(venueSeed, editForm); // initial mount, no-op sync
+    expect(editForm).toEqual({ venue_id: "v-platform", venue: "Platform Tavern", city: "Southampton" });
+
+    // Admin changes city -> conflict -> handleCityChange's fix: seed is
+    // explicitly nulled, NOT recomputed from gigA.
+    editForm = { ...editForm, city: "Portsmouth", venue_id: null };
+    venueSeed = null;
+
+    // The remount this triggers.
+    editForm = mountAndSyncOnChange(venueSeed, editForm);
+
+    expect(editForm.venue_id).toBeNull(); // not resurrected to "v-platform"
+    expect(editForm.city).toBe("Portsmouth"); // not reverted to "Southampton"
+  });
+
+  it("opening a second gig afterwards seeds THAT gig's own venue -- a cleared seed never leaks between edit sessions", () => {
+    // Gig A was cleared by a city conflict in a previous edit session
+    // (venueSeed left null), then the admin closes it and opens Gig B.
+    const gigB = { id: "gig-2", venue_id: "v-joiners", venue: "The Joiners", city: "Southampton" };
+    const { editForm, venueSeed } = openEdit(gigB); // openEdit() always recomputes fresh from the NEW gig
+    const synced = mountAndSyncOnChange(venueSeed, editForm);
+    expect(synced).toEqual({ venue_id: "v-joiners", venue: "The Joiners", city: "Southampton" });
+  });
+
+  it("selecting a different existing venue (relink) does not go through the seed/remount path at all, and is unaffected by it", () => {
+    const gigA = { id: "gig-1", venue_id: "v-platform", venue: "Platform Tavern", city: "Southampton" };
+    const { editForm, venueSeed } = openEdit(gigA);
+    let synced = mountAndSyncOnChange(venueSeed, editForm);
+    // Relink happens via VENUE_SELECTED on the SAME mounted instance --
+    // no remount, no seed involved.
+    const relinked = pickerReducer(createInitialPickerState(venueSeed), {
+      type: "VENUE_SELECTED",
+      venue: { id: "v-joiners", name: "The Joiners", city: "Southampton" },
+    });
+    const fields = venueFieldsFromPickerState(relinked, { fallbackCity: synced.city });
+    synced = { ...synced, venue_id: fields.venue_id, venue: fields.venue, city: fields.venue_id ? fields.city : synced.city };
+    expect(synced).toEqual({ venue_id: "v-joiners", venue: "The Joiners", city: "Southampton" });
   });
 });
 

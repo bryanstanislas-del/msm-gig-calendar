@@ -78,3 +78,27 @@ export function buildVenueUpdatePayload(fields) {
   const { venue_id, venue, city } = fields;
   return venue_id ? { venue_id, venue, city } : { venue, city };
 }
+
+// Computes VenuePicker's `initialSelection` seed from a gig row, for
+// Admin Edit's openEdit(). MUST be called exactly once per opened gig
+// (its result captured in a ref, never recomputed inline from the gig on
+// every render) -- this is the fix for a confirmed bug: a city-conflict
+// remount (see App.jsx's handleCityChange) previously re-derived the seed
+// fresh from the immutable `editing` gig snapshot every time, which
+// resurrected the ORIGINAL venue_id/city and silently reverted the
+// admin's just-made city edit. The seed captured by this function is only
+// ever correct for the "a gig was just opened for editing" remount; a
+// city-conflict remount must instead pass `null` explicitly (never call
+// this function again for that case) so the cleared selection stays
+// cleared. Three cases, mirroring createInitialPickerState's own:
+//   - gig.venue_id set: seed a full existing selection.
+//   - gig.venue set but no venue_id: free-text gig with no real link --
+//     seed plain text, no selection (never claim an existing link that
+//     doesn't exist).
+//   - neither: no seed at all.
+export function computeVenueEditSeed(gig) {
+  if (!gig) return null;
+  if (gig.venue_id) return { venue_id: gig.venue_id, name: gig.venue || "", city: gig.city || null };
+  if (gig.venue) return { venue_id: null, name: gig.venue, city: gig.city || null };
+  return null;
+}

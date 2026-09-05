@@ -98,7 +98,7 @@ import { GENRES, GENRE_COLORS, genreColor, genreLabel, NO_GENRE_OPTION } from ".
 // anything back from App.jsx (see its own header comment) -- this is a
 // one-directional dependency, not circular.
 import VenuePicker from "./venueSearch/VenuePicker.jsx";
-import { venueFieldsFromPickerState, cityConflictsWithSelection, buildVenueUpdatePayload } from "./venueSearch/gigVenueFields.js";
+import { venueFieldsFromPickerState, cityConflictsWithSelection, buildVenueUpdatePayload, computeVenueEditSeed } from "./venueSearch/gigVenueFields.js";
 
 // ── Supabase config ────────────────────────────────────────────────
 const SUPABASE_URL = "https://fmlaaiolqwknowhtdeue.supabase.co";
@@ -2819,6 +2819,16 @@ function AdminPanel({ allGigs, gigCounts, onRefresh, bands=[] }) {
   // gig can never leak into this one.
   const venuePickerStateRef = useRef(null);
   const [venuePickerKey, setVenuePickerKey] = useState(0);
+  // The VenuePicker `initialSelection` seed -- captured ONCE per opened
+  // gig in openEdit() via computeVenueEditSeed(), NEVER re-derived inline
+  // from `editing` on every render/remount. This is what a prior version
+  // of this PR got wrong: deriving the seed fresh from the immutable
+  // `editing` snapshot meant a city-conflict-triggered remount (see
+  // handleCityChange below) resurrected the gig's ORIGINAL venue_id/city
+  // instead of staying cleared. openEdit() sets this once per gig;
+  // handleCityChange explicitly sets it to null on a conflict so the
+  // NEXT remount seeds empty, not from the stale gig row.
+  const venueSeedRef = useRef(null);
 
   useEffect(() => { DB.getFestivals(true).then(setFestivalOptions); }, []);
 
@@ -2928,6 +2938,10 @@ function AdminPanel({ allGigs, gigCounts, onRefresh, bands=[] }) {
       festival_profile_id: g.festival_profile_id || "",
     });
     venuePickerStateRef.current = null;
+    // Captured once, here, per opened gig -- see venueSeedRef's own
+    // comment for why this must never be recomputed from `editing`
+    // inline in the render/JSX.
+    venueSeedRef.current = computeVenueEditSeed(g);
     setEditMsg("");
   };
 
@@ -2945,6 +2959,10 @@ function AdminPanel({ allGigs, gigCounts, onRefresh, bands=[] }) {
     const conflicts = venuePickerStateRef.current && cityConflictsWithSelection(venuePickerStateRef.current, newCity);
     if (conflicts) {
       setEditForm(f => ({ ...f, city: newCity, venue_id: null }));
+      // Explicitly cleared, NOT recomputed from `editing` -- the fix for
+      // the resurrection bug. The upcoming remount (key bump below) must
+      // seed empty, never back to this gig's original venue.
+      venueSeedRef.current = null;
       setVenuePickerKey(k => k + 1);
     } else {
       setEditForm(f => ({ ...f, city: newCity }));
@@ -3002,7 +3020,7 @@ function AdminPanel({ allGigs, gigCounts, onRefresh, bands=[] }) {
           <div style={{ gridColumn:"1/-1" }}><Input label="BAND / ARTIST NAME" value={editForm.band_name} onChange={e=>setEditForm(f=>({...f,band_name:e.target.value}))} /></div>
           <VenuePicker
             key={`${editing?.id}-${venuePickerKey}`}
-            initialSelection={editing ? { venue_id: editing.venue_id || null, name: editing.venue || "", city: editing.city || null } : null}
+            initialSelection={venueSeedRef.current}
             searchFn={(query) => DB.searchEntities("venue", query)}
             context={{ city: editForm.city }}
             onChange={handleVenuePickerChange}
