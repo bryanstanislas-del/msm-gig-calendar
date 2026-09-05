@@ -419,7 +419,7 @@ export const DB = {
     return data;
   },
 
-  async importGigRow({ importRunId, band_name, venue, city, date, time, genre, notes, tickets, band_profile_id, raw_text, parsed_fields, match_decisions, venue_address, venue_postcode, venue_website, festival_profile_id }) {
+  async importGigRow({ importRunId, band_name, venue, city, date, time, genre, notes, tickets, band_profile_id, raw_text, parsed_fields, match_decisions, venue_address, venue_postcode, venue_website, venue_id, festival_profile_id }) {
     if (USE_MOCK) return { outcome: "created", gig_id: `mock-gig-${Date.now()}` };
     const { data, error } = await supabase.rpc("import_gig_row", {
       p_import_run_id: importRunId,
@@ -448,6 +448,13 @@ export const DB = {
       // when no festival was selected at Import Review, which is exactly
       // today's behaviour.
       p_festival_profile_id: festival_profile_id ?? null,
+      // Phase 2D: an admin-confirmed exact/alias/fuzzy venue match's real
+      // id (see importEngine.js's resolveVenueFields) -- null for
+      // "approved_new"/"none" rows, exactly as before this parameter
+      // existed. Only import_gig_row's NEW p_venue_id parameter (added at
+      // the END of its signature, default null) receives this; every
+      // other parameter above is unchanged so this is purely additive.
+      p_venue_id: venue_id ?? null,
     });
     if (error) throw new Error(error.message);
     return data;

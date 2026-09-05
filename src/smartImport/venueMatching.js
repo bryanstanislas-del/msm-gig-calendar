@@ -34,6 +34,7 @@
 // what keeps this file unit-testable the same way every Sprint 5A module is:
 // plain fixtures in, a plain result out, no network.
 import { normaliseName, normaliseCity, stripStatusWording } from "./textNormalize.js";
+import { rankVenueCandidates } from "../venueSearch/ranking.js";
 
 export const VENUE_MATCH_THRESHOLDS = { MIN_FUZZY_SIMILARITY: 0.35 };
 
@@ -81,9 +82,30 @@ export function classifyVenueMatch(fields, venues, fuzzyCandidates = []) {
     return { tier: "exact", query, city, match: { id: exact.id, name: exact.name, city: exact.city }, candidates: [] };
   }
 
-  const candidates = fuzzyCandidates
-    .filter((c) => c.similarity_score >= VENUE_MATCH_THRESHOLDS.MIN_FUZZY_SIMILARITY)
-    .sort((a, b) => b.similarity_score - a.similarity_score);
+  // Phase 2D: the SET of candidates this tier surfaces is unchanged --
+  // still exactly every candidate at or above MIN_FUZZY_SIMILARITY, the
+  // same threshold, applied first, exactly as before. Only the ORDER
+  // changes: rankVenueCandidates (Phase 2A's shared primitive) is used to
+  // sort this already-fixed set by the same alias/prefix/token/contains/
+  // fuzzy tier hierarchy the Venue Picker uses, instead of a flat
+  // similarity_score sort -- e.g. an alias-normalised exact match like
+  // "The Platform Tavern" -> "Platform Tavern" now sorts above an
+  // unrelated candidate that merely has a higher raw trigram score.
+  // rankVenueCandidates's own MIN_FUZZY_SIMILARITY constant is the same
+  // 0.35 value (see that module's header comment on why it's duplicated,
+  // not imported, from here) -- so pre-filtering by it here first means
+  // every candidate passed in already qualifies for at least its own
+  // FUZZY tier, and rankVenueCandidates can only ever re-classify one
+  // into a HIGHER (alias/prefix/token/contains) tier for ordering
+  // purposes, never drop it. This is ordering only: the outer tier
+  // returned by this function is always "fuzzy" regardless of what
+  // per-candidate matchType ranking assigns -- rankVenueCandidates's own
+  // isAutoResolvableMatchType/EXACT-only-auto-resolve contract is about a
+  // DIFFERENT caller (the Venue Picker); nothing here ever escalates this
+  // branch's tier or auto-resolves a candidate, per this phase's
+  // non-negotiable safety principles 2-4.
+  const filtered = fuzzyCandidates.filter((c) => c.similarity_score >= VENUE_MATCH_THRESHOLDS.MIN_FUZZY_SIMILARITY);
+  const candidates = rankVenueCandidates(query, filtered, city ? { city } : {});
   if (candidates.length > 0) {
     return { tier: "fuzzy", query, city, match: null, candidates };
   }
