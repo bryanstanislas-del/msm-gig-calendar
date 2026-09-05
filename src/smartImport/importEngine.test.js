@@ -157,6 +157,49 @@ describe("buildGigInsertPayload", () => {
   });
 });
 
+describe("buildGigInsertPayload -- venue_id (Phase 2D: explicit confirmed venue identity)", () => {
+  it("carries the matched venue's real id for an exact match", () => {
+    const result = buildGigInsertPayload(
+      item({ venueMatch: { tier: "exact", query: "the brook southampton", city: "Southampton", match: { id: "v1", name: "The Brook", city: "Southampton" }, candidates: [] } })
+    );
+    expect(result.venue_id).toBe("v1");
+  });
+
+  it("carries the matched venue's real id for a confirmed (admin-accepted alias/fuzzy) match too", () => {
+    const result = buildGigInsertPayload(
+      item({ venueMatch: { tier: "confirmed", query: "The Brooky", city: null, match: { id: "v9", name: "The Brooke Inn", city: "Winchester" }, candidates: [] } })
+    );
+    expect(result.venue_id).toBe("v9");
+  });
+
+  it("sends venue_id null for an explicit approved-new venue -- no stale candidate id ever survives an explicit NEW decision", () => {
+    const result = buildGigInsertPayload(
+      item({
+        venueMatch: {
+          tier: "approved_new", query: "The 1865", city: "Fareham",
+          address: "12 High Street", postcode: "PO16 0AA", website: "https://the1865.example",
+          match: null, candidates: [],
+        },
+      })
+    );
+    expect(result.venue_id).toBeNull();
+  });
+
+  it("sends venue_id null for a plain New Venue (tier none) row", () => {
+    const result = buildGigInsertPayload(
+      item({ venueMatch: { tier: "none", query: "Totally New Place", city: "Fareham", match: null, candidates: [] } })
+    );
+    expect(result.venue_id).toBeNull();
+  });
+
+  it("still sends the matched venue's canonical name/city alongside venue_id -- venue_id is additive, not a replacement", () => {
+    const result = buildGigInsertPayload(
+      item({ venueMatch: { tier: "exact", query: "the brook southampton", city: "Southampton", match: { id: "v1", name: "The Brook", city: "Southampton" }, candidates: [] } })
+    );
+    expect(result).toMatchObject({ venue_id: "v1", venue: "The Brook", city: "Southampton" });
+  });
+});
+
 describe("buildGigInsertPayload -- venue address (structured bulk import)", () => {
   it("includes venue_address/venue_postcode/venue_website for an approved new venue", () => {
     const result = buildGigInsertPayload(
@@ -272,6 +315,26 @@ describe("runImport -- batch-level festival association", () => {
     expect(importRowFn).toHaveBeenCalledTimes(1); // only r2 -- r1 is blocked, never attempted
     expect(result.blocked).toHaveLength(1);
     expect(result.blocked[0].item.id).toBe("r1");
+  });
+});
+
+describe("runImport -- venue_id (Phase 2D: explicit confirmed venue identity)", () => {
+  it("passes the confirmed venue's real id through to importRowFn for an exact/confirmed match", async () => {
+    const rows = [
+      item({ id: "r1", venueMatch: { tier: "exact", query: "The Brook", city: "Southampton", match: { id: "v1", name: "The Brook", city: "Southampton" }, candidates: [] } }),
+    ];
+    const importRowFn = vi.fn(async () => ({ outcome: "created", gig_id: "gig-1" }));
+    await runImport(rows, { startRunFn: async () => "run-1", importRowFn, completeRunFn: async () => {} });
+    expect(importRowFn.mock.calls[0][0].venue_id).toBe("v1");
+  });
+
+  it("passes venue_id null through to importRowFn for an explicit NEW venue -- never leaks a rejected candidate's id", async () => {
+    const rows = [
+      item({ id: "r1", venueMatch: { tier: "approved_new", query: "The 1865", city: "Fareham", match: null, candidates: [] } }),
+    ];
+    const importRowFn = vi.fn(async () => ({ outcome: "created", gig_id: "gig-1" }));
+    await runImport(rows, { startRunFn: async () => "run-1", importRowFn, completeRunFn: async () => {} });
+    expect(importRowFn.mock.calls[0][0].venue_id).toBeNull();
   });
 });
 

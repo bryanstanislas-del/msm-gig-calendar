@@ -13,7 +13,7 @@
 //
 // Keep RPC_PARAMS_REQUIRED/RPC_PARAMS_DEFAULTED in sync with the actual
 // Postgres function signature (see
-// 20260831140000_import_gig_row_festival_association.sql) if either changes.
+// 20260905090000_import_gig_row_venue_id.sql) if either changes.
 import { describe, it, expect } from "vitest";
 
 const RPC_PARAMS_REQUIRED = [
@@ -21,11 +21,11 @@ const RPC_PARAMS_REQUIRED = [
   "p_time", "p_genre", "p_notes", "p_tickets", "p_band_profile_id", "p_raw_text",
 ];
 
-// Order matches the actual function signature -- p_festival_profile_id is
-// the newest, final parameter (see the festival-association migration).
+// Order matches the actual function signature -- p_venue_id (Phase 2D) is
+// the newest, final parameter, appended after p_festival_profile_id.
 const RPC_PARAMS_DEFAULTED = [
   "p_parsed_fields", "p_match_decisions", "p_venue_address", "p_venue_postcode", "p_venue_website",
-  "p_festival_profile_id",
+  "p_festival_profile_id", "p_venue_id",
 ];
 
 // The shape src/App.jsx's DB.importGigRow sent before PR #21 (venue
@@ -42,11 +42,18 @@ const PRE_FESTIVAL_PAYLOAD_KEYS = [
   ...PRE_VENUE_ADDRESS_PAYLOAD_KEYS, "p_venue_address", "p_venue_postcode", "p_venue_website",
 ];
 
-// The full shape DB.importGigRow sends today, including festival
-// association -- always present as a key, value null when no festival is
-// selected (see App.jsx's "p_festival_profile_id: festival_profile_id ?? null").
-const CURRENT_PRODUCTION_PAYLOAD_KEYS = [
+// The shape src/App.jsx's DB.importGigRow sent after festival association
+// but before Phase 2D's explicit venue identity -- 17 keys, never
+// p_venue_id.
+const PRE_VENUE_ID_PAYLOAD_KEYS = [
   ...PRE_FESTIVAL_PAYLOAD_KEYS, "p_festival_profile_id",
+];
+
+// The full shape DB.importGigRow sends today, including Phase 2D's
+// explicit confirmed venue identity -- always present as a key, value null
+// for "approved_new"/"none" rows (see App.jsx's "p_venue_id: venue_id ?? null").
+const CURRENT_PRODUCTION_PAYLOAD_KEYS = [
+  ...PRE_VENUE_ID_PAYLOAD_KEYS, "p_venue_id",
 ];
 
 function isValidCallAgainstSoleFunction(payloadKeys) {
@@ -56,9 +63,9 @@ function isValidCallAgainstSoleFunction(payloadKeys) {
   return everyKeyIsRealParam && everyRequiredParamPresent;
 }
 
-describe("import_gig_row RPC contract -- exactly one 17-parameter canonical signature", () => {
-  it("has exactly 17 total parameters", () => {
-    expect(RPC_PARAMS_REQUIRED.length + RPC_PARAMS_DEFAULTED.length).toBe(17);
+describe("import_gig_row RPC contract -- exactly one 18-parameter canonical signature", () => {
+  it("has exactly 18 total parameters", () => {
+    expect(RPC_PARAMS_REQUIRED.length + RPC_PARAMS_DEFAULTED.length).toBe(18);
   });
 
   it("has no duplicate parameter names across required/defaulted -- a single, unambiguous parameter list", () => {
@@ -66,9 +73,9 @@ describe("import_gig_row RPC contract -- exactly one 17-parameter canonical sign
     expect(new Set(all).size).toBe(all.length);
   });
 
-  it("p_festival_profile_id is the sole newly-added parameter, and it's defaulted (optional), not required", () => {
-    expect(RPC_PARAMS_DEFAULTED).toContain("p_festival_profile_id");
-    expect(RPC_PARAMS_REQUIRED).not.toContain("p_festival_profile_id");
+  it("p_venue_id is the sole newly-added parameter, and it's defaulted (optional), not required", () => {
+    expect(RPC_PARAMS_DEFAULTED).toContain("p_venue_id");
+    expect(RPC_PARAMS_REQUIRED).not.toContain("p_venue_id");
   });
 
   it("the first 11 required parameters are completely unchanged from every earlier version of this function", () => {
@@ -88,14 +95,18 @@ describe("import_gig_row RPC contract -- backwards compatibility across every pr
     expect(isValidCallAgainstSoleFunction(PRE_FESTIVAL_PAYLOAD_KEYS)).toBe(true);
   });
 
-  it("the current 17-key payload (including festival association) is a fully valid call", () => {
+  it("the 17-key payload (post festival-association, pre venue-id) remains a fully valid call", () => {
+    expect(isValidCallAgainstSoleFunction(PRE_VENUE_ID_PAYLOAD_KEYS)).toBe(true);
+  });
+
+  it("the current 18-key payload (including Phase 2D's explicit venue identity) is a fully valid call", () => {
     expect(isValidCallAgainstSoleFunction(CURRENT_PRODUCTION_PAYLOAD_KEYS)).toBe(true);
   });
 
   it("every parameter added since the original 13-key shape has a DEFAULT, so every earlier caller shape stays valid without modification", () => {
     const addedSincePreVenueAddress = RPC_PARAMS_DEFAULTED.filter((p) => !PRE_VENUE_ADDRESS_PAYLOAD_KEYS.includes(p));
     expect(addedSincePreVenueAddress.sort()).toEqual(
-      ["p_venue_address", "p_venue_postcode", "p_venue_website", "p_festival_profile_id"].sort()
+      ["p_venue_address", "p_venue_postcode", "p_venue_website", "p_festival_profile_id", "p_venue_id"].sort()
     );
     // all of RPC_PARAMS_DEFAULTED (by construction) have a DEFAULT -- this
     // list containing every added parameter proves none of them are required.
@@ -104,7 +115,7 @@ describe("import_gig_row RPC contract -- backwards compatibility across every pr
 
   it("no payload ever contains a key that isn't a real parameter of the function (no stray/renamed keys)", () => {
     const allParams = new Set([...RPC_PARAMS_REQUIRED, ...RPC_PARAMS_DEFAULTED]);
-    for (const keys of [PRE_VENUE_ADDRESS_PAYLOAD_KEYS, PRE_FESTIVAL_PAYLOAD_KEYS, CURRENT_PRODUCTION_PAYLOAD_KEYS]) {
+    for (const keys of [PRE_VENUE_ADDRESS_PAYLOAD_KEYS, PRE_FESTIVAL_PAYLOAD_KEYS, PRE_VENUE_ID_PAYLOAD_KEYS, CURRENT_PRODUCTION_PAYLOAD_KEYS]) {
       for (const key of keys) expect(allParams.has(key)).toBe(true);
     }
   });

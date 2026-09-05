@@ -65,9 +65,31 @@ export function validateRowForImport(item) {
 // "none" (a new venue imported without ever going through explicit
 // approval) also gets null here, matching today's existing behaviour
 // exactly: only a reviewed-and-approved venue gets an address attached.
+//
+// Phase 2D: venue_id is the one field that carries the actual confirmed
+// identity, not just its text -- exact matches (classifyVenueMatch's own
+// strict lookup) and "confirmed" matches (an admin explicitly linking to
+// or accepting an EntitySearchPicker/suggested candidate, see
+// groupResolution.js's applyVenueGroupDecision/applyVenueRowOverride,
+// both of which set match to an object that always carries a real .id --
+// confirmed by tracing every UI call site that produces a "confirmed"
+// venueMatch, see this PR's report) both already have venueMatch.match.id
+// available; this is the only change needed to stop discarding it. Both
+// "approved_new" and plain tier "none" always get venue_id: null here --
+// there is no existing venue id to carry for either (an explicit NEW
+// venue must never inherit a stale id from whatever candidates were
+// rejected to get there -- see groupResolution.js's applyVenueGroupDecision,
+// which already sets match: null for APPROVE_NEW).
 function resolveVenueFields(venueMatch) {
   if (venueMatch.tier === "exact" || venueMatch.tier === "confirmed") {
-    return { venue: venueMatch.match.name, city: venueMatch.match.city, venueAddress: null, venuePostcode: null, venueWebsite: null };
+    return {
+      venue: venueMatch.match.name,
+      city: venueMatch.match.city,
+      venueAddress: null,
+      venuePostcode: null,
+      venueWebsite: null,
+      venue_id: venueMatch.match.id,
+    };
   }
   if (venueMatch.tier === "approved_new") {
     return {
@@ -76,9 +98,10 @@ function resolveVenueFields(venueMatch) {
       venueAddress: venueMatch.address || null,
       venuePostcode: venueMatch.postcode || null,
       venueWebsite: venueMatch.website || null,
+      venue_id: null,
     };
   }
-  return { venue: venueMatch.query, city: venueMatch.city, venueAddress: null, venuePostcode: null, venueWebsite: null };
+  return { venue: venueMatch.query, city: venueMatch.city, venueAddress: null, venuePostcode: null, venueWebsite: null, venue_id: null };
 }
 
 // Snapshot of exactly what the admin's review decided for this row, kept
@@ -135,7 +158,7 @@ function buildMatchDecisions(item) {
 // festival-association investigation), so omitting the second argument here
 // always means "no festival", matching today's behaviour exactly.
 export function buildGigInsertPayload(item, { festivalProfileId = null } = {}) {
-  const { venue, city, venueAddress, venuePostcode, venueWebsite } = resolveVenueFields(item.venueMatch);
+  const { venue, city, venueAddress, venuePostcode, venueWebsite, venue_id } = resolveVenueFields(item.venueMatch);
   const bandProfileId =
     item.artistMatch.tier === "exact" || item.artistMatch.tier === "confirmed" ? item.artistMatch.match.id : null;
 
@@ -155,6 +178,7 @@ export function buildGigInsertPayload(item, { festivalProfileId = null } = {}) {
     venue_address: venueAddress,
     venue_postcode: venuePostcode,
     venue_website: venueWebsite,
+    venue_id,
     festival_profile_id: festivalProfileId,
   };
 }

@@ -64,6 +64,36 @@ describe("classifyVenueMatch", () => {
     expect(result.candidates.map((c) => c.id)).toEqual(["v8", "v9"]);
   });
 
+  it("Phase 2D: an alias-normalised match (optional leading 'The') sorts ABOVE a candidate with a merely higher raw trigram score -- the shared ranking hierarchy improves ordering, never auto-resolves", () => {
+    const fuzzyCandidates = [
+      // Same underlying name once "The " is stripped -- alias tier, the
+      // highest-confidence SUGGESTION tier below exact -- but a lower raw
+      // similarity_score than the unrelated candidate below.
+      { id: "v-alias", name: "Platform Tavern", city: "Southampton", similarity_score: 0.4 },
+      { id: "v-unrelated", name: "The Platform Bar", city: "Southampton", similarity_score: 0.7 },
+    ];
+    const result = classifyVenueMatch(
+      { venueName: "The Platform Tavern", city: "Southampton", venueBlock: null },
+      venues,
+      fuzzyCandidates
+    );
+    // Still just a suggestion -- outer tier is always "fuzzy" here, never
+    // escalated to "exact"/auto-resolved, regardless of per-candidate
+    // matchType (safety principles 2-4).
+    expect(result.tier).toBe("fuzzy");
+    expect(result.candidates.map((c) => c.id)).toEqual(["v-alias", "v-unrelated"]);
+    expect(result.candidates[0].matchType).toBe("alias");
+  });
+
+  it("Phase 2D: the fuzzy candidate SET is unchanged -- a candidate below MIN_FUZZY_SIMILARITY with no textual tier is still excluded, even though rankVenueCandidates is now used for ordering", () => {
+    const fuzzyCandidates = [
+      { id: "v9", name: "The Dove", city: "Micheldever", similarity_score: 0.27 },
+    ];
+    const result = classifyVenueMatch({ venueName: "The Nook", city: "Southampton", venueBlock: null }, venues, fuzzyCandidates);
+    expect(result.tier).toBe("none");
+    expect(result.candidates).toEqual([]);
+  });
+
   it("tier 'none' (not 'fuzzy') when every candidate falls below MIN_FUZZY_SIMILARITY -- the common-word-noise case observed against the real database (see the header comment)", () => {
     const fuzzyCandidates = [
       { id: "v9", name: "The Dove", city: "Micheldever", similarity_score: 0.27 },
