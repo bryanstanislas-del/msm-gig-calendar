@@ -15,6 +15,44 @@ const platformTavern = {
   postcode: "SO14 2NY",
 };
 
+describe("createInitialPickerState -- seeding (Phase 2C, Admin Edit)", () => {
+  it("with no argument, behaves exactly as before (empty/idle)", () => {
+    expect(createInitialPickerState()).toEqual({
+      text: "",
+      status: PICKER_STATUS.IDLE,
+      results: [],
+      selection: null,
+      queryToken: 0,
+    });
+  });
+
+  it("seeds a full existing-venue selection when venue_id is supplied -- no search required", () => {
+    const state = createInitialPickerState({ venue_id: "v-platform", name: "Platform Tavern", city: "Southampton" });
+    expect(state.status).toBe(PICKER_STATUS.SELECTED);
+    expect(getSelectedVenue(state)).toEqual({
+      mode: "existing",
+      venue_id: "v-platform",
+      name: "Platform Tavern",
+      city: "Southampton",
+      address: null,
+      postcode: null,
+    });
+    expect(state.text).toBe("Platform Tavern");
+  });
+
+  it("seeds plain text (no selection) when a name is supplied without a venue_id -- free-text gig with no real link", () => {
+    const state = createInitialPickerState({ venue_id: null, name: "Some Old Free-Text Venue", city: "Southampton" });
+    expect(state.text).toBe("Some Old Free-Text Venue");
+    expect(getSelectedVenue(state)).toBeNull();
+    expect(state.status).toBe(PICKER_STATUS.IDLE);
+  });
+
+  it("seeds truly empty state when neither venue_id nor name is supplied", () => {
+    expect(createInitialPickerState({})).toEqual(createInitialPickerState());
+    expect(createInitialPickerState(null)).toEqual(createInitialPickerState());
+  });
+});
+
 describe("pickerReducer -- typing and search lifecycle", () => {
   it("starts idle", () => {
     const state = createInitialPickerState();

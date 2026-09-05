@@ -92,6 +92,13 @@ import {
   entitySearchTargets,
 } from "./smartImport";
 import { GENRES, GENRE_COLORS, genreColor, genreLabel, NO_GENRE_OPTION } from "./genres";
+// Venue Identity & Matching, Phase 2C: VenuePicker and its pure helpers
+// are imported directly (not via a barrel), matching how ./notificationHelpers
+// and ./moderationHelpers are already imported. VenuePicker never imports
+// anything back from App.jsx (see its own header comment) -- this is a
+// one-directional dependency, not circular.
+import VenuePicker from "./venueSearch/VenuePicker.jsx";
+import { venueFieldsFromPickerState, cityConflictsWithSelection, buildVenueUpdatePayload } from "./venueSearch/gigVenueFields.js";
 
 // ── Supabase config ────────────────────────────────────────────────
 const SUPABASE_URL = "https://fmlaaiolqwknowhtdeue.supabase.co";
@@ -2579,24 +2586,73 @@ function AuthPanel({ onAuth, onBack }) {
 //  SUBMIT GIG FORM
 // ════════════════════════════════════════════════════════════════════
 function SubmitGigForm({ user, profile, onSubmitted, onEditProfile }) {
-  const empty = { band_name: profile?.band_name||"", venue:"", city:"", date:"", end_date:"", time:TIME_TBC, genre:NO_GENRE_OPTION, tickets:"", notes:"", is_recurring:false, recurrence:"none", spotify: profile?.spotify||"" };
+  const empty = { band_name: profile?.band_name||"", venue_id: null, venue:"", city:"", date:"", end_date:"", time:TIME_TBC, genre:NO_GENRE_OPTION, tickets:"", notes:"", is_recurring:false, recurrence:"none", spotify: profile?.spotify||"" };
   const [form, setForm]     = useState(empty);
   const [errors, setErrors] = useState({});
   const [status, setStatus] = useState("idle"); // idle | loading | success | error
   const [msg, setMsg]       = useState("");
+  // Venue Identity & Matching, Phase 2C: the picker's own live state,
+  // captured on every onChange -- used (a) so a manual CITY edit can check
+  // whether it conflicts with an already-selected venue's canonical city
+  // (see handleCityChange), and (b) as the final, submit-time source of
+  // truth for venue_id/venue/city (see submit()), rather than trusting
+  // only the incrementally-synced copies already in `form`.
+  const venuePickerStateRef = useRef(null);
+  // Bumped to force VenuePicker to fully remount (fresh, empty state):
+  // after a successful submission (the rest of the form resets too), and
+  // when a city edit invalidates the currently-selected venue (so the
+  // picker's own "Existing venue selected" indicator clears in lockstep
+  // with form.venue_id, instead of visually lying about what's selected).
+  const [venuePickerKey, setVenuePickerKey] = useState(0);
 
   const set = k => e => setForm(f=>({...f,[k]:e.target.value}));
 
+  const handleVenuePickerChange = (pickerState) => {
+    venuePickerStateRef.current = pickerState;
+    const fields = venueFieldsFromPickerState(pickerState, { fallbackCity: form.city });
+    // An existing selection's canonical city always wins over whatever
+    // free text is currently in the CITY field (Phase 2C spec, section
+    // 3); a new-venue choice or plain typing leaves the form's own city
+    // field exactly as the user set it (section 4).
+    setForm(f => ({ ...f, venue_id: fields.venue_id, venue: fields.venue, city: fields.venue_id ? fields.city : f.city }));
+  };
+
+  // Section 16: a manual city edit while an existing venue is selected
+  // either matches that venue's own canonical city (no-op, e.g. a
+  // whitespace/case fix) or materially conflicts with it -- in which case
+  // the selection (and venue_id) is cleared rather than left silently
+  // attached to a now-contradicted city. This mirrors, for the CITY
+  // field, exactly the same stale-selection rule the picker already
+  // applies to its own VENUE text field.
+  const handleCityChange = (e) => {
+    const newCity = e.target.value;
+    const conflicts = venuePickerStateRef.current && cityConflictsWithSelection(venuePickerStateRef.current, newCity);
+    if (conflicts) {
+      setForm(f => ({ ...f, city: newCity, venue_id: null }));
+      setVenuePickerKey(k => k + 1);
+    } else {
+      setForm(f => ({ ...f, city: newCity }));
+    }
+  };
+
   const submit = async () => {
+    // Recomputed from the picker's actual latest state, not just trusted
+    // from the incrementally-synced `form` fields -- the explicit,
+    // submit-time stale-selection safety net the Phase 2C spec asks for.
+    const venueFields = venuePickerStateRef.current
+      ? venueFieldsFromPickerState(venuePickerStateRef.current, { fallbackCity: form.city })
+      : { venue_id: form.venue_id, venue: form.venue, city: form.city };
+    const submission = { ...form, ...venueFields };
+
     const e = {};
-    if (!form.band_name) e.band_name = true;
-    if (!form.venue)     e.venue     = true;
-    if (!form.city)      e.city      = true;
-    if (!form.date)      e.date      = true;
+    if (!form.band_name)      e.band_name = true;
+    if (!submission.venue)    e.venue     = true; // an existing selection or a new-venue choice both satisfy this -- venue_id is never required
+    if (!submission.city)     e.city      = true;
+    if (!form.date)            e.date      = true;
     if (Object.keys(e).length) { setErrors(e); return; }
     setStatus("loading");
     try {
-      await DB.submitGig(form, user.id, profile?.id);
+      await DB.submitGig(submission, user.id, profile?.id);
       // Moderation notification: only reachable after the gig has actually
       // been written to gigs as `pending` above -- a failure here must never
       // roll back or block the submission itself (already committed), but
@@ -2605,13 +2661,15 @@ function SubmitGigForm({ user, profile, onSubmitted, onEditProfile }) {
         await fetch("/api/notify", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...form, type: "gig_submission", submitter_email: user?.email || null }),
+          body: JSON.stringify({ ...submission, type: "gig_submission", submitter_email: user?.email || null }),
         });
       } catch(emailErr) { console.error("Moderation email failed to send:", emailErr); }
       setStatus("success");
       setMsg("Gig submitted! It will appear on the calendar once approved by our team.");
       setForm(empty);
       setErrors({});
+      venuePickerStateRef.current = null;
+      setVenuePickerKey(k => k + 1);
       if (onSubmitted) onSubmitted();
     } catch(err) { setStatus("error"); setMsg(err.message); }
   };
@@ -2657,8 +2715,16 @@ function SubmitGigForm({ user, profile, onSubmitted, onEditProfile }) {
         <div style={{ gridColumn:"1/-1" }}>
           <Input label="BAND / ARTIST NAME" value={form.band_name} onChange={set("band_name")} required error={errors.band_name} />
         </div>
-        <Input label="VENUE" value={form.venue} onChange={set("venue")} required error={errors.venue} />
-        <Input label="CITY" value={form.city} onChange={set("city")} required error={errors.city} />
+        <VenuePicker
+          key={venuePickerKey}
+          searchFn={(query) => DB.searchEntities("venue", query)}
+          context={{ city: form.city }}
+          onChange={handleVenuePickerChange}
+          label="VENUE" required error={errors.venue}
+          inputStyle={{ ...inputCss, borderColor: errors.venue ? C.red : C.border }}
+          labelStyle={{ display:"block", fontSize:13, color:errors.venue?C.red:C.white, letterSpacing:2, marginBottom:6, fontFamily:F.display }}
+        />
+        <Input label="CITY" value={form.city} onChange={handleCityChange} required error={errors.city} />
         <Input label="START DATE" type="date" value={form.date} onChange={set("date")} required error={errors.date} />
         <Input label="END DATE (OPTIONAL — FOR MULTI-DAY EVENTS)" type="date" value={form.end_date} onChange={set("end_date")} />
         <TimeField label="DOORS / START TIME" value={form.time} onChange={set("time")} />
@@ -2746,6 +2812,13 @@ function AdminPanel({ allGigs, gigCounts, onRefresh, bands=[] }) {
   const [bulkConfirming, setBulkConfirming] = useState(false);
   const [bulkRunning,    setBulkRunning]    = useState(false);
   const [bulkResult,     setBulkResult]     = useState(null);
+  // Venue Identity & Matching, Phase 2C: mirrors SubmitGigForm's own
+  // venuePickerStateRef/venuePickerKey -- see that component's comments
+  // for the full rationale (submit-time recompute, city-conflict
+  // remount). Reset in openEdit() so a stale ref from a PREVIOUSLY edited
+  // gig can never leak into this one.
+  const venuePickerStateRef = useRef(null);
+  const [venuePickerKey, setVenuePickerKey] = useState(0);
 
   useEffect(() => { DB.getFestivals(true).then(setFestivalOptions); }, []);
 
@@ -2839,6 +2912,7 @@ function AdminPanel({ allGigs, gigCounts, onRefresh, bands=[] }) {
     setEditing(g);
     setEditForm({
       band_name:    g.band_name    || "",
+      venue_id:     g.venue_id     || null,
       venue:        g.venue        || "",
       city:         g.city         || "",
       date:         g.date         || "",
@@ -2853,7 +2927,28 @@ function AdminPanel({ allGigs, gigCounts, onRefresh, bands=[] }) {
       spotify:      g.spotify      || "",
       festival_profile_id: g.festival_profile_id || "",
     });
+    venuePickerStateRef.current = null;
     setEditMsg("");
+  };
+
+  // Venue Identity & Matching, Phase 2C -- mirrors SubmitGigForm's own
+  // handleVenuePickerChange/handleCityChange exactly; see that
+  // component's comments for the full rationale.
+  const handleVenuePickerChange = (pickerState) => {
+    venuePickerStateRef.current = pickerState;
+    const fields = venueFieldsFromPickerState(pickerState, { fallbackCity: editForm.city });
+    setEditForm(f => ({ ...f, venue_id: fields.venue_id, venue: fields.venue, city: fields.venue_id ? fields.city : f.city }));
+  };
+
+  const handleCityChange = (e) => {
+    const newCity = e.target.value;
+    const conflicts = venuePickerStateRef.current && cityConflictsWithSelection(venuePickerStateRef.current, newCity);
+    if (conflicts) {
+      setEditForm(f => ({ ...f, city: newCity, venue_id: null }));
+      setVenuePickerKey(k => k + 1);
+    } else {
+      setEditForm(f => ({ ...f, city: newCity }));
+    }
   };
 
   const saveEdit = async () => {
@@ -2865,8 +2960,20 @@ function AdminPanel({ allGigs, gigCounts, onRefresh, bands=[] }) {
         const { data: bp } = await supabase.from("profiles").select("id").ilike("band_name", editForm.band_name.trim()).limit(1);
         extra.band_profile_id = bp?.[0]?.id || null;
       }
-      // venue_id handled by trigger on venue/city update
-      await DB.updateGig(editing.id, { ...editForm, ...extra, genre: editForm.genre || null, festival_profile_id: editForm.festival_profile_id || null });
+      // Recomputed from the picker's actual latest state, same submit-time
+      // safety net as SubmitGigForm. buildVenueUpdatePayload's own comment
+      // explains, with the empirical evidence, exactly why venue_id must
+      // never be sent as an explicit null on an UPDATE (it would
+      // permanently orphan the gig instead of letting gig_auto_venue
+      // re-resolve/create the new venue text -- verified against the live
+      // trigger, PR #29).
+      const venueFields = venuePickerStateRef.current
+        ? venueFieldsFromPickerState(venuePickerStateRef.current, { fallbackCity: editForm.city })
+        : { venue_id: editForm.venue_id, venue: editForm.venue, city: editForm.city };
+      const { venue_id, venue, city, ...editFormRest } = editForm;
+      const venuePayload = buildVenueUpdatePayload(venueFields);
+
+      await DB.updateGig(editing.id, { ...editFormRest, ...venuePayload, ...extra, genre: editForm.genre || null, festival_profile_id: editForm.festival_profile_id || null });
       await logActivity("gig_edited", "gig", editForm.band_name, editing.id);
       setEditMsg("✓ Gig updated");
       await onRefresh();
@@ -2893,8 +3000,17 @@ function AdminPanel({ allGigs, gigCounts, onRefresh, bands=[] }) {
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
           <div style={{ gridColumn:"1/-1", fontFamily:F.display, fontSize:13, color:C.red, letterSpacing:2 }}>GIG DETAILS</div>
           <div style={{ gridColumn:"1/-1" }}><Input label="BAND / ARTIST NAME" value={editForm.band_name} onChange={e=>setEditForm(f=>({...f,band_name:e.target.value}))} /></div>
-          <Input label="VENUE"  value={editForm.venue} onChange={e=>setEditForm(f=>({...f,venue:e.target.value}))} />
-          <Input label="CITY"   value={editForm.city}  onChange={e=>setEditForm(f=>({...f,city:e.target.value}))} />
+          <VenuePicker
+            key={`${editing?.id}-${venuePickerKey}`}
+            initialSelection={editing ? { venue_id: editing.venue_id || null, name: editing.venue || "", city: editing.city || null } : null}
+            searchFn={(query) => DB.searchEntities("venue", query)}
+            context={{ city: editForm.city }}
+            onChange={handleVenuePickerChange}
+            label="VENUE"
+            inputStyle={{ ...inputCss, borderColor: C.border }}
+            labelStyle={{ display:"block", fontSize:13, color:C.white, letterSpacing:2, marginBottom:6, fontFamily:F.display }}
+          />
+          <Input label="CITY"   value={editForm.city}  onChange={handleCityChange} />
           <Input label="DATE"   type="date" value={editForm.date} onChange={e=>setEditForm(f=>({...f,date:e.target.value}))} />
           <TimeField label="TIME" value={editForm.time} onChange={e=>setEditForm(f=>({...f,time:e.target.value}))} />
           <Select label="GENRE" value={editForm.genre} onChange={e=>setEditForm(f=>({...f,genre:e.target.value}))} options={GIG_GENRE_OPTIONS} />

@@ -25,7 +25,39 @@ export const PICKER_STATUS = {
   NEW: "new", // the explicit "use as new venue" action was chosen
 };
 
-export function createInitialPickerState() {
+// Phase 2C: `initial` lets a host (Admin Edit Gig) represent an existing
+// gig's already-linked venue the moment the picker mounts, with no search
+// required -- see the Phase 2C report's section 7. Three cases:
+//   - initial.venue_id set: seed a full "existing" selection (exactly as
+//     if the user had just clicked that search result) -- the visible
+//     "Existing venue selected" state and the correct venue_id are both
+//     present from the first render.
+//   - initial.name set but no venue_id: the gig has free-text venue/city
+//     with no real link (an older row, or one that predates a trigger
+//     fix) -- show the current text for context, but never claim it's an
+//     existing, linked venue (no selection object at all).
+//   - neither: plain empty state, exactly the original (no-argument)
+//     behaviour Submit Gig already relies on.
+export function createInitialPickerState(initial = null) {
+  if (initial && initial.venue_id) {
+    return {
+      text: initial.name || "",
+      status: PICKER_STATUS.SELECTED,
+      results: [],
+      selection: {
+        mode: "existing",
+        venue_id: initial.venue_id,
+        name: initial.name,
+        city: initial.city ?? null,
+        address: initial.address ?? null,
+        postcode: initial.postcode ?? null,
+      },
+      queryToken: 0,
+    };
+  }
+  if (initial && initial.name) {
+    return { text: initial.name, status: PICKER_STATUS.IDLE, results: [], selection: null, queryToken: 0 };
+  }
   return {
     text: "",
     status: PICKER_STATUS.IDLE,
