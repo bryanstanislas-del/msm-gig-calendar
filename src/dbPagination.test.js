@@ -149,6 +149,111 @@ describe("DB.getAllGigs (paginated, admin)", () => {
   });
 });
 
+describe("DB.getVenues (paginated)", () => {
+  it("A. 266 venues -- one page request returns all 266", async () => {
+    const all = Array.from({ length: 266 }, (_, i) => ({ id: `v${i}`, name: `Venue ${i}` }));
+    const calls = [];
+    tableImpl = (table) => makeChain(table, (state) => {
+      calls.push(state);
+      const [from, to] = state.range;
+      return { data: all.slice(from, to + 1), error: null };
+    });
+
+    const result = await DB.getVenues();
+
+    expect(result.length).toBe(266);
+    expect(calls.length).toBe(1);
+    expect(calls[0].table).toBe("venues");
+  });
+
+  it("B. exactly 1,000 venues -- a confirmation request completes it, no duplicates", async () => {
+    const all = Array.from({ length: 1000 }, (_, i) => ({ id: `v${i}`, name: `Venue ${i}` }));
+    const calls = [];
+    tableImpl = (table) => makeChain(table, (state) => {
+      calls.push(state);
+      const [from, to] = state.range;
+      return { data: all.slice(from, to + 1), error: null };
+    });
+
+    const result = await DB.getVenues();
+
+    expect(result.length).toBe(1000);
+    expect(calls.length).toBe(2); // full page, then an empty page confirms completion
+    const ids = result.map((v) => v.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("C. 1,001 venues -- second data page is fetched, all 1,001 returned", async () => {
+    const all = Array.from({ length: 1001 }, (_, i) => ({ id: `v${i}`, name: `Venue ${i}` }));
+    const calls = [];
+    tableImpl = (table) => makeChain(table, (state) => {
+      calls.push(state);
+      const [from, to] = state.range;
+      return { data: all.slice(from, to + 1), error: null };
+    });
+
+    const result = await DB.getVenues();
+
+    expect(result.length).toBe(1001);
+    expect(calls.length).toBe(2);
+  });
+
+  it("D. 2,500 venues -- all pages fetched and concatenated", async () => {
+    const all = Array.from({ length: 2500 }, (_, i) => ({ id: `v${i}`, name: `Venue ${i}` }));
+    tableImpl = (table) => makeChain(table, (state) => {
+      const [from, to] = state.range;
+      return { data: all.slice(from, to + 1), error: null };
+    });
+
+    const result = await DB.getVenues();
+
+    expect(result.length).toBe(2500);
+  });
+
+  it("E. deterministic ordering -- name ASC then id ASC", async () => {
+    const all = Array.from({ length: 10 }, (_, i) => ({ id: `v${i}`, name: `Venue ${i}` }));
+    const calls = [];
+    tableImpl = (table) => makeChain(table, (state) => {
+      calls.push(state);
+      const [from, to] = state.range;
+      return { data: all.slice(from, to + 1), error: null };
+    });
+
+    await DB.getVenues();
+
+    expect(calls[0].orders).toEqual([
+      ["name", { ascending: true }],
+      ["id", { ascending: true }],
+    ]);
+  });
+
+  it("F. no overlap/duplicate IDs across pages", async () => {
+    const all = Array.from({ length: 1250 }, (_, i) => ({ id: `v${i}`, name: `Venue ${i}` }));
+    tableImpl = (table) => makeChain(table, (state) => {
+      const [from, to] = state.range;
+      return { data: all.slice(from, to + 1), error: null };
+    });
+
+    const result = await DB.getVenues();
+
+    const ids = result.map((v) => v.id);
+    expect(new Set(ids).size).toBe(all.length);
+    expect(ids).toEqual(all.map((v) => v.id));
+  });
+
+  it("G. throws rather than returning page one as a partial result when a later page fails", async () => {
+    const all = Array.from({ length: 1200 }, (_, i) => ({ id: `v${i}`, name: `Venue ${i}` }));
+    let call = 0;
+    tableImpl = (table) => makeChain(table, () => {
+      call++;
+      if (call === 1) return { data: all.slice(0, 1000), error: null };
+      return { data: null, error: { message: "venue page 2 failed" } };
+    });
+
+    await expect(DB.getVenues()).rejects.toThrow("venue page 2 failed");
+  });
+});
+
 describe("DB.getGigCounts (true database counts, not array length)", () => {
   it("uses head:true exact-count queries per status, independent of any row fetch", async () => {
     const totals = { total: 1811, approved: 1610, pending: 0, rejected: 201 };

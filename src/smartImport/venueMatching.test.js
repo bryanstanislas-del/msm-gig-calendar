@@ -115,3 +115,29 @@ describe("classifyVenueMatch", () => {
     expect(result.query).toBe("");
   });
 });
+
+// Phase 2E: DB.getVenues() is now paginated (see dbPagination.test.js), so
+// the `venues` snapshot this module receives can legitimately be well
+// past 1,000 rows once MSM's real venue count grows. classifyVenueMatch/
+// findExactVenue must have no positional assumption at all -- they're
+// plain array scans (see venueMatching.js), but this proves it directly
+// against a fixture too large to have ever fit in the pre-Phase-2E
+// truncated snapshot, rather than relying on that being merely implied.
+describe("classifyVenueMatch -- Phase 2E: no 1,000-row assumption once given the complete array", () => {
+  it("finds a strict exact match for a venue positioned beyond index 999", () => {
+    const filler = Array.from({ length: 1000 }, (_, i) => ({
+      id: `filler-${i}`,
+      name: `Filler Venue ${i}`,
+      name_normalised: `filler venue ${i}`,
+      city: "Nowhere",
+    }));
+    const target = { id: "target-venue-id", name: "Platform Tavern", name_normalised: "platform tavern", city: "Southampton" };
+    const largeVenues = [...filler, target];
+    expect(largeVenues.indexOf(target)).toBeGreaterThan(999);
+
+    const result = classifyVenueMatch({ venueName: "Platform Tavern", city: "Southampton", venueBlock: null }, largeVenues);
+
+    expect(result.tier).toBe("exact");
+    expect(result.match).toEqual({ id: "target-venue-id", name: "Platform Tavern", city: "Southampton" });
+  });
+});

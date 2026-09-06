@@ -700,24 +700,20 @@ export const DB = {
     return data[0];
   },
 
-  // NOTE (scaling): this is an unbounded .select() with no .range()/
-  // pagination, same latent pattern that caused the 1,000-gig truncation
-  // fixed in getApprovedGigs/getAllGigs above -- it will silently truncate
-  // at the project's Max Rows ceiling once the venues table itself grows
-  // past ~1,000 rows. Not fixed here (out of scope for this PR and not yet
-  // hit in production), but worth flagging for whoever builds Venue
-  // Identity & Matching / venue autocomplete next: that work should apply
-  // the same fetchAllPages() treatment (or, better, real server-side
-  // search/typeahead instead of fetching the whole table) rather than
-  // reintroducing this bug at a different table.
+  // Phase 2E: paginated (see fetchAllPages above) so the full venues table
+  // is returned regardless of size, same as getApprovedGigs/getAllGigs --
+  // avoids the PostgREST Max Rows ceiling silently truncating the snapshot
+  // Smart Import's strict exact-match pass relies on being complete.
+  // `id` tiebreaks alongside `name` (not unique on its own -- two venues
+  // can legitimately share a name in different cities) for stable,
+  // non-duplicating, non-skipping pagination.
   async getVenues() {
     if (USE_MOCK) return [];
-    const { data, error } = await supabase
-      .from("venues")
-      .select("*")
-      .order("name");
-    if (error) throw new Error(error.message);
-    return data;
+    return fetchAllPages((from, to) =>
+      supabase.from("venues").select("*")
+        .order("name", { ascending: true }).order("id", { ascending: true })
+        .range(from, to)
+    );
   },
 
   async getGigBySlug(slug) {
