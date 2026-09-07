@@ -22,6 +22,8 @@
  * review instead of an automated render test.
  */
 
+import { useState, useEffect } from "react";
+
 // ── Pure logic (fully unit-tested — see PromoSlot.test.js) ────────────────
 
 export const FIXED_SLOTS = ["TOP", "IN_FEED", "LOWER"];
@@ -109,6 +111,32 @@ export function resolveLinkProps(config) {
   return { href: config.target_url, target: "_blank", rel: "noopener noreferrer" };
 }
 
+// PR #36 review fix: whether a dedicated mobile creative exists is the
+// one decision that governs which CSS aspect-ratio a small viewport
+// gets (see PROMO_SLOT_CSS's msm-promo-slot--has-mobile modifier below).
+// Extracted as its own named, directly-testable decision because of its
+// significance -- this is exactly the "critical fallback review" case
+// the independent review flagged: WITHOUT this modifier class gating
+// the mobile aspect-ratio override, a mobile viewport would force the
+// 4.8:1 desktop creative into a 2.4:1 box via object-fit:cover, cropping
+// ~25% off each side and risking real content loss (a logo or CTA
+// positioned near either edge). Equivalent to
+// resolvePromoSources(config).mobileSrc !== null.
+export function hasMobileCreative(config) {
+  return resolvePromoSources(config).mobileSrc !== null;
+}
+
+// PR #36 review fix: the final render gate, combining
+// shouldRenderPromoSlot()'s own active/valid-URL check with a runtime
+// image-load failure (see PromoSlot's own onError handling below) --
+// extracted as its own pure, testable decision so "a broken image hides
+// the slot" has real test coverage without needing to simulate an
+// actual <img> load failure (this repo has no jsdom -- see this file's
+// own testing note above).
+export function shouldDisplayPromoSlot(config, imgFailed) {
+  return shouldRenderPromoSlot(config) && !imgFailed;
+}
+
 // Only one of the four fixed labels is ever rendered as a disclosure
 // badge. An unrecognised value (corrupted data, or a future label this
 // older client build doesn't know about yet) fails safe to no badge at
@@ -156,11 +184,20 @@ export function validatePromoSlotForm(form) {
 // ── Component ───────────────────────────────────────────────────────────
 
 // Scoped by a stable class name rather than touching App.jsx's own
-// GLOBAL_CSS -- keeps this feature self-contained in its own file. The
-// aspect-ratio switch at 600px mirrors the <picture> mobile <source>
-// breakpoint exactly, so there is never a frame where the reserved box
-// shape disagrees with which image is actually loading (no CLS, no
-// wrong-ratio letterboxing either side of the breakpoint).
+// GLOBAL_CSS -- keeps this feature self-contained in its own file.
+//
+// PR #36 review fix (mobile fallback): the mobile aspect-ratio override
+// below is scoped to .msm-promo-slot--has-mobile, a modifier class the
+// component only adds when hasMobileCreative(config) is true. When a
+// dedicated mobile creative WAS supplied, the <picture> mobile <source>
+// and this 2.4:1 override switch together at the same 600px breakpoint,
+// exactly as before -- correct 600x250 presentation, no distortion. When
+// no mobile creative exists, the modifier class is absent, so the img
+// keeps the desktop 4.8:1 aspect-ratio at every viewport width: the full,
+// uncropped desktop creative is preserved (just naturally thinner at
+// mobile widths, since height scales down with width) instead of being
+// force-cropped into a 2.4:1 box via object-fit:cover -- a thinner banner
+// beats losing a logo/CTA positioned near either edge.
 const PROMO_SLOT_CSS = `
 .msm-promo-slot { position:relative; margin:16px 0; }
 .msm-promo-slot img {
@@ -176,7 +213,7 @@ const PROMO_SLOT_CSS = `
   background:rgba(10,10,10,0.72); pointer-events:none;
 }
 @media (max-width:600px) {
-  .msm-promo-slot img { aspect-ratio:${MOBILE_ARTWORK.width}/${MOBILE_ARTWORK.height}; }
+  .msm-promo-slot--has-mobile img { aspect-ratio:${MOBILE_ARTWORK.width}/${MOBILE_ARTWORK.height}; }
 }
 `;
 
@@ -188,12 +225,31 @@ const PROMO_SLOT_CSS = `
 // never awaited by) the gigs fetch; see App.jsx's own loading state,
 // which this component has no part in.
 export default function PromoSlot({ config, eager = false }) {
-  if (!shouldRenderPromoSlot(config)) return null;
+  // PR #36 review fix (broken image): tracks a real <img> load failure
+  // (a syntactically valid URL that 404s or otherwise fails to fetch) --
+  // shouldRenderPromoSlot() alone only validates URL syntax, it can't
+  // know whether the URL actually resolves to an image. Declared before
+  // the shouldDisplayPromoSlot() early return below (Rules of Hooks: a
+  // hook can never follow a conditional return).
+  const [imgFailed, setImgFailed] = useState(false);
+
+  // Reset the failure flag whenever the underlying creative URL(s)
+  // change, so a slot that failed once gets a fresh attempt at a NEW
+  // image instead of staying hidden forever -- never a retry loop on
+  // the same URL (nothing re-triggers the effect unless the config
+  // itself changes), just a clean re-attempt when the admin fixes/swaps
+  // the URL and MainApp's next promo-slots fetch delivers it.
+  useEffect(() => {
+    setImgFailed(false);
+  }, [config?.image_url, config?.mobile_image_url]);
+
+  if (!shouldDisplayPromoSlot(config, imgFailed)) return null;
 
   const { desktopSrc, mobileSrc } = resolvePromoSources(config);
   const link = resolveLinkProps(config);
   const label = resolvePromoLabel(config);
   const altText = config.alt_text || "";
+  const layoutClass = hasMobileCreative(config) ? "msm-promo-slot msm-promo-slot--has-mobile" : "msm-promo-slot";
 
   const media = (
     <picture>
@@ -205,13 +261,14 @@ export default function PromoSlot({ config, eager = false }) {
         height={DESKTOP_ARTWORK.height}
         loading={eager ? "eager" : "lazy"}
         decoding="async"
+        onError={() => setImgFailed(true)}
         {...(eager ? { fetchpriority: "high" } : {})}
       />
     </picture>
   );
 
   return (
-    <div className="msm-promo-slot">
+    <div className={layoutClass}>
       <style>{PROMO_SLOT_CSS}</style>
       {label && <span className="msm-promo-slot__label">{label}</span>}
       {link ? (

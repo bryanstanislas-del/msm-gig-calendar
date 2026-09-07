@@ -3,12 +3,16 @@ import {
   FIXED_SLOTS,
   VALID_PROMO_LABELS,
   IN_FEED_AFTER_INDEX,
+  DESKTOP_ARTWORK,
+  MOBILE_ARTWORK,
   isKnownSlot,
   isValidHttpUrl,
   indexPromoSlotsBySlot,
   shouldRenderPromoSlot,
   resolvePromoSources,
   resolveLinkProps,
+  hasMobileCreative,
+  shouldDisplayPromoSlot,
   resolvePromoLabel,
   shouldShowInFeedSlot,
   buildListViewItems,
@@ -111,6 +115,44 @@ describe("resolvePromoSources -- mobile image fallback", () => {
   it("falls back the same way when mobile_image_url is present but invalid", () => {
     const sources = resolvePromoSources(activeConfig({ mobile_image_url: "not a url" }));
     expect(sources.mobileSrc).toBeNull();
+  });
+});
+
+describe("hasMobileCreative -- PR #36 review fix: mobile fallback presentation decision", () => {
+  it("A: true when a valid mobile creative is configured -- the 600x250 <picture> mobile <source>/aspect-ratio presentation applies", () => {
+    expect(hasMobileCreative(activeConfig({ mobile_image_url: "https://musicscenemagazine.co.uk/wp-content/uploads/promo-mobile.jpg" }))).toBe(true);
+  });
+  it("B: false when no mobile creative is configured -- the desktop-native-aspect-ratio fallback applies instead (no destructive mobile crop)", () => {
+    expect(hasMobileCreative(activeConfig({ mobile_image_url: null }))).toBe(false);
+  });
+  it("B: false when mobile_image_url is present but invalid -- same safe fallback, never a broken/malformed mobile source", () => {
+    expect(hasMobileCreative(activeConfig({ mobile_image_url: "not a url" }))).toBe(false);
+  });
+  it("stays in exact lockstep with resolvePromoSources().mobileSrc -- the same underlying decision the <picture> element itself uses", () => {
+    const withMobile = activeConfig({ mobile_image_url: "https://musicscenemagazine.co.uk/wp-content/uploads/promo-mobile.jpg" });
+    const withoutMobile = activeConfig({ mobile_image_url: null });
+    expect(hasMobileCreative(withMobile)).toBe(resolvePromoSources(withMobile).mobileSrc !== null);
+    expect(hasMobileCreative(withoutMobile)).toBe(resolvePromoSources(withoutMobile).mobileSrc !== null);
+  });
+});
+
+describe("artwork dimension constants", () => {
+  it("desktop is 1200x250 (4.8:1) and mobile is 600x250 (2.4:1), matching the audit's own recommendation", () => {
+    expect(DESKTOP_ARTWORK).toEqual({ width: 1200, height: 250 });
+    expect(MOBILE_ARTWORK).toEqual({ width: 600, height: 250 });
+  });
+});
+
+describe("shouldDisplayPromoSlot -- PR #36 review fix: broken image hides the slot", () => {
+  it("C: displays when the slot should render and no image load failure has occurred", () => {
+    expect(shouldDisplayPromoSlot(activeConfig(), false)).toBe(true);
+  });
+  it("C: hides when a real image load failure has occurred, even though the slot is otherwise perfectly valid/active", () => {
+    expect(shouldDisplayPromoSlot(activeConfig(), true)).toBe(false);
+  });
+  it("stays hidden for the ordinary reasons (inactive/missing/invalid) regardless of the failure flag", () => {
+    expect(shouldDisplayPromoSlot(activeConfig({ active: false }), false)).toBe(false);
+    expect(shouldDisplayPromoSlot(undefined, false)).toBe(false);
   });
 });
 

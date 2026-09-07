@@ -31,17 +31,41 @@ const emptyForm = (slot) => ({
   slot, image_url: '', mobile_image_url: '', target_url: '', alt_text: '', label: 'Editorial', active: false,
 });
 
+const rowToForm = (row) => ({
+  slot: row.slot,
+  image_url: row.image_url || '',
+  mobile_image_url: row.mobile_image_url || '',
+  target_url: row.target_url || '',
+  alt_text: row.alt_text || '',
+  label: row.label || 'Editorial',
+  active: !!row.active,
+});
+
 function SlotCard({ row, saving, onSave }) {
-  const [form, setForm] = useState(() => ({
-    slot: row.slot,
-    image_url: row.image_url || '',
-    mobile_image_url: row.mobile_image_url || '',
-    target_url: row.target_url || '',
-    alt_text: row.alt_text || '',
-    label: row.label || 'Editorial',
-    active: !!row.active,
-  }));
+  const [form, setForm] = useState(() => rowToForm(row));
   const [errors, setErrors] = useState([]);
+
+  // PR #36 review fix (admin resync): AdminPromoSlots re-fetches ALL
+  // three rows after every save (see load() below), which gives every
+  // SlotCard a brand-new `row` object on each reload -- but this card's
+  // own key={row.slot} (below, in AdminPromoSlots' render) stays stable,
+  // so React keeps the same SlotCard instance mounted rather than
+  // remounting it, and useState's own lazy initializer above only ever
+  // runs once, on first mount. Without this effect, this card's local
+  // `form` would never notice a fresh server value again.
+  //
+  // Keyed on row.updated_at rather than on `row` itself (or run on every
+  // render) specifically so saving ONE slot doesn't clobber unsaved
+  // typing sitting in the OTHER two slots' cards: load() rebuilds every
+  // row's object reference regardless of which slot was actually
+  // written to, but only the genuinely-saved row's own updated_at
+  // trigger value actually changes -- the other two cards' effects
+  // never fire, so whatever an admin was mid-typing there survives.
+  useEffect(() => {
+    setForm(rowToForm(row));
+    setErrors([]);
+  }, [row.updated_at]);
+
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
 
   const handleSave = () => {
@@ -127,6 +151,20 @@ export default function AdminPromoSlots() {
 
   const showToast = (msg, type = 'success') => { setToast({ msg, type }); setTimeout(() => setToast(null), 4000); };
 
+  // PR #36 review fix (admin resync, part 2): load() also runs as a
+  // silent background refresh after every save (see handleSave below),
+  // not just on initial mount. Without the rows.length checks in this
+  // component's own render below, that refresh's own `loading=true`
+  // window would make {!loading && ...} briefly false, removing every
+  // SlotCard from the tree -- an unmount, not just a prop update, which
+  // would discard each card's local `form` state (including any
+  // unsaved typing sitting in the OTHER two slots this particular save
+  // never touched) even though row.slot's own key never changed. Once
+  // the first successful load has populated `rows`, the cards now stay
+  // mounted continuously through every later refresh, which is what
+  // lets the row.updated_at-keyed effect in SlotCard (added by the same
+  // fix) actually do its job of resyncing just the one row that
+  // genuinely changed.
   const load = async () => {
     setLoading(true);
     try {
@@ -175,9 +213,11 @@ export default function AdminPromoSlots() {
     <AdminPage>
       <AdminHeader title="PROMO SLOTS" subtitle="MSM editorial promotion today; the same three positions become sellable advertising inventory later -- no rebuild required." />
       <Toast toast={toast} />
-      {loading && <p style={{ color: '#8a8a8a', fontSize: 13.5 }}>Loading…</p>}
+      {/* Only the true initial load (no rows yet) shows this -- see load()'s
+          own comment above for why a later background refresh must not. */}
+      {loading && rows.length === 0 && <p style={{ color: '#8a8a8a', fontSize: 13.5 }}>Loading…</p>}
       {error && <SystemNotice accent="#f87171">{error}</SystemNotice>}
-      {!loading && !error && rows.map((row) => (
+      {rows.length > 0 && rows.map((row) => (
         <SlotCard key={row.slot} row={row} saving={savingSlot === row.slot} onSave={handleSave} />
       ))}
     </AdminPage>
