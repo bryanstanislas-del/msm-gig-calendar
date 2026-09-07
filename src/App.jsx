@@ -90,6 +90,7 @@ import {
   composeResolvedRow,
   indexRowsByGroup,
   entitySearchTargets,
+  applyDuplicateResults,
 } from "./smartImport";
 import { GENRES, GENRE_COLORS, genreColor, genreLabel, NO_GENRE_OPTION } from "./genres";
 // Venue Identity & Matching, Phase 2C: VenuePicker and its pure helpers
@@ -7903,37 +7904,56 @@ function ImportReviewDashboard({ parseResult }) {
     });
   }, [batch, groupDecisions, overrides, venueMissingIndex, venueFuzzyIndex, artistMissingIndex, artistFuzzyIndex, duplicateIndex]);
 
-  const rowsById = useMemo(() => new Map(resolvedBatch.map((r) => [r.id, r])), [resolvedBatch]);
+  // Phase 2F: a second, downstream-only detectDuplicates() pass over the
+  // fully resolved rows -- catches a row whose venue/artist was only
+  // CONFIRMED after the one-time pass inside runMatching() already ran
+  // (see runReview() above), e.g. two differently-worded venue rows both
+  // just linked to the same real venue. Deliberately built FROM
+  // resolvedBatch, never fed back INTO it or into any of the
+  // venue/artist/duplicate group definitions above (all of which stay
+  // keyed off the original, stable `batch`) -- so resolving this phase's
+  // recheck can never itself change which group a row belongs to or
+  // retrigger while an admin is mid-resolution. This is the one place
+  // that gets to say a row is finally, authoritatively an exact duplicate
+  // (locked from import) or a newly-surfaced warning (still overridable
+  // the same way any other warning already is) -- see
+  // postResolutionDuplicates.js's own header comment for the full design.
+  const finalBatch = useMemo(
+    () => applyDuplicateResults(resolvedBatch, { existingGigs }),
+    [resolvedBatch, existingGigs]
+  );
+
+  const rowsById = useMemo(() => new Map(finalBatch.map((r) => [r.id, r])), [finalBatch]);
 
   // The single source of truth for "is this row currently selected" -- a
   // pure derivation, not an imperatively-patched Set, so a row drops back
   // out of selection the instant its rowState or exclusion status changes.
   const selected = useMemo(
-    () => deriveSelection(resolvedBatch, { explicitlyIncluded, explicitlyExcluded }),
-    [resolvedBatch, explicitlyIncluded, explicitlyExcluded]
+    () => deriveSelection(finalBatch, { explicitlyIncluded, explicitlyExcluded }),
+    [finalBatch, explicitlyIncluded, explicitlyExcluded]
   );
 
-  const counts = useMemo(() => summariseBatch(resolvedBatch, selected), [resolvedBatch, selected]);
+  const counts = useMemo(() => summariseBatch(finalBatch, selected), [finalBatch, selected]);
 
   const filterCounts = useMemo(() => {
-    const c = { all: resolvedBatch.length };
+    const c = { all: finalBatch.length };
     for (const s of Object.values(ROW_STATES)) c[s] = 0;
     c[EXCLUDED_MANUALLY] = 0;
-    for (const item of resolvedBatch) {
+    for (const item of finalBatch) {
       const displayState = resolveDisplayState(item.rowState, selected.has(item.id));
       c[displayState] = (c[displayState] || 0) + 1;
     }
     return c;
-  }, [resolvedBatch, selected]);
+  }, [finalBatch, selected]);
 
   const filtered = useMemo(() => {
-    return resolvedBatch.filter((item) => {
+    return finalBatch.filter((item) => {
       const displayState = resolveDisplayState(item.rowState, selected.has(item.id));
       if (attentionOnly && displayState === ROW_STATES.READY) return false;
       if (filter === "all") return true;
       return displayState === filter;
     });
-  }, [resolvedBatch, selected, filter, attentionOnly]);
+  }, [finalBatch, selected, filter, attentionOnly]);
 
   const toggleSelected = (id) => {
     if (selected.has(id)) {
@@ -8074,9 +8094,9 @@ function ImportReviewDashboard({ parseResult }) {
           />
 
           <BulkActionsBar
-            onSelectAllReady={() => applySelectionChange(selectAllReady, resolvedBatch)}
-            onExcludeAllErrors={() => applySelectionChange(excludeAllErrors, resolvedBatch)}
-            onExcludeAllDuplicates={() => applySelectionChange(excludeAllDuplicates, resolvedBatch)}
+            onSelectAllReady={() => applySelectionChange(selectAllReady, finalBatch)}
+            onExcludeAllErrors={() => applySelectionChange(excludeAllErrors, finalBatch)}
+            onExcludeAllDuplicates={() => applySelectionChange(excludeAllDuplicates, finalBatch)}
             onBulkApprove={() => setOverrides((prev) => ({ ...prev, ...applyBulkApproveSuggestions(resolvedBatch) }))}
             onSelectAllVisible={() => applySelectionChange(selectAllVisible, filtered)}
             onDeselectAllVisible={() => applySelectionChange(deselectAllVisible, filtered)}
@@ -8147,7 +8167,7 @@ function ImportReviewDashboard({ parseResult }) {
 
           {confirmOpen && (
             <ConfirmationSummary
-              items={resolvedBatch}
+              items={finalBatch}
               selected={selected}
               sourceProfileId={parseResult?.sourceProfile?.id ?? null}
               festivalProfileId={selectedFestival?.id ?? null}
