@@ -3,6 +3,11 @@ import { detectDuplicates, DUPLICATE_TIERS, TIME_TOLERANCE_MINUTES } from "./dup
 
 const exactVenueMatch = (id, name, city) => ({ tier: "exact", match: { id, name, city } });
 const noVenueMatch = { tier: "none", match: null };
+const confirmedVenueMatch = (id, name, city) => ({ tier: "confirmed", query: "irrelevant raw text", city, match: { id, name, city }, candidates: [] });
+const fuzzyVenueMatch = (candidateId, candidateName) => ({ tier: "fuzzy", query: "The Platform", match: null, candidates: [{ id: candidateId, name: candidateName, city: null, similarity_score: 0.9 }] });
+const approvedNewVenueMatch = (name, city) => ({ tier: "approved_new", query: name, city, match: null, candidates: [] });
+const confirmedArtistMatch = (id, name) => ({ tier: "confirmed", query: "irrelevant raw text", match: { id, name, city: null, profileType: "band" }, candidates: [] });
+const fuzzyArtistMatch = (candidateId, candidateName) => ({ tier: "fuzzy", query: "some raw text", match: null, candidates: [{ id: candidateId, name: candidateName, city: null, similarity_score: 0.9 }] });
 
 describe("detectDuplicates", () => {
   it("flags an exact within-batch duplicate cluster when times match exactly (both rows, not just the second)", () => {
@@ -263,6 +268,227 @@ describe("detectDuplicates -- time-aware duplicate identity (Freya Golding / Mar
       { id: "r1", fields: { artistName: "Day Fever", date: "2026-09-26", time: "12:00" }, venueMatch: exactVenueMatch("v1", "O2 Academy Bournemouth", null) },
       { id: "r2", fields: { artistName: "Day Fever - Bournemouth", date: "2026-09-26", time: "22:00" }, venueMatch: exactVenueMatch("v1", "O2 Academy Bournemouth", null) },
     ];
+    const result = detectDuplicates(rows);
+    expect(result.get("r1").tier).toBe(DUPLICATE_TIERS.NEAR_IN_BATCH);
+    expect(result.get("r2").tier).toBe(DUPLICATE_TIERS.NEAR_IN_BATCH);
+  });
+});
+
+// Phase 2F: post-resolution entity-identity duplicate detection. UUID vs
+// UUID only when BOTH sides carry an authoritative one (exact/confirmed
+// tier, or a real existing-gig column); text vs text (the pre-existing,
+// unchanged fallback) whenever either side lacks one. Never id: vs name:.
+describe("detectDuplicates -- Phase 2F identity primitives (venue)", () => {
+  it("A: confirmed venue UUID vs existing gig's same venue_id, same artist/date/time -> exact_existing", () => {
+    const rows = [
+      { id: "r1", fields: { artistName: "Biohazard", date: "2026-08-05", time: "19:30" }, venueMatch: confirmedVenueMatch("v1", "Platform Tavern", "Southampton") },
+    ];
+    const existingGigs = [{ id: "gig-1", band_name: "Biohazard", date: "2026-08-05", time: "19:30", venue_id: "v1", venue: "Platform Tavern" }];
+    const result = detectDuplicates(rows, { existingGigs });
+    expect(result.get("r1").tier).toBe(DUPLICATE_TIERS.EXACT_EXISTING);
+    expect(result.get("r1").existingGigId).toBe("gig-1");
+  });
+
+  it("B: confirmed venue UUID, existing gig has NO venue_id but normalised venue text matches -> exact_existing via text fallback", () => {
+    const rows = [
+      { id: "r1", fields: { artistName: "Biohazard", date: "2026-08-05", time: "19:30" }, venueMatch: confirmedVenueMatch("v1", "Platform Tavern", "Southampton") },
+    ];
+    const existingGigs = [{ id: "gig-1", band_name: "Biohazard", date: "2026-08-05", time: "19:30", venue_id: null, venue: "Platform   Tavern" }];
+    const result = detectDuplicates(rows, { existingGigs });
+    expect(result.get("r1").tier).toBe(DUPLICATE_TIERS.EXACT_EXISTING);
+    expect(result.get("r1").existingGigId).toBe("gig-1");
+  });
+
+  it("B (never id: vs name:): confirmed venue UUID does NOT match an unlinked existing gig whose text genuinely differs", () => {
+    const rows = [
+      { id: "r1", fields: { artistName: "Biohazard", date: "2026-08-05", time: "19:30" }, venueMatch: confirmedVenueMatch("v1", "Platform Tavern", "Southampton") },
+    ];
+    const existingGigs = [{ id: "gig-1", band_name: "Biohazard", date: "2026-08-05", time: "19:30", venue_id: null, venue: "The Joiners" }];
+    const result = detectDuplicates(rows, { existingGigs });
+    expect(result.get("r1").tier).toBe(DUPLICATE_TIERS.NONE);
+  });
+
+  it("C: two batch rows with different raw venue text, both confirmed to the same venue UUID, same artist/date/time -> exact_in_batch", () => {
+    const rows = [
+      { id: "r1", fields: { artistName: "Biohazard", date: "2026-08-05", time: "19:30" }, venueMatch: confirmedVenueMatch("v1", "Platform Tavern", "Southampton") },
+      { id: "r2", fields: { artistName: "Biohazard", date: "2026-08-05", time: "19:30" }, venueMatch: confirmedVenueMatch("v1", "Platform Tavern", "Southampton") },
+    ];
+    const result = detectDuplicates(rows);
+    expect(result.get("r1").tier).toBe(DUPLICATE_TIERS.EXACT_IN_BATCH);
+    expect(result.get("r2").tier).toBe(DUPLICATE_TIERS.EXACT_IN_BATCH);
+    expect(result.get("r1").withRowIds).toEqual(["r2"]);
+  });
+
+  it("D: same raw venue name but DIFFERENT confirmed venue UUIDs -> not a duplicate solely from venue text", () => {
+    const rows = [
+      { id: "r1", fields: { artistName: "Biohazard", date: "2026-08-05", time: "19:30" }, venueMatch: confirmedVenueMatch("v1", "The Crown", "Southampton") },
+      { id: "r2", fields: { artistName: "Biohazard", date: "2026-08-05", time: "19:30" }, venueMatch: confirmedVenueMatch("v2", "The Crown", "Portsmouth") },
+    ];
+    const result = detectDuplicates(rows);
+    expect(result.get("r1").tier).toBe(DUPLICATE_TIERS.NONE);
+    expect(result.get("r2").tier).toBe(DUPLICATE_TIERS.NONE);
+  });
+
+  it("I: same venue name in different cities remains distinct against an existing gig too (uuid vs uuid, not text)", () => {
+    const rows = [
+      { id: "r1", fields: { artistName: "Biohazard", date: "2026-08-05", time: "19:30" }, venueMatch: confirmedVenueMatch("v1", "The Crown", "Southampton") },
+    ];
+    const existingGigs = [{ id: "gig-1", band_name: "Biohazard", date: "2026-08-05", time: "19:30", venue_id: "v2", venue: "The Crown" }];
+    const result = detectDuplicates(rows, { existingGigs });
+    expect(result.get("r1").tier).toBe(DUPLICATE_TIERS.NONE);
+  });
+});
+
+describe("detectDuplicates -- Phase 2F identity primitives (artist)", () => {
+  it("E: confirmed artist UUID vs existing gig's same band_profile_id, same venue/date/time -> exact_existing", () => {
+    const rows = [
+      { id: "r1", fields: { artistName: "Chicago9", date: "2026-08-05", time: "19:30" }, venueMatch: exactVenueMatch("v1", "Southampton 1865", null), artistMatch: confirmedArtistMatch("a1", "Chicago 9") },
+    ];
+    const existingGigs = [{ id: "gig-1", band_name: "Chicago 9", band_profile_id: "a1", date: "2026-08-05", time: "19:30", venue_id: "v1", venue: "Southampton 1865" }];
+    const result = detectDuplicates(rows, { existingGigs });
+    expect(result.get("r1").tier).toBe(DUPLICATE_TIERS.EXACT_EXISTING);
+    expect(result.get("r1").existingGigId).toBe("gig-1");
+  });
+
+  it("F: confirmed artist UUID, existing gig has NO band_profile_id but normalised band_name matches -> exact_existing via text fallback", () => {
+    const rows = [
+      { id: "r1", fields: { artistName: "Chicago9", date: "2026-08-05", time: "19:30" }, venueMatch: exactVenueMatch("v1", "Southampton 1865", null), artistMatch: confirmedArtistMatch("a1", "Biohazard") },
+    ];
+    // The gig's own text ("Biohazard") matches the CONFIRMED artist's own
+    // canonical name, not the row's raw (irrelevant) query -- mirrors
+    // resolveVenueFields()'s own precedent for a confirmed match's text.
+    const existingGigs = [{ id: "gig-1", band_name: "Biohazard", band_profile_id: null, date: "2026-08-05", time: "19:30", venue_id: "v1", venue: "Southampton 1865" }];
+    const result = detectDuplicates(rows, { existingGigs });
+    expect(result.get("r1").tier).toBe(DUPLICATE_TIERS.EXACT_EXISTING);
+    expect(result.get("r1").existingGigId).toBe("gig-1");
+  });
+
+  it("G: two differently-written artist names, both confirmed to the same artist UUID, same venue/date/time -> exact_in_batch", () => {
+    const rows = [
+      { id: "r1", fields: { artistName: "Chicago9", date: "2026-08-05", time: "19:30" }, venueMatch: exactVenueMatch("v1", "Southampton 1865", null), artistMatch: confirmedArtistMatch("a1", "Chicago 9") },
+      { id: "r2", fields: { artistName: "Chicago 9 (Live)", date: "2026-08-05", time: "19:30" }, venueMatch: exactVenueMatch("v1", "Southampton 1865", null), artistMatch: confirmedArtistMatch("a1", "Chicago 9") },
+    ];
+    const result = detectDuplicates(rows);
+    expect(result.get("r1").tier).toBe(DUPLICATE_TIERS.EXACT_IN_BATCH);
+    expect(result.get("r2").tier).toBe(DUPLICATE_TIERS.EXACT_IN_BATCH);
+  });
+
+  it("H: identical artist text but DIFFERENT confirmed artist UUIDs -> not a duplicate solely from artist text", () => {
+    const rows = [
+      { id: "r1", fields: { artistName: "The Crown", date: "2026-08-05", time: "19:30" }, venueMatch: exactVenueMatch("v1", "Southampton 1865", null), artistMatch: confirmedArtistMatch("a1", "The Crown") },
+      { id: "r2", fields: { artistName: "The Crown", date: "2026-08-05", time: "19:30" }, venueMatch: exactVenueMatch("v1", "Southampton 1865", null), artistMatch: confirmedArtistMatch("a2", "The Crown") },
+    ];
+    const result = detectDuplicates(rows);
+    expect(result.get("r1").tier).toBe(DUPLICATE_TIERS.NONE);
+    expect(result.get("r2").tier).toBe(DUPLICATE_TIERS.NONE);
+  });
+});
+
+describe("detectDuplicates -- Phase 2F: fuzzy/unconfirmed suggestions never become identity", () => {
+  it("I (fuzzy venue): a fuzzy venue candidate sharing an existing gig's venue_id is NOT authoritative -- text fallback used instead, and does not spuriously match", () => {
+    const rows = [
+      { id: "r1", fields: { artistName: "Biohazard", date: "2026-08-05", time: "19:30" }, venueMatch: fuzzyVenueMatch("v1", "Platform Tavern") },
+    ];
+    const existingGigs = [{ id: "gig-1", band_name: "Biohazard", date: "2026-08-05", time: "19:30", venue_id: "v1", venue: "Platform Tavern" }];
+    const result = detectDuplicates(rows, { existingGigs });
+    // The row's own raw query ("The Platform") is the text fallback used
+    // for a fuzzy (unconfirmed) tier -- it does not match the existing
+    // gig's own text ("Platform Tavern") merely because a fuzzy candidate
+    // happens to share the gig's real venue_id. No auto-resolution.
+    expect(result.get("r1").tier).not.toBe(DUPLICATE_TIERS.EXACT_EXISTING);
+  });
+
+  it("J (fuzzy artist): a fuzzy artist candidate sharing an existing gig's band_profile_id is NOT authoritative", () => {
+    const rows = [
+      { id: "r1", fields: { artistName: "Some Raw Text", date: "2026-08-05", time: "19:30" }, venueMatch: exactVenueMatch("v1", "Southampton 1865", null), artistMatch: fuzzyArtistMatch("a1", "Biohazard") },
+    ];
+    const existingGigs = [{ id: "gig-1", band_name: "Biohazard", band_profile_id: "a1", date: "2026-08-05", time: "19:30", venue_id: "v1", venue: "Southampton 1865" }];
+    const result = detectDuplicates(rows, { existingGigs });
+    expect(result.get("r1").tier).not.toBe(DUPLICATE_TIERS.EXACT_EXISTING);
+  });
+
+  it("K (approved_new venue): no stale candidate UUID identity -- text fallback is used (unchanged pre-Phase-2F behaviour for this tier), never the id of whatever candidate was rejected in favour of NEW", () => {
+    const rows = [
+      { id: "r1", fields: { artistName: "Biohazard", date: "2026-08-05", venueName: "Brand New Venue", time: "19:30" }, venueMatch: approvedNewVenueMatch("Brand New Venue", "Fareham") },
+    ];
+    // A rejected fuzzy candidate ("v1") must never leak into identity just
+    // because the row's tier is now "approved_new" -- confirmed here by an
+    // existing gig that legitimately shares that same "v1" id under a
+    // completely different venue name: this row must not match it.
+    const existingGigs = [{ id: "gig-1", band_name: "Biohazard", date: "2026-08-05", time: "19:30", venue_id: "v1", venue: "Platform Tavern" }];
+    const result = detectDuplicates(rows, { existingGigs });
+    expect(result.get("r1").tier).toBe(DUPLICATE_TIERS.NONE);
+  });
+
+  it("L (no equivalent 'approved_new' artist state exists in current architecture): a 'none' tier artist never carries stale identity either", () => {
+    const rows = [
+      { id: "r1", fields: { artistName: "Biohazard", date: "2026-08-05", time: "19:30" }, venueMatch: exactVenueMatch("v1", "Southampton 1865", null), artistMatch: { tier: "none", query: "Biohazard", match: null, candidates: [] } },
+    ];
+    const existingGigs = [{ id: "gig-1", band_name: "Someone Else", band_profile_id: "a9", date: "2026-08-05", time: "19:30", venue_id: "v1", venue: "Southampton 1865" }];
+    const result = detectDuplicates(rows, { existingGigs });
+    expect(result.get("r1").tier).toBe(DUPLICATE_TIERS.NONE);
+  });
+});
+
+describe("detectDuplicates -- Phase 2F: Phase #23 time semantics preserved with resolved identity", () => {
+  const confirmedRow = (id, time) => ({
+    id,
+    // fields.venueName is set (not just venueMatch) because the "near"
+    // tier's own same-venue gate is deliberately untouched by Phase 2F --
+    // it still derives its own text key from `fields` via venueKeyFor,
+    // completely independent of venueMatch's tier -- so it needs a real
+    // value here for these mixed exact/near time-boundary cases to reach
+    // that gate at all, exactly as any real parsed row would.
+    fields: { artistName: "Chicago9", date: "2026-09-12", venueName: "Marlands Shopping Centre", time },
+    venueMatch: confirmedVenueMatch("v-marlands", "Marlands Shopping Centre", "Southampton"),
+    artistMatch: confirmedArtistMatch("a1", "Chicago 9"),
+  });
+
+  it("M: equal meaningful time -> exact", () => {
+    const rows = [confirmedRow("r1", "12:35"), confirmedRow("r2", "12:35")];
+    const result = detectDuplicates(rows);
+    expect(result.get("r1").tier).toBe(DUPLICATE_TIERS.EXACT_IN_BATCH);
+    expect(result.get("r2").tier).toBe(DUPLICATE_TIERS.EXACT_IN_BATCH);
+  });
+
+  it("N: 5-minute difference -> warning, not exact", () => {
+    const rows = [confirmedRow("r1", "12:35"), confirmedRow("r2", "12:40")];
+    const result = detectDuplicates(rows);
+    expect(result.get("r1").tier).toBe(DUPLICATE_TIERS.NEAR_IN_BATCH);
+    expect(result.get("r2").tier).toBe(DUPLICATE_TIERS.NEAR_IN_BATCH);
+  });
+
+  it("O: 10-minute (tolerance boundary, inclusive) difference -> warning", () => {
+    const rows = [confirmedRow("r1", "12:35"), confirmedRow("r2", "12:45")];
+    expect(TIME_TOLERANCE_MINUTES).toBe(10);
+    const result = detectDuplicates(rows);
+    expect(result.get("r1").tier).toBe(DUPLICATE_TIERS.NEAR_IN_BATCH);
+    expect(result.get("r2").tier).toBe(DUPLICATE_TIERS.NEAR_IN_BATCH);
+  });
+
+  it("P: 11-minute difference -> none", () => {
+    const rows = [confirmedRow("r1", "12:35"), confirmedRow("r2", "12:46")];
+    const result = detectDuplicates(rows);
+    expect(result.get("r1").tier).toBe(DUPLICATE_TIERS.NONE);
+    expect(result.get("r2").tier).toBe(DUPLICATE_TIERS.NONE);
+  });
+
+  it("Q: Freya-style 12:35 vs 15:35 -> none (both remain legitimate separate performances)", () => {
+    const rows = [confirmedRow("r1", "12:35"), confirmedRow("r2", "15:35")];
+    const result = detectDuplicates(rows);
+    expect(result.get("r1").tier).toBe(DUPLICATE_TIERS.NONE);
+    expect(result.get("r2").tier).toBe(DUPLICATE_TIERS.NONE);
+  });
+
+  it("R: one row missing/TBC time -> existing warning semantics preserved", () => {
+    const rows = [confirmedRow("r1", "12:35"), confirmedRow("r2", "TBC")];
+    const result = detectDuplicates(rows);
+    expect(result.get("r1").tier).toBe(DUPLICATE_TIERS.NEAR_IN_BATCH);
+    expect(result.get("r2").tier).toBe(DUPLICATE_TIERS.NEAR_IN_BATCH);
+  });
+
+  it("S: both rows missing/unparseable time -> existing warning semantics preserved, never Exact", () => {
+    const rows = [confirmedRow("r1", null), confirmedRow("r2", "TBC")];
     const result = detectDuplicates(rows);
     expect(result.get("r1").tier).toBe(DUPLICATE_TIERS.NEAR_IN_BATCH);
     expect(result.get("r2").tier).toBe(DUPLICATE_TIERS.NEAR_IN_BATCH);

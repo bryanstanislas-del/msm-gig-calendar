@@ -72,6 +72,14 @@ export {
 } from "./duplicateResolutionGroups.js";
 export { applyGroupDecisionToRow, composeResolvedRow } from "./groupResolution.js";
 
+// Phase 2F: the post-resolution duplicate recheck -- runs detectDuplicates()
+// a second time over the fully resolved rows, so a row later confirmed to
+// a real venue/artist gets its duplicate status re-evaluated with that
+// identity. Purely downstream of composeResolvedRow's own output; never
+// feeds back into entity-resolution grouping. See
+// postResolutionDuplicates.js's header comment.
+export { applyDuplicateResults } from "./postResolutionDuplicates.js";
+
 // EntitySearchPicker's routing decision (App.jsx) -- which
 // search_entities entity type(s) to query for a given picker entityType.
 // See entitySearchTargets.js's header comment.
