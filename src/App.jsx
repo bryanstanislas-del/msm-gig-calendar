@@ -146,6 +146,8 @@ import AdminEditorial   from './components/admin/AdminEditorial';
 import AdminSupporters  from './components/admin/AdminSupporters';
 import AdminHallOfFame  from './components/admin/AdminHallOfFame';
 import AdminFestivals   from './components/admin/AdminFestivals';
+import AdminPromoSlots  from './components/admin/AdminPromoSlots';
+import PromoSlot, { indexPromoSlotsBySlot, buildListViewItems } from './components/PromoSlot.jsx';
 import ClaimDirectoryPage from './components/ClaimDirectoryPage';
 
 // SPRINT 3: generalized Follow -- table/column routing. entityType
@@ -715,6 +717,21 @@ export const DB = {
         .order("name", { ascending: true }).order("id", { ascending: true })
         .range(from, to)
     );
+  },
+
+  // Editorial Promo + Future Advertising Positions, Phase 1: public read
+  // of active promo/ad slot configuration (see promo_slots migration and
+  // PromoSlot.jsx). RLS already restricts an anon/authenticated read to
+  // active=true rows only, but this filters explicitly too, the same way
+  // getApprovedGigs() filters status explicitly rather than leaning on
+  // RLS alone to communicate intent. Caller (MainApp) is responsible for
+  // never letting a rejected promise here block or fail gig rendering --
+  // see MainApp's own fetch, which catches this into an empty array.
+  async getPromoSlots() {
+    if (USE_MOCK) return [];
+    const { data, error } = await supabase.from("promo_slots").select("*").eq("active", true);
+    if (error) throw new Error(error.message);
+    return data || [];
   },
 
   async getGigBySlug(slug) {
@@ -3410,13 +3427,24 @@ function CalendarView({ gigs, onGigClick, bands=[] }) {
 // ════════════════════════════════════════════════════════════════════
 //  LIST VIEW
 // ════════════════════════════════════════════════════════════════════
-function ListView({ gigs, onGigClick, bands=[] }) {
+function ListView({ gigs, onGigClick, bands=[], promoSlot }) {
   const navigate = useNavigate();
   const sorted = [...gigs].sort((a,b)=>a.date.localeCompare(b.date));
   if (!sorted.length) return <div style={{ color:C.dim, fontSize:13, padding:"24px 0" }}>No gigs match your filters.</div>;
+  // Editorial Promo + Future Advertising Positions, Phase 1: IN_FEED
+  // interleave. buildListViewItems() is a pure function (see
+  // PromoSlot.jsx, fully covered by PromoSlot.test.js) -- it never
+  // reorders/drops/duplicates a gig, and only inserts a promo item at all
+  // once there are enough results for the placement to feel natural.
+  // `sorted` itself (the sort/filter logic below) is completely untouched.
+  const items = buildListViewItems(sorted, promoSlot);
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-      {sorted.map(g => {
+      {items.map((item) => {
+        if (item.kind === "promo") {
+          return <PromoSlot key="promo-in-feed" config={item.config} />;
+        }
+        const g = item.gig;
         const color = genreColor(g.genre);
         return (
           <Link key={g.id} to={g.isFestivalItem ? `/festival/${g.festival_slug}` : `/gig/${g.slug}`}
@@ -9684,6 +9712,12 @@ function MainApp() {
   const [search, setSearch]   = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false); // mobile-only collapsible Search & Filters panel
   const [unreadCount, setUnreadCount] = useState(0); // SPRINT 4: notification bell badge
+  // Editorial Promo + Future Advertising Positions, Phase 1: keyed by
+  // slot name ({ TOP, IN_FEED, LOWER }), populated from DB.getPromoSlots()
+  // below. Starts empty -- PromoSlot's own shouldRenderPromoSlot() treats
+  // a missing key exactly like an inactive slot, so nothing renders until
+  // (or unless) this loads, and nothing breaks if it never does.
+  const [promoSlots, setPromoSlots] = useState({});
   const isMobile = useIsMobile();
 
   const isAdmin = auth?.profile?.role === "admin";
@@ -9742,6 +9776,12 @@ function MainApp() {
     DB.getBands().then(setBands);
     DB.getFestivals().then(setFestivals); // FIX 3: load festival profiles
     DB.getVenues().then(setVenues);
+    // Editorial Promo + Future Advertising Positions, Phase 1: entirely
+    // independent of the gigs fetch above -- never awaited by it, and a
+    // failure here (network error, RLS misconfiguration, etc.) degrades
+    // to "no promo slots render" via the empty-object fallback rather
+    // than ever throwing into this effect or delaying/blocking gig data.
+    DB.getPromoSlots().then(data => setPromoSlots(indexPromoSlotsBySlot(data))).catch(() => setPromoSlots({}));
   }, []);
 
   // Load all gigs when admin logs in
@@ -9833,6 +9873,7 @@ function MainApp() {
       { id:"newsletter",    label:"NEWSLETTER" },
       { id:"featured",      label:"FEATURED" },
       { id:"editorial",     label:"EDITORIAL" },
+      { id:"promo-slots",   label:"PROMO SLOTS" },
       { id:"supporters",    label:"SUPPORTERS" },
       { id:"hall-of-fame",  label:"HALL OF FAME" },
       { id:"festivals",     label:"FESTIVALS" },
@@ -9961,6 +10002,11 @@ function MainApp() {
           <AdminEditorial />
         )}
 
+        {/* PROMO SLOTS -- Editorial Promo + Future Advertising Positions, Phase 1 */}
+        {tab==="promo-slots" && isAdmin && (
+          <AdminPromoSlots />
+        )}
+
         {/* FOUNDING SUPPORTERS */}
         {tab==="supporters" && isAdmin && (
           <AdminSupporters />
@@ -10024,6 +10070,13 @@ function MainApp() {
         {/* CALENDAR / LIST */}
         {(tab==="calendar"||tab==="list") && (
           <div>
+            {/* TOP PROMO SLOT -- rendered above the loading check so it
+                never waits on the gigs fetch (loads independently, see
+                MainApp's own mount effect); renders nothing at all when
+                inactive/unconfigured/still loading, per PromoSlot's own
+                shouldRenderPromoSlot(). `eager` -- this is the one
+                above-the-fold position. */}
+            <PromoSlot config={promoSlots.TOP} eager />
             {loading
               ? <div style={{ color:C.muted, fontSize:16 }}>Loading gigs...</div>
               : <>
@@ -10070,7 +10123,7 @@ function MainApp() {
                   </div>
                   {tab==="calendar"
                     ? <CalendarView gigs={filteredGigs} onGigClick={setSelGig} bands={bands} />
-                    : <ListView     gigs={listGigs}     onGigClick={setSelGig} bands={bands} />
+                    : <ListView     gigs={listGigs}     onGigClick={setSelGig} bands={bands} promoSlot={promoSlots.IN_FEED} />
                   }
                   <div style={{ marginTop:16, fontSize:13, color:C.dim }}>
                     Showing {displayedGigs.length} of {gigs.length} gigs
@@ -10078,6 +10131,10 @@ function MainApp() {
                       <span> · <span style={{ color:C.red, cursor:"pointer" }} onClick={()=>exportICal(displayedGigs)}>Export all to iCal</span></span>
                     )}
                   </div>
+                  {/* LOWER PROMO SLOT -- quiet secondary position, below the
+                      results summary. Same nothing-when-inactive behaviour
+                      as TOP; lazy-loaded (not `eager`), it's below the fold. */}
+                  <PromoSlot config={promoSlots.LOWER} />
                 </>
             }
           </div>
