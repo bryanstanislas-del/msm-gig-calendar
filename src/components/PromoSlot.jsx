@@ -186,6 +186,19 @@ export function validatePromoSlotForm(form) {
 // Scoped by a stable class name rather than touching App.jsx's own
 // GLOBAL_CSS -- keeps this feature self-contained in its own file.
 //
+// Desktop width correction: max-width caps the SLOT (not just the img)
+// at the artwork's own native 1200px, with margin:16px auto centring it
+// -- below that width it's still full-width (auto block sizing, the
+// existing "width:100% below the max" behaviour), it just never grows
+// past its native size and gets upscaled into an oversized hero on a
+// wide desktop viewport. Capping the container rather than only the img
+// keeps the label badge (positioned absolutely relative to this same
+// element) correctly aligned to the actual displayed artwork edge at
+// any viewport width, and works identically in ListView's flex column
+// (IN_FEED) and the plain block flow above/below the list (TOP/LOWER):
+// max-width still constrains a stretched flex item, and margin:auto
+// still centres it in the leftover space.
+//
 // PR #36 review fix (mobile fallback): the mobile aspect-ratio override
 // below is scoped to .msm-promo-slot--has-mobile, a modifier class the
 // component only adds when hasMobileCreative(config) is true. When a
@@ -197,9 +210,10 @@ export function validatePromoSlotForm(form) {
 // uncropped desktop creative is preserved (just naturally thinner at
 // mobile widths, since height scales down with width) instead of being
 // force-cropped into a 2.4:1 box via object-fit:cover -- a thinner banner
-// beats losing a logo/CTA positioned near either edge.
-const PROMO_SLOT_CSS = `
-.msm-promo-slot { position:relative; margin:16px 0; }
+// beats losing a logo/CTA positioned near either edge. (Well below the
+// 1200px cap in any case, so this correction never interacts with it.)
+export const PROMO_SLOT_CSS = `
+.msm-promo-slot { position:relative; margin:16px auto; max-width:${DESKTOP_ARTWORK.width}px; }
 .msm-promo-slot img {
   display:block; width:100%; height:auto;
   aspect-ratio:${DESKTOP_ARTWORK.width}/${DESKTOP_ARTWORK.height};
