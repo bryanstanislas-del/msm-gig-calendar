@@ -5,6 +5,7 @@ import {
   IN_FEED_AFTER_INDEX,
   DESKTOP_ARTWORK,
   MOBILE_ARTWORK,
+  PROMO_SLOT_CSS,
   isKnownSlot,
   isValidHttpUrl,
   indexPromoSlotsBySlot,
@@ -140,6 +141,23 @@ describe("artwork dimension constants", () => {
   it("desktop is 1200x250 (4.8:1) and mobile is 600x250 (2.4:1), matching the audit's own recommendation", () => {
     expect(DESKTOP_ARTWORK).toEqual({ width: 1200, height: 250 });
     expect(MOBILE_ARTWORK).toEqual({ width: 600, height: 250 });
+  });
+});
+
+describe("PROMO_SLOT_CSS -- desktop width correction regression guard", () => {
+  it("caps the slot at the desktop artwork's own native width (never upscaled beyond it on a wide viewport)", () => {
+    expect(PROMO_SLOT_CSS).toContain(`max-width:${DESKTOP_ARTWORK.width}px`);
+  });
+  it("centres the slot horizontally (auto left/right margin) while keeping restrained vertical spacing", () => {
+    expect(PROMO_SLOT_CSS).toContain("margin:16px auto");
+  });
+  it("still fills 100% of the available width below the cap, and preserves the exact desktop aspect ratio (no distortion)", () => {
+    expect(PROMO_SLOT_CSS).toContain("width:100%");
+    expect(PROMO_SLOT_CSS).toContain(`aspect-ratio:${DESKTOP_ARTWORK.width}/${DESKTOP_ARTWORK.height}`);
+  });
+  it("still switches to the mobile aspect ratio only when a mobile creative exists (mobile fallback behaviour untouched)", () => {
+    expect(PROMO_SLOT_CSS).toContain(".msm-promo-slot--has-mobile");
+    expect(PROMO_SLOT_CSS).toContain(`aspect-ratio:${MOBILE_ARTWORK.width}/${MOBILE_ARTWORK.height}`);
   });
 });
 
