@@ -48,7 +48,7 @@ import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import React from "react";
 import { BrowserRouter, Routes, Route, useParams, useNavigate, Link } from "react-router-dom";
 import { DEFAULT_NOTIFICATION_PREFS, describeNotificationEvent, formatNotificationDate } from "./notificationHelpers";
-import { selectVisiblePendingGigs, bulkApproveGigs, finaliseBulkApproveOutcome } from "./moderationHelpers";
+import { selectVisiblePendingGigs, bulkApproveGigs, finaliseBulkApproveOutcome, filterModerationGigs } from "./moderationHelpers";
 import {
   parseImportText,
   runMatching,
@@ -2825,6 +2825,12 @@ function AdminPanel({ allGigs, gigCounts, onRefresh, bands=[] }) {
   const [saving,  setSaving]  = useState(false);
   const [editMsg, setEditMsg] = useState("");
   const [festivalOptions, setFestivalOptions] = useState([]); // for "Part of a festival?" picker
+  // MODERATION SEARCH: purely client-side over the already-loaded `allGigs`
+  // (DB.getAllGigs() already pages past the 1,000-row ceiling -- see
+  // dbPagination.test.js), so typing here never issues a Supabase request.
+  // Kept independent of `filter` so switching status tabs never clears it.
+  const [search,     setSearch]     = useState("");
+  const [dateFilter, setDateFilter] = useState("");
   // APPROVE ALL VISIBLE: bulkConfirming just gates whether the inline
   // confirmation panel is shown -- it never captures the eligible gig list
   // itself, so the count/list it displays is always recomputed from current
@@ -2860,8 +2866,16 @@ function AdminPanel({ allGigs, gigCounts, onRefresh, bands=[] }) {
   const counts  = { all: gigCounts.total, pending: gigCounts.pending, approved: gigCounts.approved, rejected: gigCounts.rejected };
   // The only eligible set for bulk approval: derived from `visible` (never
   // from allGigs), so an active filter/tab is never bypassed -- see
-  // moderationHelpers.js's own header comment.
+  // moderationHelpers.js's own header comment. Deliberately NOT narrowed by
+  // `search`/`dateFilter` below -- APPROVE ALL VISIBLE's meaning of
+  // "visible" stays exactly what it was before search existed (the active
+  // status tab), so search/find never changes approval behaviour.
   const visiblePendingGigs = selectVisiblePendingGigs(visible);
+  // What's actually rendered as rows below: `visible` (the status tab)
+  // further narrowed by the search box and optional date filter. A pure
+  // filter over already-loaded data -- see moderationHelpers.js.
+  const searched = filterModerationGigs(visible, { search, date: dateFilter });
+  const searchActive = Boolean(search.trim() || dateFilter);
 
   const action = async (gigId, status) => {
     setLoading(l=>({...l,[gigId]:true}));
@@ -3110,6 +3124,47 @@ function AdminPanel({ allGigs, gigCounts, onRefresh, bands=[] }) {
         ))}
       </div>
 
+      {/* MODERATION SEARCH: filters the currently selected status tab
+          client-side -- see `searched`/filterModerationGigs above. */}
+      <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom:8 }}>
+        <div style={{ position:"relative", flex:"1 1 260px", minWidth:0 }}>
+          <span style={{ position:"absolute", left:14, top:"50%", transform:"translateY(-50%)", fontSize:16, color:C.muted, pointerEvents:"none" }}>🔍</span>
+          <input
+            type="text"
+            className="msm-search-input"
+            placeholder="Search artist, venue, city or date…"
+            value={search}
+            onChange={e=>setSearch(e.target.value)}
+            style={{ ...inputCss, paddingLeft:42, paddingRight: search ? 36 : 14, fontSize:15 }}
+            onFocus={e=>e.target.style.borderColor=C.red}
+            onBlur={e=>e.target.style.borderColor=C.border}
+          />
+          {search && (
+            <span onClick={()=>setSearch("")} role="button" aria-label="Clear search" style={{ position:"absolute", right:14, top:"50%", transform:"translateY(-50%)", cursor:"pointer", color:C.muted, fontSize:18 }}>✕</span>
+          )}
+        </div>
+        <div style={{ display:"flex", gap:6, alignItems:"center", flex:"0 1 200px", minWidth:0 }}>
+          <input
+            type="date"
+            value={dateFilter}
+            onChange={e=>setDateFilter(e.target.value)}
+            style={{ ...inputCss, fontSize:15, flex:1 }}
+            aria-label="Filter by exact date"
+          />
+          {dateFilter && (
+            <span onClick={()=>setDateFilter("")} role="button" aria-label="Clear date filter" style={{ cursor:"pointer", color:C.muted, fontSize:18, flexShrink:0 }}>✕</span>
+          )}
+        </div>
+      </div>
+
+      {searchActive && (
+        <div style={{ fontSize:12, color:C.muted, marginBottom:16 }}>
+          {searched.length === 0
+            ? "No gigs match your search."
+            : `Showing ${searched.length} of ${visible.length} ${filter === "all" ? "gigs" : `${filter} gigs`}`}
+        </div>
+      )}
+
       {bulkResult && (
         <div style={{
           marginBottom:16, padding:"12px 16px", borderRadius:6,
@@ -3174,9 +3229,9 @@ function AdminPanel({ allGigs, gigCounts, onRefresh, bands=[] }) {
         </div>
       )}
 
-      {visible.length === 0 && <div style={{ color:C.dim, fontSize:13, padding:"24px 0" }}>No gigs in this category.</div>}
+      {!searchActive && visible.length === 0 && <div style={{ color:C.dim, fontSize:13, padding:"24px 0" }}>No gigs in this category.</div>}
       <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-        {visible.map(g => {
+        {searched.map(g => {
           const color = genreColor(g.genre);
           const spin  = loading[g.id];
           return (
