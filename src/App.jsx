@@ -2864,18 +2864,20 @@ function AdminPanel({ allGigs, gigCounts, onRefresh, bands=[] }) {
   // badge is exactly the kind of "represents an actual database total"
   // label the 1,000-row scaling fix requires this for.
   const counts  = { all: gigCounts.total, pending: gigCounts.pending, approved: gigCounts.approved, rejected: gigCounts.rejected };
-  // The only eligible set for bulk approval: derived from `visible` (never
-  // from allGigs), so an active filter/tab is never bypassed -- see
-  // moderationHelpers.js's own header comment. Deliberately NOT narrowed by
-  // `search`/`dateFilter` below -- APPROVE ALL VISIBLE's meaning of
-  // "visible" stays exactly what it was before search existed (the active
-  // status tab), so search/find never changes approval behaviour.
-  const visiblePendingGigs = selectVisiblePendingGigs(visible);
   // What's actually rendered as rows below: `visible` (the status tab)
   // further narrowed by the search box and optional date filter. A pure
   // filter over already-loaded data -- see moderationHelpers.js.
   const searched = filterModerationGigs(visible, { search, date: dateFilter });
   const searchActive = Boolean(search.trim() || dateFilter);
+  // The only eligible set for bulk approval: derived from `searched` (never
+  // from allGigs/visible), so an active filter/tab OR an active search/date
+  // is never bypassed -- see moderationHelpers.js's own header comment.
+  // "VISIBLE" must mean exactly what's rendered on screen: status filter +
+  // search + date together, not just the status tab. Narrowing the search
+  // box down to one gig and pressing APPROVE ALL VISIBLE must only ever be
+  // able to approve that one rendered gig, never anything hidden by the
+  // active search/date.
+  const visiblePendingGigs = selectVisiblePendingGigs(searched);
 
   const action = async (gigId, status) => {
     setLoading(l=>({...l,[gigId]:true}));
@@ -2915,7 +2917,7 @@ function AdminPanel({ allGigs, gigCounts, onRefresh, bands=[] }) {
   // fires, however either the batch or the refresh behaves.
   const runBulkApprove = async () => {
     if (bulkRunning) return; // guards against a double-click launching a second batch
-    const eligibleNow = selectVisiblePendingGigs(visible);
+    const eligibleNow = selectVisiblePendingGigs(searched);
     setBulkConfirming(false);
     setBulkRunning(true);
     setBulkResult(null);
