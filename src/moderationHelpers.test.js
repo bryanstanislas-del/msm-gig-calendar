@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
-import { selectVisiblePendingGigs, bulkApproveGigs, BULK_APPROVE_CONCURRENCY, finaliseBulkApproveOutcome } from "./moderationHelpers.js";
+import {
+  selectVisiblePendingGigs, bulkApproveGigs, BULK_APPROVE_CONCURRENCY, finaliseBulkApproveOutcome,
+  filterModerationGigs, gigMatchesModerationSearch, normalizeModerationSearchTerm,
+} from "./moderationHelpers.js";
 
 function gig(id, status, overrides = {}) {
   return { id, status, band_name: `Band ${id}`, venue: `Venue ${id}`, ...overrides };
@@ -206,5 +209,225 @@ describe("finaliseBulkApproveOutcome", () => {
   it("defaults refreshError to null when omitted", () => {
     const result = { succeeded: [], failed: [], skipped: [] };
     expect(finaliseBulkApproveOutcome(result).refreshError).toBeNull();
+  });
+});
+
+// Regression coverage for Moderation's search/find feature: 1,600+
+// already-loaded approved gigs are unusable to scroll through by hand, so
+// this pure filter lets an admin narrow the currently selected status tab
+// down to the one gig they're after.
+describe("normalizeModerationSearchTerm", () => {
+  it("trims leading/trailing whitespace and lowercases", () => {
+    expect(normalizeModerationSearchTerm("  Steamer  ")).toBe("steamer");
+  });
+
+  it("returns '' for null/undefined/whitespace-only input", () => {
+    expect(normalizeModerationSearchTerm(null)).toBe("");
+    expect(normalizeModerationSearchTerm(undefined)).toBe("");
+    expect(normalizeModerationSearchTerm("   ")).toBe("");
+  });
+});
+
+describe("gigMatchesModerationSearch", () => {
+  const g = gig("g1", "approved", { band_name: "The Steamers", venue: "Dirty Gertie's", city: "Christchurch", date: "2026-09-18" });
+
+  it("matches on artist/band_name (substring, case-insensitive)", () => {
+    expect(gigMatchesModerationSearch(g, "steamer")).toBe(true);
+    expect(gigMatchesModerationSearch(g, "STEAMER")).toBe(true);
+  });
+
+  it("matches on venue (substring)", () => {
+    expect(gigMatchesModerationSearch(g, "Dirty Gertie's")).toBe(true);
+    expect(gigMatchesModerationSearch(g, "gertie")).toBe(true);
+  });
+
+  it("matches on city (substring)", () => {
+    expect(gigMatchesModerationSearch(g, "Christchurch")).toBe(true);
+    expect(gigMatchesModerationSearch(g, "christ")).toBe(true);
+  });
+
+  it("is case-insensitive across all text fields", () => {
+    expect(gigMatchesModerationSearch(g, "CHRISTCHURCH")).toBe(true);
+    expect(gigMatchesModerationSearch(g, "dirty GERTIE'S")).toBe(true);
+  });
+
+  it("trims whitespace around the term before matching", () => {
+    expect(gigMatchesModerationSearch(g, "  steamer  ")).toBe(true);
+  });
+
+  it("matches an ISO-format date (2026-09-18)", () => {
+    expect(gigMatchesModerationSearch(g, "2026-09-18")).toBe(true);
+  });
+
+  it("matches a UK slash-format date (18/09/2026)", () => {
+    expect(gigMatchesModerationSearch(g, "18/09/2026")).toBe(true);
+  });
+
+  it("matches the display date format (18 September 2026), case-insensitive", () => {
+    expect(gigMatchesModerationSearch(g, "18 September 2026")).toBe(true);
+    expect(gigMatchesModerationSearch(g, "18 september 2026")).toBe(true);
+  });
+
+  it("matches a partial display-date fragment (September 2026)", () => {
+    expect(gigMatchesModerationSearch(g, "september 2026")).toBe(true);
+  });
+
+  it("does not match an unrelated term", () => {
+    expect(gigMatchesModerationSearch(g, "nonexistent venue")).toBe(false);
+  });
+
+  it("an empty/whitespace-only term always matches", () => {
+    expect(gigMatchesModerationSearch(g, "")).toBe(true);
+    expect(gigMatchesModerationSearch(g, "   ")).toBe(true);
+    expect(gigMatchesModerationSearch(g, undefined)).toBe(true);
+  });
+
+  it("never throws on a gig with a missing/malformed date", () => {
+    expect(gigMatchesModerationSearch(gig("g2", "approved", { date: null }), "18/09/2026")).toBe(false);
+    expect(gigMatchesModerationSearch(gig("g3", "approved", { date: "not-a-date" }), "18/09/2026")).toBe(false);
+  });
+});
+
+describe("filterModerationGigs", () => {
+  const gigs = [
+    gig("g1", "approved", { band_name: "The Steamers", venue: "Dirty Gertie's", city: "Christchurch", date: "2026-09-18" }),
+    gig("g2", "approved", { band_name: "Jazz Collective", venue: "The Brook", city: "Southampton", date: "2026-09-19" }),
+    gig("g3", "pending",  { band_name: "The Steamers", venue: "The Joiners", city: "Southampton", date: "2026-10-01" }),
+  ];
+
+  it("with no search/date, returns the input unchanged (and in the same order)", () => {
+    expect(filterModerationGigs(gigs, {})).toEqual(gigs);
+    expect(filterModerationGigs(gigs, { search: "", date: "" })).toEqual(gigs);
+  });
+
+  it("filters by search text alone", () => {
+    const result = filterModerationGigs(gigs, { search: "Steamer" });
+    expect(result.map((g) => g.id)).toEqual(["g1", "g3"]);
+  });
+
+  it("filters by exact date alone", () => {
+    const result = filterModerationGigs(gigs, { date: "2026-09-19" });
+    expect(result.map((g) => g.id)).toEqual(["g2"]);
+  });
+
+  it("combines status pre-filtering (caller's job) with search: APPROVED + 'Steamer' shows only g1", () => {
+    const approvedOnly = gigs.filter((g) => g.status === "approved");
+    const result = filterModerationGigs(approvedOnly, { search: "Steamer" });
+    expect(result.map((g) => g.id)).toEqual(["g1"]);
+  });
+
+  it("combines search and date together", () => {
+    expect(filterModerationGigs(gigs, { search: "Southampton", date: "2026-09-19" }).map((g) => g.id)).toEqual(["g2"]);
+    expect(filterModerationGigs(gigs, { search: "Southampton", date: "2026-10-01" }).map((g) => g.id)).toEqual(["g3"]);
+  });
+
+  it("returns [] when nothing matches", () => {
+    expect(filterModerationGigs(gigs, { search: "nonexistent" })).toEqual([]);
+  });
+
+  it("clearing search (back to '') restores the full input set", () => {
+    const narrowed = filterModerationGigs(gigs, { search: "Steamers" });
+    expect(narrowed.length).toBeLessThan(gigs.length);
+    expect(filterModerationGigs(gigs, { search: "" })).toEqual(gigs);
+  });
+
+  it("preserves the caller's existing ordering", () => {
+    const reordered = [gigs[2], gigs[0], gigs[1]];
+    const result = filterModerationGigs(reordered, { search: "Steamer" });
+    expect(result.map((g) => g.id)).toEqual(["g3", "g1"]);
+  });
+
+  // Edge-case hardening (independent review, PR #38): a gig with a
+  // missing/malformed date already had coverage above -- these extend the
+  // same "never throw on imperfect historical rows" guarantee to the other
+  // text fields, to combined status+search+date filtering, and to an empty
+  // input array.
+  it("never throws when band_name, venue, and/or city are null/undefined", () => {
+    const g1 = gig("g1", "approved", { band_name: null, venue: undefined, city: null, date: "2026-09-18" });
+    const g2 = gig("g2", "approved", { band_name: "The Steamers" }); // venue/city inherited from gig() helper
+    expect(() => filterModerationGigs([g1, g2], { search: "steamer" })).not.toThrow();
+    expect(filterModerationGigs([g1, g2], { search: "steamer" }).map((g) => g.id)).toEqual(["g2"]);
+    // A gig with every text field null/undefined never matches a non-empty
+    // search term, but is never excluded by a blank one.
+    expect(filterModerationGigs([g1], { search: "anything" })).toEqual([]);
+    expect(filterModerationGigs([g1], { search: "" })).toEqual([g1]);
+  });
+
+  it("status + search + date all combined narrows to the exact intersection", () => {
+    const combined = [
+      gig("h1", "pending",  { band_name: "The Steamers", venue: "Dirty Gertie's", city: "Christchurch", date: "2026-09-18" }),
+      gig("h2", "pending",  { band_name: "The Steamers", venue: "The Joiners",    city: "Southampton",  date: "2026-09-18" }),
+      gig("h3", "pending",  { band_name: "The Steamers", venue: "Dirty Gertie's", city: "Christchurch", date: "2026-09-19" }),
+      gig("h4", "approved", { band_name: "The Steamers", venue: "Dirty Gertie's", city: "Christchurch", date: "2026-09-18" }),
+    ];
+    // Status filtering (selecting "pending") is the caller's job -- mirrors
+    // exactly what AdminPanel does before ever calling filterModerationGigs.
+    const statusFiltered = combined.filter((g) => g.status === "pending");
+    const result = filterModerationGigs(statusFiltered, { search: "Gertie", date: "2026-09-18" });
+    expect(result.map((g) => g.id)).toEqual(["h1"]); // h2: wrong venue; h3: wrong date; h4: wrong status
+  });
+
+  it("an empty gigs array returns [] regardless of search/date", () => {
+    expect(filterModerationGigs([], {})).toEqual([]);
+    expect(filterModerationGigs([], { search: "anything" })).toEqual([]);
+    expect(filterModerationGigs([], { date: "2026-09-18" })).toEqual([]);
+    expect(filterModerationGigs([], { search: "anything", date: "2026-09-18" })).toEqual([]);
+  });
+});
+
+// Regression coverage for the confirmed PR #38 blocker: AdminPanel derives
+// its bulk-approval eligible set as selectVisiblePendingGigs(searched) --
+// i.e. the status tab further narrowed by search/date, exactly what's
+// rendered on screen -- never from the broader status-only `visible` set.
+// These tests exercise that exact composition (filterModerationGigs feeding
+// selectVisiblePendingGigs) purely at the helper level, so the guarantee is
+// proven without a component-testing framework: "APPROVE ALL VISIBLE" can
+// never reach a gig the search/date filter is currently hiding.
+describe("bulk-approval eligible set follows the actually-displayed (searched) gigs, not just the status tab", () => {
+  // A pending-tab-style dataset: several pending gigs, as AdminPanel's
+  // `visible` would be on the PENDING tab.
+  const pendingTab = [
+    gig("p1", "pending", { band_name: "The Steamers",   venue: "Dirty Gertie's", city: "Christchurch", date: "2026-09-18" }),
+    gig("p2", "pending", { band_name: "Jazz Collective", venue: "The Brook",      city: "Southampton",  date: "2026-09-19" }),
+    gig("p3", "pending", { band_name: "Static Bloom",    venue: "Stereo",         city: "Glasgow",      date: "2026-09-20" }),
+  ];
+
+  function eligibleFor(visible, { search = "", date = "" } = {}) {
+    return selectVisiblePendingGigs(filterModerationGigs(visible, { search, date }));
+  }
+
+  it("A: search narrows a multi-gig pending set to one -- eligible set contains ONLY that one gig", () => {
+    const eligible = eligibleFor(pendingTab, { search: "Steamer" });
+    expect(eligible.map((g) => g.id)).toEqual(["p1"]);
+    expect(eligible).toHaveLength(1); // NOT all 3 pending gigs
+  });
+
+  it("B: an exact date filter narrows the pending set -- eligible set contains ONLY gigs on that date", () => {
+    const eligible = eligibleFor(pendingTab, { date: "2026-09-19" });
+    expect(eligible.map((g) => g.id)).toEqual(["p2"]);
+    expect(eligible).toHaveLength(1);
+  });
+
+  it("C: search + date together narrow the pending set -- eligible set matches the actually-displayed result", () => {
+    const eligible = eligibleFor(pendingTab, { search: "Southampton", date: "2026-09-19" });
+    expect(eligible.map((g) => g.id)).toEqual(["p2"]);
+
+    // A search/date combination matching nothing on screen must approve
+    // nothing -- not silently fall back to the full pending set.
+    const noMatch = eligibleFor(pendingTab, { search: "Southampton", date: "2026-09-20" });
+    expect(noMatch).toEqual([]);
+  });
+
+  it("D: clearing search/date restores the full pending eligible set", () => {
+    const narrowed = eligibleFor(pendingTab, { search: "Steamer" });
+    expect(narrowed).toHaveLength(1);
+    const restored = eligibleFor(pendingTab, {});
+    expect(restored.map((g) => g.id)).toEqual(["p1", "p2", "p3"]);
+  });
+
+  it("a non-pending gig is never eligible even when the search/date matches it", () => {
+    const mixedTab = [...pendingTab, gig("a1", "approved", { band_name: "The Steamers", date: "2026-09-18" })];
+    const eligible = eligibleFor(mixedTab, { search: "Steamer" });
+    expect(eligible.map((g) => g.id)).toEqual(["p1"]); // a1 excluded: not pending
   });
 });
