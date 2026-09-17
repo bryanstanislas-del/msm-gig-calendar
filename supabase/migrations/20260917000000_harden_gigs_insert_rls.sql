@@ -29,6 +29,21 @@
 -- column, function (is_admin() is untouched), grant, index, or
 -- constraint.
 --
+-- QUALIFICATION FIX (independent review): both references to
+-- `band_profile_id` inside the WITH CHECK below are explicitly
+-- qualified as `gigs.band_profile_id`, not left bare. `public.profiles`
+-- has no column named `band_profile_id` today, so an unqualified
+-- reference already resolves correctly to the new gigs row -- but that
+-- correctness is contingent on that continuing to be true. Proven
+-- empirically (EXPLAIN VERBOSE, in a disposable test database only):
+-- if `profiles` ever gains a same-named column before this exact policy
+-- text is next created/recreated (e.g. a future DROP POLICY + CREATE
+-- POLICY), an unqualified reference silently rebinds to `profiles`' own
+-- column instead of the submitted gigs row, with no error or warning,
+-- decoupling the check entirely from the value being inserted. Explicit
+-- qualification removes that contingency outright, regardless of what
+-- columns `profiles` gains in the future.
+--
 -- Authoritative ownership rule used below (verified directly against
 -- the live schema, not assumed): a profile is the caller's own claimed
 -- profile when `profiles.user_id = auth.uid() AND profiles.claimed =
@@ -89,11 +104,11 @@ with check (
   status = 'pending'
   and submitted_by = auth.uid()
   and (
-    band_profile_id is null
+    gigs.band_profile_id is null
     or exists (
       select 1
       from public.profiles p
-      where p.id = band_profile_id
+      where p.id = gigs.band_profile_id
         and p.user_id = auth.uid()
         and p.claimed = true
     )

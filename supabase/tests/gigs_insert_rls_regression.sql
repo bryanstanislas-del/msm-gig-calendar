@@ -29,6 +29,14 @@
 -- RLS structural check. This file re-expresses those same checks
 -- against the real, migration-built schema for ongoing regression
 -- coverage.
+--
+-- A second, separate block below (after the first "ALL CHECKS PASSED")
+-- specifically regression-tests the explicit `gigs.band_profile_id`
+-- qualification an independent review required: it adds a same-named
+-- `band_profile_id` column to `profiles` and recreates the policy text
+-- against that altered schema, then repeats the Band-A-targets-Band-B
+-- spoof attempt, to catch a future accidental return to an unqualified
+-- reference.
 
 begin;
 
@@ -187,6 +195,68 @@ begin
   reset role;
 
   raise notice 'gigs_insert_rls regression: ALL CHECKS PASSED';
+end $$;
+
+-- ── Blocker regression (independent review): the policy above qualifies
+-- both `band_profile_id` references as `gigs.band_profile_id`. Before
+-- that fix, an UNQUALIFIED reference happened to resolve correctly only
+-- because `public.profiles` had no column of that name -- proven fragile
+-- by adding one and recreating the policy text, which silently rebound
+-- the reference to `profiles`' own column instead of the submitted gigs
+-- row (`p.id = p.band_profile_id`, decoupled from the actual value being
+-- inserted). This block reproduces that exact scenario -- a same-named
+-- column on `profiles`, the policy recreated afterward -- and proves the
+-- spoof attempt it used to silently permit is still correctly denied.
+-- Catches a future accidental removal of the qualification.
+do $$
+declare
+  u_a uuid; u_b uuid;
+  p_a uuid; p_b uuid;
+begin
+  alter table public.profiles add column band_profile_id uuid;
+
+  -- Recreate the exact policy text under review, now with the shadow
+  -- column present, so Postgres re-resolves names against this schema.
+  drop policy "Bands can submit gigs" on public.gigs;
+  create policy "Bands can submit gigs"
+  on public.gigs
+  for insert
+  to authenticated
+  with check (
+    status = 'pending'
+    and submitted_by = auth.uid()
+    and (
+      gigs.band_profile_id is null
+      or exists (
+        select 1
+        from public.profiles p
+        where p.id = gigs.band_profile_id
+          and p.user_id = auth.uid()
+          and p.claimed = true
+      )
+    )
+  );
+
+  insert into auth.users (id) values (gen_random_uuid()) returning id into u_a;
+  insert into auth.users (id) values (gen_random_uuid()) returning id into u_b;
+  insert into public.profiles (band_name, user_id, claimed, claim_status, profile_type, role)
+  values ('ZZTEST Shadow A', u_a, true, 'claimed', 'band', 'band') returning id into p_a;
+  insert into public.profiles (band_name, user_id, claimed, claim_status, profile_type, role)
+  values ('ZZTEST Shadow B', u_b, true, 'claimed', 'band', 'band') returning id into p_b;
+
+  -- Band A targeting Band B's profile id must still be DENIED, even
+  -- with profiles.band_profile_id now present.
+  perform set_config('request.jwt.claims', json_build_object('sub', u_a)::text, true);
+  set local role authenticated;
+  begin
+    insert into public.gigs (band_name, venue, city, date, status, submitted_by, band_profile_id)
+    values ('ZZTEST SHADOW-SPOOF', 'ZZTEST Venue', 'ZZTEST City', '2027-01-01', 'pending', u_a, p_b);
+    raise exception 'FAIL SHADOW: Band A spoofing Band B was ALLOWED with profiles.band_profile_id present -- qualification regressed';
+  exception when insufficient_privilege then null;
+  end;
+  reset role;
+
+  raise notice 'gigs_insert_rls shadow-column regression: ALL CHECKS PASSED';
 end $$;
 
 rollback;
