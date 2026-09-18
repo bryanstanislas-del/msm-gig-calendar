@@ -39,7 +39,7 @@ begin;
 --    the migration itself already uses them) ──
 create table if not exists public.venue_enrichment_candidates (
   id uuid primary key default gen_random_uuid(),
-  venue_id uuid not null references public.venues(id) on delete cascade,
+  venue_id uuid not null references public.venues(id) on delete restrict,
   field text not null,
   constraint venue_enrichment_candidates_field_check
     check (field = any (array[
@@ -73,7 +73,15 @@ create table if not exists public.venue_enrichment_candidates (
       or
       (status not in ('skipped_no_source', 'skipped_ambiguous') and suggested_value is not null)
     ),
+  constraint venue_enrichment_candidates_found_has_provenance
+    check (
+      (status in ('skipped_no_source', 'skipped_ambiguous') and source_type is null and confidence is null)
+      or
+      (status not in ('skipped_no_source', 'skipped_ambiguous') and source_type is not null and confidence is not null)
+    ),
   batch_id text not null,
+  constraint venue_enrichment_candidates_batch_id_not_blank
+    check (trim(batch_id) <> ''),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint venue_enrichment_candidates_unique_per_batch
@@ -178,18 +186,22 @@ begin
   reset role;
 
   -- ── F. field allow-list: an arbitrary/disallowed field is REJECTED by
-  --      the CHECK constraint, not silently accepted ──
+  --      the CHECK constraint, not silently accepted. source_type/
+  --      confidence are supplied here (unlike earlier drafts of this
+  --      test) so the insert fails ONLY on the field allow-list, not
+  --      also on venue_enrichment_candidates_found_has_provenance --
+  --      isolates exactly what this test claims to prove. ──
   perform set_config('request.jwt.claims', json_build_object('sub', u_admin)::text, true);
   set local role authenticated;
   begin
-    insert into public.venue_enrichment_candidates (venue_id, field, suggested_value, status, batch_id)
-    values (v_id, 'user_id', 'ZZTEST', 'pending', 'ZZTEST-BATCH-001');
+    insert into public.venue_enrichment_candidates (venue_id, field, suggested_value, source_type, confidence, status, batch_id)
+    values (v_id, 'user_id', 'ZZTEST', 'official_site', 'HIGH', 'pending', 'ZZTEST-BATCH-001');
     raise exception 'FAIL F: an arbitrary field (user_id) was ACCEPTED, expected CHECK violation';
   exception when check_violation then null;
   end;
   begin
-    insert into public.venue_enrichment_candidates (venue_id, field, suggested_value, status, batch_id)
-    values (v_id, 'claim_status', 'claimed', 'pending', 'ZZTEST-BATCH-001');
+    insert into public.venue_enrichment_candidates (venue_id, field, suggested_value, source_type, confidence, status, batch_id)
+    values (v_id, 'claim_status', 'claimed', 'official_site', 'HIGH', 'pending', 'ZZTEST-BATCH-001');
     raise exception 'FAIL F2: claim_status was ACCEPTED as a field, expected CHECK violation';
   exception when check_violation then null;
   end;
@@ -205,8 +217,11 @@ begin
   exception when check_violation then null;
   end;
   begin
-    insert into public.venue_enrichment_candidates (venue_id, field, suggested_value, status, batch_id)
-    values (v_id, 'capacity', null, 'pending', 'ZZTEST-BATCH-001');
+    -- source_type/confidence supplied so this fails ONLY on
+    -- venue_enrichment_candidates_skip_has_no_value (a pending row needs
+    -- a real suggested_value), not also on the provenance CHECK.
+    insert into public.venue_enrichment_candidates (venue_id, field, suggested_value, source_type, confidence, status, batch_id)
+    values (v_id, 'capacity', null, 'official_site', 'HIGH', 'pending', 'ZZTEST-BATCH-001');
     raise exception 'FAIL G2: a pending row with a null suggested_value was ACCEPTED, expected CHECK violation';
   exception when check_violation then null;
   end;
@@ -221,34 +236,134 @@ begin
 
   -- ── H. UNIQUE (venue_id, field, batch_id): a second row for the same
   --      venue+field+batch is rejected; the SAME venue+field in a
-  --      DIFFERENT batch is allowed (history across research runs) ──
+  --      DIFFERENT batch is allowed (history across research runs).
+  --      source_type/confidence supplied throughout so every insert here
+  --      satisfies the provenance CHECK and this test isolates the
+  --      UNIQUE constraint specifically. ──
   perform set_config('request.jwt.claims', json_build_object('sub', u_admin)::text, true);
   set local role authenticated;
-  insert into public.venue_enrichment_candidates (venue_id, field, suggested_value, status, batch_id)
-  values (v_id, 'phone', '02380000000', 'pending', 'ZZTEST-BATCH-001') returning id into c_id;
+  insert into public.venue_enrichment_candidates (venue_id, field, suggested_value, source_type, confidence, status, batch_id)
+  values (v_id, 'phone', '02380000000', 'official_site', 'HIGH', 'pending', 'ZZTEST-BATCH-001') returning id into c_id;
   begin
-    insert into public.venue_enrichment_candidates (venue_id, field, suggested_value, status, batch_id)
-    values (v_id, 'phone', '02380000001', 'pending', 'ZZTEST-BATCH-001');
+    insert into public.venue_enrichment_candidates (venue_id, field, suggested_value, source_type, confidence, status, batch_id)
+    values (v_id, 'phone', '02380000001', 'official_site', 'HIGH', 'pending', 'ZZTEST-BATCH-001');
     raise exception 'FAIL H: a duplicate venue+field+batch row was ACCEPTED, expected UNIQUE violation';
   exception when unique_violation then null;
   end;
   -- A later, separate batch is free to propose its own row for the same venue+field.
-  insert into public.venue_enrichment_candidates (venue_id, field, suggested_value, status, batch_id)
-  values (v_id, 'phone', '02380000002', 'pending', 'ZZTEST-BATCH-002');
+  insert into public.venue_enrichment_candidates (venue_id, field, suggested_value, source_type, confidence, status, batch_id)
+  values (v_id, 'phone', '02380000002', 'official_site', 'HIGH', 'pending', 'ZZTEST-BATCH-002');
   delete from public.venue_enrichment_candidates where venue_id = v_id and field = 'phone';
   reset role;
 
-  -- ── I. venue_id references public.venues(id); ON DELETE CASCADE
-  --      removes a venue's candidates when the venue itself is deleted ──
+  -- ── I/J (independent-review correction, replaces the old CASCADE test):
+  --      venue_id references public.venues(id) ON DELETE RESTRICT --
+  --      deleting a venue that still has candidate rows must fail, not
+  --      silently destroy its provenance/audit history. ──
   perform set_config('request.jwt.claims', json_build_object('sub', u_admin)::text, true);
   set local role authenticated;
-  insert into public.venue_enrichment_candidates (venue_id, field, suggested_value, status, batch_id)
-  values (v_id, 'website', 'https://example.test', 'pending', 'ZZTEST-BATCH-003') returning id into c_id;
+  insert into public.venue_enrichment_candidates (venue_id, field, suggested_value, source_type, confidence, status, batch_id)
+  values (v_id, 'website', 'https://example.test', 'official_site', 'HIGH', 'pending', 'ZZTEST-BATCH-003') returning id into c_id;
   reset role;
-  delete from public.venues where id = v_id; -- as table owner, bypassing RLS in this test harness
-  if exists (select 1 from public.venue_enrichment_candidates where id = c_id) then
-    raise exception 'FAIL I: candidate row survived its venue''s deletion, expected ON DELETE CASCADE to remove it';
+  begin
+    delete from public.venues where id = v_id; -- as table owner, bypassing RLS in this test harness
+    raise exception 'FAIL I: venue deletion was ALLOWED while a candidate row still referenced it, expected ON DELETE RESTRICT to block it';
+  exception when foreign_key_violation then null;
+  end;
+
+  -- ── J: once the candidate row is explicitly removed, the same venue
+  --      CAN then be deleted -- RESTRICT blocks an oversight, it doesn't
+  --      permanently trap the venue. ──
+  delete from public.venue_enrichment_candidates where id = c_id;
+  delete from public.venues where id = v_id;
+  if exists (select 1 from public.venues where id = v_id) then
+    raise exception 'FAIL J: venue deletion still failed after its only candidate row was removed, expected ALLOW';
   end if;
+  -- Re-seed the ZZTEST venue for the remaining tests below.
+  insert into public.venues (name, city) values ('ZZTEST Venue', 'ZZTEST City') returning id into v_id;
+
+  -- ── K (independent-review correction): a 'pending' row with
+  --      source_type/confidence both NULL is REJECTED by
+  --      venue_enrichment_candidates_found_has_provenance -- the exact
+  --      malformed-row scenario the independent review flagged (a
+  --      candidate the JS validator would reject, that the database
+  --      previously accepted anyway). ──
+  perform set_config('request.jwt.claims', json_build_object('sub', u_admin)::text, true);
+  set local role authenticated;
+  begin
+    insert into public.venue_enrichment_candidates (venue_id, field, suggested_value, source_type, confidence, status, batch_id)
+    values (v_id, 'postcode', 'SO14 3AB', null, null, 'pending', 'ZZTEST-BATCH-004');
+    raise exception 'FAIL K: a pending row with source_type/confidence both NULL was ACCEPTED, expected CHECK violation';
+  exception when check_violation then null;
+  end;
+
+  -- ── L: the same row, with valid source_type/confidence, IS accepted --
+  --      proves K failed because of the missing provenance, not for some
+  --      unrelated reason. ──
+  insert into public.venue_enrichment_candidates (venue_id, field, suggested_value, source_type, confidence, status, batch_id)
+  values (v_id, 'postcode', 'SO14 3AB', 'official_site', 'HIGH', 'pending', 'ZZTEST-BATCH-004') returning id into c_id;
+  if c_id is null then
+    raise exception 'FAIL L: a pending row with valid source_type/confidence was REJECTED, expected ALLOW';
+  end if;
+  delete from public.venue_enrichment_candidates where id = c_id;
+
+  -- ── M: skipped_no_source with source_type/confidence both NULL is
+  --      accepted (the normal "nothing found" shape). ──
+  insert into public.venue_enrichment_candidates (venue_id, field, suggested_value, source_type, confidence, status, batch_id)
+  values (v_id, 'phone', null, null, null, 'skipped_no_source', 'ZZTEST-BATCH-004') returning id into c_id;
+  if c_id is null then
+    raise exception 'FAIL M: a skipped_no_source row with NULL source_type/confidence was REJECTED, expected ALLOW';
+  end if;
+  delete from public.venue_enrichment_candidates where id = c_id;
+
+  -- ── N: skipped_no_source with a populated source_type/confidence is
+  --      REJECTED -- a skip is a "nothing to suggest" marker and must not
+  --      carry provenance implying otherwise. ──
+  begin
+    insert into public.venue_enrichment_candidates (venue_id, field, suggested_value, source_type, confidence, status, batch_id)
+    values (v_id, 'phone', null, 'official_site', 'HIGH', 'skipped_no_source', 'ZZTEST-BATCH-004');
+    raise exception 'FAIL N: a skipped_no_source row with populated source_type/confidence was ACCEPTED, expected CHECK violation';
+  exception when check_violation then null;
+  end;
+
+  -- ── O: skipped_ambiguous with source_type/confidence both NULL is
+  --      accepted, same reasoning as M. ──
+  insert into public.venue_enrichment_candidates (venue_id, field, suggested_value, source_type, confidence, status, batch_id)
+  values (v_id, 'capacity', null, null, null, 'skipped_ambiguous', 'ZZTEST-BATCH-004') returning id into c_id;
+  if c_id is null then
+    raise exception 'FAIL O: a skipped_ambiguous row with NULL source_type/confidence was REJECTED, expected ALLOW';
+  end if;
+  delete from public.venue_enrichment_candidates where id = c_id;
+
+  -- ── P (independent-review correction): batch_id non-blank CHECK --
+  --      a real label is accepted; '' and whitespace-only are rejected. ──
+  insert into public.venue_enrichment_candidates (venue_id, field, suggested_value, source_type, confidence, status, batch_id)
+  values (v_id, 'address', 'ZZTEST Address', 'official_site', 'HIGH', 'pending', 'VENUE-ENRICH-ZZTEST-001') returning id into c_id;
+  if c_id is null then
+    raise exception 'FAIL P: a non-blank batch_id (''VENUE-ENRICH-ZZTEST-001'') was REJECTED, expected ALLOW';
+  end if;
+  delete from public.venue_enrichment_candidates where id = c_id;
+
+  -- ── Q: an empty-string batch_id is REJECTED ──
+  begin
+    insert into public.venue_enrichment_candidates (venue_id, field, suggested_value, source_type, confidence, status, batch_id)
+    values (v_id, 'address', 'ZZTEST Address', 'official_site', 'HIGH', 'pending', '');
+    raise exception 'FAIL Q: an empty-string batch_id was ACCEPTED, expected CHECK violation';
+  exception when check_violation then null;
+  end;
+
+  -- ── R: a whitespace-only batch_id is REJECTED ──
+  begin
+    insert into public.venue_enrichment_candidates (venue_id, field, suggested_value, source_type, confidence, status, batch_id)
+    values (v_id, 'address', 'ZZTEST Address', 'official_site', 'HIGH', 'pending', '   ');
+    raise exception 'FAIL R: a whitespace-only batch_id was ACCEPTED, expected CHECK violation';
+  exception when check_violation then null;
+  end;
+
+  -- Clean up the re-seeded ZZTEST venue -- no candidates reference it any
+  -- more, so this also re-confirms RESTRICT only blocks a REFERENCED
+  -- venue (see I/J above), not venue deletion in general.
+  delete from public.venues where id = v_id;
 
   raise notice 'venue_enrichment_candidates regression: ALL CHECKS PASSED';
 end $$;

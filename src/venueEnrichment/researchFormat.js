@@ -27,6 +27,16 @@ export const SOURCE_TYPES = [
 // -- no numeric score (see the migration's own comment on that column).
 export const CONFIDENCE_LEVELS = ["HIGH", "MEDIUM", "LOW"];
 
+// Independent-review correction: RESEARCH_CONTRACT.md always documented
+// these limits, but nothing machine-checked them -- a 200-character
+// seo_title candidate passed validation cleanly. Matches the same 60/160
+// figures the rest of the app already uses (App.jsx's own venue/profile
+// SEO editors, e.g. AdminVenues' `(editForm.seo_title||"").length > 60`
+// amber-warning check) -- plain JS string .length, the existing app
+// convention, not a byte length or a grapheme-aware count.
+export const SEO_TITLE_MAX_LENGTH = 60;
+export const SEO_DESCRIPTION_MAX_LENGTH = 160;
+
 // Mirrors venue_enrichment_candidates_status_check. Exposed here so a
 // caller mapping a candidate's `outcome` (below) into a DB row's `status`
 // has one shared source for the legal values -- NOT because Claude's
@@ -95,6 +105,21 @@ export function validateCandidate(candidate) {
       // sourcing) -- only that an explanation is actually present.
       if (source_type !== "generated") errors.push('source_type must be "generated" for a generated editorial/SEO field');
       if (!isNonBlankString(notes)) errors.push("notes must explain which verified factual candidates a generated field was built from");
+
+      // Independent-review correction: an over-length SEO value must be
+      // REJECTED, not silently truncated -- truncation would let a
+      // research process silently lose text (e.g. cutting a title
+      // mid-word) with no signal that a correction is actually needed.
+      // Rejecting forces the research process to produce a candidate
+      // that actually fits, exactly like RESEARCH_CONTRACT.md's own
+      // "over-length SEO values are rejected, never silently truncated"
+      // rule.
+      if (field === "seo_title" && typeof suggested_value === "string" && suggested_value.length > SEO_TITLE_MAX_LENGTH) {
+        errors.push(`seo_title must be ${SEO_TITLE_MAX_LENGTH} characters or fewer (got ${suggested_value.length})`);
+      }
+      if (field === "seo_description" && typeof suggested_value === "string" && suggested_value.length > SEO_DESCRIPTION_MAX_LENGTH) {
+        errors.push(`seo_description must be ${SEO_DESCRIPTION_MAX_LENGTH} characters or fewer (got ${suggested_value.length})`);
+      }
     } else {
       if (!isNonBlankString(source_url)) errors.push('source_url is required for a factual field when outcome is "found"');
       if (!source_type || !SOURCE_TYPES.includes(source_type) || source_type === "generated") {

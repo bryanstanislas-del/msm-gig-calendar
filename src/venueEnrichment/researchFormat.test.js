@@ -3,6 +3,8 @@ import {
   SOURCE_TYPES,
   CONFIDENCE_LEVELS,
   CANDIDATE_STATUSES,
+  SEO_TITLE_MAX_LENGTH,
+  SEO_DESCRIPTION_MAX_LENGTH,
   outcomeToInitialStatus,
   validateCandidate,
   requiresManualReview,
@@ -124,6 +126,52 @@ describe("generated editorial/SEO fields", () => {
     for (const field of ["description", "seo_title", "seo_description", "seo_search_phrases"]) {
       expect(validateCandidate(generatedCandidate({ field })).valid).toBe(true);
     }
+  });
+});
+
+describe("SEO length limits -- rejected, never silently truncated", () => {
+  it("SEO_TITLE_MAX_LENGTH / SEO_DESCRIPTION_MAX_LENGTH match RESEARCH_CONTRACT.md's 60/160", () => {
+    expect(SEO_TITLE_MAX_LENGTH).toBe(60);
+    expect(SEO_DESCRIPTION_MAX_LENGTH).toBe(160);
+  });
+  it("accepts an seo_title of exactly 60 characters", () => {
+    const value = "A".repeat(60);
+    const result = validateCandidate(generatedCandidate({ field: "seo_title", suggested_value: value }));
+    expect(result.valid).toBe(true);
+  });
+  it("rejects an seo_title of 61 characters -- one over the limit", () => {
+    const value = "A".repeat(61);
+    const { valid, errors } = validateCandidate(generatedCandidate({ field: "seo_title", suggested_value: value }));
+    expect(valid).toBe(false);
+    expect(errors.some((e) => e.includes("seo_title") && e.includes("60"))).toBe(true);
+  });
+  it("accepts an seo_description of exactly 160 characters", () => {
+    const value = "A".repeat(160);
+    const result = validateCandidate(generatedCandidate({ field: "seo_description", suggested_value: value }));
+    expect(result.valid).toBe(true);
+  });
+  it("rejects an seo_description of 161 characters -- one over the limit", () => {
+    const value = "A".repeat(161);
+    const { valid, errors } = validateCandidate(generatedCandidate({ field: "seo_description", suggested_value: value }));
+    expect(valid).toBe(false);
+    expect(errors.some((e) => e.includes("seo_description") && e.includes("160"))).toBe(true);
+  });
+  it("never truncates -- an over-length value is rejected outright, the candidate is not silently shortened", () => {
+    const value = "A".repeat(61);
+    const { errors } = validateCandidate(generatedCandidate({ field: "seo_title", suggested_value: value }));
+    // The rejected value itself is untouched by validation -- nothing in
+    // validateCandidate() mutates or returns a shortened suggested_value.
+    expect(value).toHaveLength(61);
+    expect(errors.length).toBeGreaterThan(0);
+  });
+  it("length limits do not apply to non-SEO generated fields (description/seo_search_phrases)", () => {
+    const longValue = "A".repeat(500);
+    expect(validateCandidate(generatedCandidate({ field: "description", suggested_value: longValue })).valid).toBe(true);
+    expect(validateCandidate(generatedCandidate({ field: "seo_search_phrases", suggested_value: longValue })).valid).toBe(true);
+  });
+  it("length limits do not apply to factual (non-generated) fields", () => {
+    const longValue = "A".repeat(500);
+    expect(validateCandidate(foundCandidate({ field: "address", suggested_value: longValue })).valid).toBe(true);
   });
 });
 

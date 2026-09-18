@@ -35,15 +35,22 @@ create table public.venue_enrichment_candidates (
   -- Exact identity only -- see the Phase 0 audit's own "Existing Venue
   -- Identity System" findings: venue_id is the one authoritative way to
   -- reference a venue anywhere in this system, never a name/city lookup.
-  -- ON DELETE CASCADE: a candidate row has no independent meaning once its
-  -- venue is gone -- it is derived staging data about that specific venue,
-  -- not a standalone record (contrast with e.g. activity_log, which
-  -- deliberately outlives the entity it describes as a historical log).
-  -- Venue deletion is itself a rare, admin-only, explicitly confirmed
-  -- action (see AdminVenues' own "type DELETE to confirm" flow) -- letting
-  -- its candidates disappear with it avoids accumulating orphaned research
-  -- for venues that no longer exist, and needs no separate cleanup job.
-  venue_id uuid not null references public.venues(id) on delete cascade,
+  -- ON DELETE RESTRICT (independent-review correction -- see PR #40's own
+  -- review, not CASCADE as originally proposed): this table is intended to
+  -- become provenance/audit history -- once a candidate can reach
+  -- approved/applied, it is a record of WHERE a production value came
+  -- from, not disposable derived data. CASCADE would let a venue deletion
+  -- silently destroy that history along with the venue. RESTRICT instead
+  -- forces whoever deletes a venue to consciously deal with its
+  -- enrichment history first (delete/archive its candidate rows
+  -- explicitly) -- acceptable friction, since venue deletion is already a
+  -- rare, admin-only, explicitly confirmed action (see AdminVenues' own
+  -- "type DELETE to confirm" flow). SET NULL was considered and rejected:
+  -- venue_id is this table's only identity anchor (no denormalised
+  -- name/city snapshot exists here), so a nulled row would become
+  -- meaningless orphan data rather than a usable audit record -- venue_id
+  -- stays NOT NULL and remains the sole, authoritative identity.
+  venue_id uuid not null references public.venues(id) on delete restrict,
 
   -- Strict allow-list -- the exact 14 enrichment fields from the Phase 0
   -- audit, and NOTHING else. This is what makes it structurally impossible
@@ -88,10 +95,13 @@ create table public.venue_enrichment_candidates (
   -- explicitly future apply-engine work, not this phase's.
   suggested_value text,
 
-  -- Where the fact came from. NULL is a legitimate state only alongside a
-  -- skipped_* status (see the status CHECK) -- there is no source because
-  -- nothing was found (or the match was too ambiguous to trust), not
-  -- because the field was overlooked.
+  -- Where the fact came from. Nullable because source_url specifically is
+  -- not required merely because source_type is present -- a 'generated'
+  -- editorial candidate (see source_type below) legitimately has no
+  -- single external source_url at all, its provenance being the batch's
+  -- own verified factual candidates instead (see the `notes` column's own
+  -- comment). NULL alongside a skipped_* status, same reasoning as
+  -- source_type/confidence below.
   source_url text,
 
   -- Controlled provenance vocabulary. 'generated' is distinct from the six
@@ -99,8 +109,11 @@ create table public.venue_enrichment_candidates (
   -- (description/seo_title/seo_description/seo_search_phrases) produced
   -- from this batch's OWN verified factual candidates rather than fetched
   -- from an external page -- see the `notes` column's own comment for how
-  -- that provenance is still recorded. NULL alongside a skipped_* status,
-  -- same reasoning as source_url above.
+  -- that provenance is still recorded. Nullable only alongside a
+  -- skipped_* status -- see
+  -- venue_enrichment_candidates_found_has_provenance below, which is what
+  -- actually enforces this pairing now (independent-review correction:
+  -- previously only the JS validator enforced it, not the database).
   source_type text,
   constraint venue_enrichment_candidates_source_type_check
     check (source_type is null or source_type = any (array[
@@ -113,7 +126,9 @@ create table public.venue_enrichment_candidates (
   -- Three-tier confidence only -- deliberately no numeric score (a
   -- fabricated-precision "87% confident" would misrepresent what is
   -- actually a qualitative editorial judgement about source reliability).
-  -- NULL alongside a skipped_* status, same reasoning as source_url above.
+  -- Nullable only alongside a skipped_* status -- same
+  -- venue_enrichment_candidates_found_has_provenance enforcement as
+  -- source_type above.
   confidence text,
   constraint venue_enrichment_candidates_confidence_check
     check (confidence is null or confidence = any (array['HIGH', 'MEDIUM', 'LOW'])),
@@ -167,6 +182,28 @@ create table public.venue_enrichment_candidates (
       (status not in ('skipped_no_source', 'skipped_ambiguous') and suggested_value is not null)
     ),
 
+  -- Independent-review correction: the constraint above only paired
+  -- status with suggested_value -- it said nothing about source_type/
+  -- confidence, so a malformed row could previously claim
+  -- status='pending' with a real suggested_value but source_type/
+  -- confidence both NULL, which the JS validator (researchFormat.js's
+  -- validateCandidate()) already rejected but the database did not.
+  -- This closes that gap at the database layer, matching the same
+  -- "no source = no factual candidate" invariant this table's field
+  -- allow-list already enforces structurally rather than only by
+  -- application discipline: a skipped_* row (nothing found/too
+  -- ambiguous) must carry no source_type/confidence, and every other
+  -- status (a real candidate, however far along its review lifecycle)
+  -- must carry both. Deliberately does NOT also require source_url --
+  -- see source_url's own column comment for why a 'generated' editorial
+  -- candidate legitimately has none.
+  constraint venue_enrichment_candidates_found_has_provenance
+    check (
+      (status in ('skipped_no_source', 'skipped_ambiguous') and source_type is null and confidence is null)
+      or
+      (status not in ('skipped_no_source', 'skipped_ambiguous') and source_type is not null and confidence is not null)
+    ),
+
   -- Which research run produced this row -- see this migration's own PR
   -- description ("Batch identity") for why this is a plain text label
   -- (e.g. "VENUE-ENRICH-001") rather than a foreign key into a new,
@@ -177,7 +214,17 @@ create table public.venue_enrichment_candidates (
   -- real batches table remains a clean, additive option later if a
   -- genuine need (e.g. per-batch progress tracking across a restart)
   -- shows up -- not manufactured speculatively now.
+  --
+  -- Independent-review correction: NOT NULL alone still let ''/'   '
+  -- through -- a blank label defeats the whole point of grouping rows for
+  -- checkpointing/review, and the JS output validator already rejected a
+  -- blank batch label at the application layer without the database
+  -- mirroring it. venue_enrichment_candidates_batch_id_not_blank below
+  -- closes that gap the same way -- still just one CHECK, no separate
+  -- batches table.
   batch_id text not null,
+  constraint venue_enrichment_candidates_batch_id_not_blank
+    check (trim(batch_id) <> ''),
 
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),

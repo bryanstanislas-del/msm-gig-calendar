@@ -25,6 +25,12 @@ boundary.
 - Never substitute another venue's data because it seems similar (a
   same-named venue in a different city, a rebranded/renamed venue, a
   venue that has since closed) — flag it, don't guess.
+- Venue deletion is `ON DELETE RESTRICT` against this table: a venue with
+  any candidate rows (of any status) cannot be deleted until those rows
+  are explicitly removed first. This is deliberate — the table is
+  intended to become provenance/audit history once candidates can reach
+  `approved`/`applied`, and a venue deletion must never silently destroy
+  that history.
 
 ## Scope of research
 
@@ -53,6 +59,11 @@ boundary.
   the venue's identity relative to a source is unclear (same name,
   different city; a venue that may have closed/rebranded), return
   `outcome: "skipped_ambiguous"` and explain why in `notes`.
+- Every non-skip candidate (`outcome: "found"`) must carry both
+  `source_type` and `confidence` — this is enforced at the database layer
+  (`venue_enrichment_candidates_found_has_provenance`), not only by the JS
+  validator: a "found" candidate with no provenance is rejected outright,
+  it can never reach staging as a bare, unsourced value.
 
 ## Confidence
 
@@ -99,7 +110,12 @@ boundary.
   one of those — no invented accolades, history, capacity, or features.
 - UK English. Useful, specific prose — not templated boilerplate that
   reads the same across hundreds of venues.
-- `seo_title` ≤ 60 characters. `seo_description` ≤ 160 characters.
+- `seo_title` ≤ 60 characters, `seo_description` ≤ 160 characters —
+  enforced by `validateCandidate()` (`SEO_TITLE_MAX_LENGTH`/
+  `SEO_DESCRIPTION_MAX_LENGTH`). An over-length value is **rejected
+  outright, never silently truncated** — the research process must
+  produce a candidate that actually fits rather than losing text to a
+  hidden cut.
 
 ## Claimed venues
 
@@ -114,6 +130,30 @@ boundary.
 - `current_values` is authoritative. A suggestion is never a request to
   overwrite it, and nothing in Phase 1 (or the format itself) provides any
   mechanism to do so — nothing here writes to `public.venues` at all yet.
+
+## Batch identity
+
+- `batch` (the research run's own label, e.g. `"VENUE-ENRICH-001"`) must
+  be non-blank — enforced both by the JS output validator and by the
+  database (`venue_enrichment_candidates_batch_id_not_blank`). An empty or
+  whitespace-only batch label is rejected.
+
+## Future Phase 2 considerations (not implemented yet)
+
+Two items the independent review of this contract raised, intentionally
+left for the actual ingestion path rather than designed speculatively
+here:
+
+- Having the research output echo each venue's `name`/`city` back
+  alongside its `candidates`, so a human reviewer can visually cross-check
+  the echoed identity against the `venue_id` — today's `venue_id`
+  cross-check (`validateVenueIdsPreserved()`) already blocks an invented
+  or cross-batch-substituted id, but can't detect a within-batch mix-up
+  (venue A's fact mislabelled with venue B's id when both are in the same
+  batch).
+- Cross-checking a candidate's own `existing_value` against the original
+  input batch's `current_values[field]` snapshot, to catch a research
+  output that misreports what was already on file.
 
 ## Output shape
 

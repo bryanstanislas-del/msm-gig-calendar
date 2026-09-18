@@ -25,6 +25,8 @@ export {
   CONFIDENCE_LEVELS,
   CANDIDATE_STATUSES,
   CANDIDATE_OUTCOMES,
+  SEO_TITLE_MAX_LENGTH,
+  SEO_DESCRIPTION_MAX_LENGTH,
   outcomeToInitialStatus,
   validateCandidate,
   requiresManualReview,
