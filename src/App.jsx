@@ -147,6 +147,7 @@ import AdminSupporters  from './components/admin/AdminSupporters';
 import AdminHallOfFame  from './components/admin/AdminHallOfFame';
 import AdminFestivals   from './components/admin/AdminFestivals';
 import AdminPromoSlots  from './components/admin/AdminPromoSlots';
+import AdminVenueEnrichment from './components/admin/AdminVenueEnrichment';
 import PromoSlot, { indexPromoSlotsBySlot, buildListViewItems } from './components/PromoSlot.jsx';
 import ClaimDirectoryPage from './components/ClaimDirectoryPage';
 
@@ -9924,6 +9925,7 @@ function MainApp() {
       { id:"claims",    label:`CLAIMS (${claims.filter(c=>c.status==="pending").length})` },
       { id:"bands",     label:`BANDS (${bands.filter(b=>!b.disabled).length})` },
       { id:"venues",    label:`VENUES (${venues.length})` },
+      { id:"venue-research", label:"VENUE RESEARCH" },
       { id:"import",      label:"BULK IMPORT" },
       { id:"smart-import-preview", label:"SMART IMPORT (PREVIEW)" },
       { id:"backups",     label:"BACKUPS" },
@@ -10015,6 +10017,11 @@ function MainApp() {
         {/* VENUES */}
         {tab==="venues" && isAdmin && (
           <AdminVenues venues={venues} allGigs={allGigs} onRefresh={refreshAdmin} filterMode={venueFilterMode} onFilterModeChange={setVenueFilterMode} />
+        )}
+
+        {/* VENUE RESEARCH (Phase 3B -- read-only review of staged venue_enrichment_candidates; no venue or candidate writes) */}
+        {tab==="venue-research" && isAdmin && (
+          <AdminVenueEnrichment />
         )}
 
         {/* BULK IMPORT */}
