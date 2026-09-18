@@ -9,12 +9,16 @@
 -- re-embedding a second copy of them inside a test file would only ever
 -- risk silently drifting from the actual migration over time, unlike a
 -- CREATE TABLE statement (cheap, low-risk to duplicate verbatim). Instead
--- this file assumes it is run against a database that already has BOTH
--- 20260918120000_venue_enrichment_candidates.sql AND
--- 20260918150000_venue_enrichment_candidates_review.sql applied -- exactly
--- what `supabase start` + `supabase db reset` (or an equivalent throwaway
--- clone) gives you locally by construction, applying every migration in
--- this repo in order.
+-- this file assumes it is run against a database that already has ALL
+-- THREE of 20260918120000_venue_enrichment_candidates.sql,
+-- 20260918150000_venue_enrichment_candidates_review.sql, AND
+-- 20260918160000_venue_enrichment_review_revoke_public.sql applied --
+-- exactly what `supabase start` + `supabase db reset` (or an equivalent
+-- throwaway clone) gives you locally by construction, applying every
+-- migration in this repo in order. Checks 30/31 near the end of this
+-- file specifically assert the third migration's own effect (no bare
+-- PUBLIC EXECUTE grant on either RPC) -- they will fail as expected if
+-- only the first two migrations are applied.
 --
 -- MUST NEVER be run directly against production, even wrapped in
 -- BEGIN...ROLLBACK -- it creates real fixture rows and exercises role-
@@ -57,6 +61,7 @@ declare
   v_reviewed_at_first timestamptz;
   v_log_count int;
   v_rowcount int;
+  v_acl text;
 begin
   -- ── Fixtures ──────────────────────────────────────────────────────────
   insert into public.venues (name, city, postcode, capacity)
@@ -373,6 +378,37 @@ begin
   reset role;
   if v_row.id is null then
     raise exception 'FAIL 29: an admin INSERT on venue_enrichment_candidates was denied, expected ALLOW under venue_enrichment_candidates_admin_insert';
+  end if;
+
+  -- ── 30/31. Grant-layer ACL matches the intended security model exactly
+  --           (RPC EXECUTE hardening migration, 20260918160000): no bare
+  --           PUBLIC entry on either function's own pg_proc.proacl (a
+  --           "{=X/...}" or ",=X/..." entry is PostgreSQL's implicit
+  --           PUBLIC grant every CREATE FUNCTION adds by default,
+  --           independently of any per-role revoke -- anon and every
+  --           other role are members of PUBLIC, so its mere presence
+  --           would silently re-grant EXECUTE to anon regardless of the
+  --           explicit `revoke ... from anon` in the prior migration),
+  --           and authenticated is explicitly present. Static ACL
+  --           inspection, no role-switching or mutation needed. ────────
+  select p.proacl::text into v_acl
+  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+  where n.nspname = 'public' and p.proname = 'approve_venue_enrichment_candidate';
+  if v_acl like '{=%' or v_acl like '%,=%' then
+    raise exception 'FAIL 30: approve_venue_enrichment_candidate still carries a bare PUBLIC EXECUTE grant: %', v_acl;
+  end if;
+  if v_acl not like '%authenticated=X%' then
+    raise exception 'FAIL 30b: approve_venue_enrichment_candidate is missing the intended authenticated EXECUTE grant: %', v_acl;
+  end if;
+
+  select p.proacl::text into v_acl
+  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+  where n.nspname = 'public' and p.proname = 'reject_venue_enrichment_candidate';
+  if v_acl like '{=%' or v_acl like '%,=%' then
+    raise exception 'FAIL 31: reject_venue_enrichment_candidate still carries a bare PUBLIC EXECUTE grant: %', v_acl;
+  end if;
+  if v_acl not like '%authenticated=X%' then
+    raise exception 'FAIL 31b: reject_venue_enrichment_candidate is missing the intended authenticated EXECUTE grant: %', v_acl;
   end if;
 
   -- ── Cleanup ──────────────────────────────────────────────────────────
