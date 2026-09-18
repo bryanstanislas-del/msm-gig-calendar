@@ -29,7 +29,7 @@ import {
 import {
   groupCandidatesByBatch, groupCandidatesByVenue, attachVenueInfo,
   splitProposedAndSkipped, isGeneratedCandidate, isStaleCandidate,
-  getStatusLabel, isValidHttpUrl,
+  getStatusLabel, isValidHttpUrl, fetchAllCandidates,
 } from '../../venueEnrichment/venueEnrichmentReview.js';
 
 const ACCENT = ACCENTS.festivals; // cyan -- not yet used by any other admin panel, keeps this screen visually distinct from the commercial (amber) and editorial (green) panels
@@ -129,16 +129,20 @@ function ProposedCandidateCard({ candidate, liveVenue }) {
       <FormSection title={fieldLabel(candidate.field)} first>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
           <Pill tone="neutral">{getStatusLabel(candidate.status)}</Pill>
-          {generated ? (
+          {/* CORRECTION (independent review, PR #41): generated and confidence
+              are independent facts about a candidate -- a generated row still
+              carries a real confidence tier (e.g. Platform Tavern's HIGH-
+              confidence generated SEO rows) and must show both, not one or
+              the other. */}
+          {generated && (
             <span style={{
               display: 'inline-flex', alignItems: 'center', padding: '4px 11px', borderRadius: 999,
               fontSize: 11, fontWeight: 700, background: 'rgba(167,139,250,0.16)', color: '#c4b5fd',
             }}>
               GENERATED FROM VERIFIED FACTS
             </span>
-          ) : (
-            candidate.confidence && <Pill tone={CONFIDENCE_TONE[candidate.confidence] || 'neutral'}>{candidate.confidence}</Pill>
           )}
+          {candidate.confidence && <Pill tone={CONFIDENCE_TONE[candidate.confidence] || 'neutral'}>{candidate.confidence}</Pill>}
         </div>
 
         <div style={{
@@ -229,12 +233,18 @@ function VenueReviewScreen({ batchId, venueGroup, onBack }) {
       {!loading && (
         <>
           <AdminHeader
-            title={liveVenue?.name || venueGroup.venue.name || 'Unknown venue'}
-            subtitle={`${liveVenue?.city || venueGroup.venue.city || ''} · batch ${batchId}${retrievedDates.length ? ` · researched ${fmtDate(retrievedDates[0])}–${fmtDate(retrievedDates[retrievedDates.length - 1])}` : ''}`}
+            title={liveVenue?.name || venueGroup.venue?.name || 'Unknown venue'}
+            subtitle={`${liveVenue?.city || venueGroup.venue?.city || ''} · batch ${batchId}${retrievedDates.length ? ` · researched ${fmtDate(retrievedDates[0])}–${fmtDate(retrievedDates[retrievedDates.length - 1])}` : ''}`}
           />
           <p style={{ fontSize: 11, color: '#555', marginTop: -18, marginBottom: 20 }}>venue_id: {venueGroup.venue_id}</p>
 
-          {(liveVenue?.claimed || venueGroup.venue.claimed) && <ClaimedVenueWarning />}
+          {/* CORRECTION (independent review, PR #41): venueGroup.venue can
+              legitimately be null (attachVenueInfo's own documented/tested
+              behaviour when the bulk venue-list fetch didn't resolve this
+              venue) -- optional-chained so a missing venue record degrades
+              to "Unknown venue"/no claimed badge instead of crashing the
+              whole review screen. */}
+          {(liveVenue?.claimed || venueGroup.venue?.claimed) && <ClaimedVenueWarning />}
 
           <ReadOnlyNotice />
 
@@ -367,12 +377,18 @@ export default function AdminVenueEnrichment() {
     // Read-only: RLS (venue_enrichment_candidates_admin_all) is the real
     // access boundary here, exactly as for every other admin table read in
     // this app -- no service-role key, no elevated client.
-    supabase.from('venue_enrichment_candidates').select('*')
-      .then(({ data, error: err }) => {
-        if (cancelled) return;
-        if (err) { setError(err.message); return; }
-        setRows(data || []);
-      })
+    //
+    // CORRECTION (independent review, PR #41): a bare `.select('*')` here
+    // silently truncates at Supabase/PostgREST's default 1000-row ceiling
+    // once the table's total row count (across every research batch, not
+    // just one) grows past it -- the same bug class App.jsx's own
+    // fetchAllPages() already fixed for DB.getAllGigs()/getApprovedGigs()/
+    // getVenues(). fetchAllCandidates() reuses that exact, already-reviewed
+    // mechanism (still SELECT-only -- see its own comment) instead of a
+    // second pagination implementation.
+    fetchAllCandidates(supabase)
+      .then((data) => { if (!cancelled) setRows(data || []); })
+      .catch((err) => { if (!cancelled) setError(err.message || String(err)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, []);

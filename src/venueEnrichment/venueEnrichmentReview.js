@@ -16,6 +16,7 @@
 
 import { ENRICHMENT_FIELDS } from "./researchExport.js";
 import { isValidHttpUrl } from "../components/PromoSlot.jsx";
+import { fetchAllPages } from "../App.jsx";
 
 // Re-exported under its own name here so AdminVenueEnrichment.jsx has one
 // single import path for every venue-research helper it needs, rather than
@@ -238,4 +239,26 @@ export function fieldReviewOrderMatchesEnrichmentFields() {
   const a = [...FIELD_REVIEW_ORDER].sort();
   const b = [...ENRICHMENT_FIELDS].sort();
   return a.length === b.length && a.every((field, i) => field === b[i]);
+}
+
+// CORRECTION (independent review, PR #41): the original AdminVenueEnrichment
+// mount effect called `supabase.from('venue_enrichment_candidates').select('*')`
+// directly with no pagination -- Supabase/PostgREST silently truncates any
+// unbounded select at its project-level max-rows ceiling (App.jsx's own
+// fetchAllPages() header comment: "Supabase's own default is 1000"), the
+// exact bug class DB.getAllGigs()/getApprovedGigs()/getVenues() in App.jsx
+// were already fixed for (see dbPagination.test.js). Reuses that same,
+// already-reviewed fetchAllPages() mechanism rather than a second
+// pagination implementation. `id` is a stable, always-unique sort key, so
+// no page can duplicate or skip a row regardless of how many candidate
+// rows exist across however many research batches. Takes the Supabase
+// client as a parameter (rather than importing the app's singleton
+// directly) so this stays testable with a plain fake client object --
+// see venueEnrichmentReview.test.js.
+export function fetchAllCandidates(supabaseClient) {
+  return fetchAllPages((from, to) =>
+    supabaseClient.from("venue_enrichment_candidates").select("*")
+      .order("id", { ascending: true })
+      .range(from, to)
+  );
 }

@@ -17,6 +17,7 @@ import {
   isStaleCandidate,
   isValidHttpUrl,
   fieldReviewOrderMatchesEnrichmentFields,
+  fetchAllCandidates,
 } from "./venueEnrichmentReview.js";
 
 const row = (overrides = {}) => ({
@@ -202,6 +203,14 @@ describe("stale comparison (display-only)", () => {
     expect(isStaleCandidate("SO14 2NY", null)).toBe(true);
   });
 
+  it("is case-sensitive by design -- a case-only difference is (safely) flagged stale rather than hidden", () => {
+    // Documents the intended behaviour raised in independent review: this
+    // is the deliberate, safer-by-default direction (a display-only
+    // over-flag an admin can dismiss at a glance) rather than normalising
+    // case and risking a genuine edit becoming invisible.
+    expect(isStaleCandidate("SO14 2NY", "so14 2ny")).toBe(true);
+  });
+
   it("compares a numeric live value against its text snapshot without a false positive", () => {
     expect(isStaleCandidate("100", 100)).toBe(false);
     expect(isStaleCandidate("100", 250)).toBe(true);
@@ -231,5 +240,112 @@ describe("safe external URL (reused from PromoSlot.jsx, not reimplemented)", () 
     expect(isValidHttpUrl("")).toBe(false);
     expect(isValidHttpUrl(null)).toBe(false);
     expect(isValidHttpUrl(undefined)).toBe(false);
+  });
+
+  it("rejects a file: URL", () => {
+    expect(isValidHttpUrl("file:///etc/passwd")).toBe(false);
+  });
+
+  it("rejects a relative URL (no scheme to trust)", () => {
+    expect(isValidHttpUrl("/venue/123")).toBe(false);
+    expect(isValidHttpUrl("//evil.example.com/x")).toBe(false);
+  });
+
+  it("rejects a javascript: URL disguised with an embedded control character", () => {
+    // The WHATWG URL parser strips ASCII tab/newline characters before
+    // resolving the scheme, so this must not slip past as some other
+    // protocol -- it's still rejected on the resolved protocol, not a
+    // raw string match.
+    expect(isValidHttpUrl("java\tscript:alert(1)")).toBe(false);
+    expect(isValidHttpUrl("  javascript:alert(1)")).toBe(false);
+  });
+});
+
+describe("fetchAllCandidates (pagination)", () => {
+  // Minimal fake supabase-js chain -- mirrors the shape/pattern
+  // dbPagination.test.js's own makeChain() uses for DB.getApprovedGigs/
+  // getAllGigs/getVenues, but passed directly as a parameter rather than
+  // mocking the @supabase/supabase-js module, since fetchAllCandidates
+  // takes its client as an argument instead of importing App.jsx's
+  // singleton.
+  function makeChain(respond) {
+    const state = { selectArgs: null, orders: [], range: null };
+    const chain = {
+      select(cols) { state.selectArgs = cols; return chain; },
+      order(col, opts) { state.orders.push([col, opts]); return chain; },
+      range(from, to) {
+        state.range = [from, to];
+        return Promise.resolve(respond({ ...state, range: [from, to] }));
+      },
+    };
+    return chain;
+  }
+
+  it("retrieves more than 1000 rows without truncation -- regression for the original bare .select('*') bug", async () => {
+    const all = Array.from({ length: 1250 }, (_, i) => row({ id: `c${i}` }));
+    const calls = [];
+    const fakeClient = {
+      from: (table) => makeChain((state) => {
+        calls.push({ table, ...state });
+        const [from, to] = state.range;
+        return { data: all.slice(from, to + 1), error: null };
+      }),
+    };
+
+    const result = await fetchAllCandidates(fakeClient);
+
+    expect(result.length).toBe(1250);
+    expect(calls.length).toBe(2); // 1000 + 250, second page < pageSize terminates
+    expect(calls[0].table).toBe("venue_enrichment_candidates");
+    expect(calls[0].orders).toEqual([["id", { ascending: true }]]);
+  });
+
+  it("a candidate located beyond the first API page is still returned", async () => {
+    const filler = Array.from({ length: 1000 }, (_, i) => row({ id: `filler-${i}` }));
+    const target = row({ id: "page2-candidate", field: "capacity" });
+    const all = [...filler, target];
+    const fakeClient = {
+      from: () => makeChain((state) => {
+        const [from, to] = state.range;
+        return { data: all.slice(from, to + 1), error: null };
+      }),
+    };
+
+    const result = await fetchAllCandidates(fakeClient);
+
+    expect(result.length).toBe(1001);
+    expect(result.find((c) => c.id === "page2-candidate")).toBeTruthy();
+  });
+
+  it("throws rather than silently returning partial data when a later page fails", async () => {
+    const all = Array.from({ length: 1200 }, (_, i) => row({ id: `c${i}` }));
+    let call = 0;
+    const fakeClient = {
+      from: () => makeChain(() => {
+        call++;
+        if (call === 1) return { data: all.slice(0, 1000), error: null };
+        return { data: null, error: { message: "page 2 failed" } };
+      }),
+    };
+
+    await expect(fetchAllCandidates(fakeClient)).rejects.toThrow("page 2 failed");
+  });
+
+  it("makes only SELECT-shaped calls -- no insert/update/delete/upsert method is ever invoked on the fake client", async () => {
+    const all = Array.from({ length: 5 }, (_, i) => row({ id: `c${i}` }));
+    const fakeClient = {
+      from: () => {
+        const chain = makeChain((state) => {
+          const [from, to] = state.range;
+          return { data: all.slice(from, to + 1), error: null };
+        });
+        for (const method of ["insert", "update", "delete", "upsert", "rpc"]) {
+          chain[method] = () => { throw new Error(`${method} must never be called by a read-only loader`); };
+        }
+        return chain;
+      },
+    };
+
+    await expect(fetchAllCandidates(fakeClient)).resolves.toHaveLength(5);
   });
 });
