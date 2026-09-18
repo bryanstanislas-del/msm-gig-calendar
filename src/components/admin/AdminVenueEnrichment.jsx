@@ -1,35 +1,43 @@
 /**
- * AdminVenueEnrichment.jsx — Venue Research, Phase 3B (READ-ONLY)
+ * AdminVenueEnrichment.jsx — Venue Research, Phase 3B (read-only display)
+ * + Phase 3C (individual Approve/Reject)
  *
  * Displays staged venue_enrichment_candidates research suggestions
  * (Phase 1/2) in a BATCH → VENUE → FIELD CANDIDATE hierarchy for admin
- * review. This screen cannot write anything: there is no insert/update/
- * delete/upsert/RPC call anywhere in this file, and no code path reaches
- * public.venues except a plain `.select()`. Approving or rejecting a
- * candidate, and any eventual application of an approved value to
- * public.venues, are separate, not-yet-authorised future phases (see the
- * Phase 3A architecture audit this screen implements).
+ * review, and (Phase 3C) lets an admin individually approve or reject a
+ * single PENDING candidate. Neither action, nor anything else in this
+ * file, ever writes to public.venues -- the only two candidate-status-
+ * changing calls anywhere in this file are approveCandidate()/
+ * rejectCandidate() (venueEnrichmentReview.js), which call the two
+ * admin-gated SECURITY DEFINER RPCs added in
+ * 20260918150000_venue_enrichment_candidates_review.sql. There is no
+ * direct `.update()`/`.delete()` on venue_enrichment_candidates anywhere
+ * in this file, and no Apply-to-venues functionality of any kind.
  *
  * Data-read approach: the full venue_enrichment_candidates table is
  * small (tens of rows across the one pilot batch today) and admin-only
- * (RLS: venue_enrichment_candidates_admin_all), so it's fetched in full
- * once on mount -- the same "load everything, filter/group client-side"
- * approach AdminPanel's own Moderation screen already uses for gigs. Live
- * public.venues rows are fetched only for the venues actually referenced
- * by the currently open batch (venue list) or the single venue currently
- * open (venue review) -- never a full venues table scan.
+ * (RLS: venue_enrichment_candidates_admin_select/_admin_insert -- see the
+ * Phase 3C migration for why the old single admin-FOR-ALL policy was
+ * split and narrowed), so it's fetched in full once on mount -- the same
+ * "load everything, filter/group client-side" approach AdminPanel's own
+ * Moderation screen already uses for gigs. Live public.venues rows are
+ * fetched only for the venues actually referenced by the currently open
+ * batch (venue list) or the single venue currently open (venue review)
+ * -- never a full venues table scan.
  */
 
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../supabaseClient';
 import {
   ACCENTS, AdminPage, AdminHeader, SystemNotice,
-  AdminCard, FormSection, HelpText, Pill, SmallActionButton, EmptyState,
+  AdminCard, FormSection, HelpText, Pill, SmallActionButton, PrimaryButton,
+  ActionsRow, EmptyState,
 } from './adminUI';
 import {
   groupCandidatesByBatch, groupCandidatesByVenue, attachVenueInfo,
   splitProposedAndSkipped, isGeneratedCandidate, isStaleCandidate,
   getStatusLabel, isValidHttpUrl, fetchAllCandidates,
+  isReviewableCandidate, isStaleConflictOutcome, approveCandidate, rejectCandidate,
 } from '../../venueEnrichment/venueEnrichmentReview.js';
 
 const ACCENT = ACCENTS.festivals; // cyan -- not yet used by any other admin panel, keeps this screen visually distinct from the commercial (amber) and editorial (green) panels
@@ -119,16 +127,69 @@ function SourceLine({ candidate }) {
   );
 }
 
+function StaleConflictBanner({ existingValue, liveValue }) {
+  return (
+    <div style={{
+      marginTop: 14, padding: '12px 16px', borderRadius: 8, fontSize: 12.5, lineHeight: 1.6,
+      background: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.45)', color: '#fbbf24',
+    }}>
+      <strong>⚠ THE LIVE VENUE DATA HAS CHANGED SINCE THIS RESEARCH WAS CREATED.</strong>
+      <div style={{ marginTop: 4 }}>THIS SUGGESTION WAS NOT APPROVED.</div>
+      <div style={{ marginTop: 6, color: '#fde68a' }}>
+        At research time: <em>{existingValue == null || existingValue === '' ? '— not set —' : existingValue}</em>
+        {' · '}Live now: <em>{liveValue == null || liveValue === '' ? '— not set —' : liveValue}</em>
+      </div>
+    </div>
+  );
+}
+
 function ProposedCandidateCard({ candidate, liveVenue }) {
+  // reviewResult holds the RPC's own returned outcome after a successful
+  // Approve/Reject call this session -- e.g. { outcome:'approved',
+  // status:'approved', reviewed_at:'...' } or { outcome:'stale_conflict',
+  // existing_value, live_value }. Purely local/per-card: the database is
+  // always the real source of truth (candidate.status/.reviewed_at from
+  // the last fetch), this just reflects a just-made decision immediately
+  // without a full re-fetch of the batch -- exactly the same "reflect
+  // success state immediately" pattern AdminPromoSlots.jsx's per-slot
+  // save already uses.
+  const [reviewResult, setReviewResult] = useState(null);
+  const [confirming, setConfirming] = useState(null); // null | 'approve' | 'reject'
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  const effectiveStatus = reviewResult?.status || candidate.status;
+  const effectiveReviewedAt = reviewResult?.reviewed_at || candidate.reviewed_at;
+  const reviewable = isReviewableCandidate({ status: effectiveStatus });
+
   const liveValue = liveVenue ? liveVenue[candidate.field] : undefined;
   const stale = isStaleCandidate(candidate.existing_value, liveValue);
   const generated = isGeneratedCandidate(candidate);
+
+  // Prevents double submission structurally, not just via a disabled
+  // prop: a second call while `saving` is already true is simply not
+  // issued at all, mirroring AdminPromoSlots.jsx's savingSlot guard.
+  const runReview = async (action) => {
+    if (saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const fn = action === 'approve' ? approveCandidate : rejectCandidate;
+      const result = await fn(supabase, candidate.id);
+      setReviewResult(result);
+      setConfirming(null);
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <AdminCard accent={ACCENT}>
       <FormSection title={fieldLabel(candidate.field)} first>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-          <Pill tone="neutral">{getStatusLabel(candidate.status)}</Pill>
+          <Pill tone="neutral">{getStatusLabel(effectiveStatus)}</Pill>
           {/* CORRECTION (independent review, PR #41): generated and confidence
               are independent facts about a candidate -- a generated row still
               carries a real confidence tier (e.g. Platform Tavern's HIGH-
@@ -172,9 +233,63 @@ function ProposedCandidateCard({ candidate, liveVenue }) {
           </div>
         </div>
 
-        {stale && <StaleWarning existingValue={candidate.existing_value} liveValue={liveValue} />}
+        {/* The pre-emptive, client-computed warning (Phase 3B) only makes
+            sense before any review attempt -- once a real Approve attempt
+            has server-confirmed staleness, the more specific banner below
+            replaces it rather than showing both. */}
+        {stale && !reviewResult && <StaleWarning existingValue={candidate.existing_value} liveValue={liveValue} />}
+
+        {/* Covers both a stale_conflict just detected THIS session (reviewResult
+            from the RPC's own return value) and one already persisted from an
+            earlier session (candidate.status fetched straight from the DB) --
+            either way the banner explains why no review controls remain. */}
+        {(isStaleConflictOutcome(reviewResult) || (!reviewResult && candidate.status === 'stale_conflict')) && (
+          <StaleConflictBanner
+            existingValue={reviewResult?.existing_value ?? candidate.existing_value}
+            liveValue={reviewResult ? reviewResult.live_value : liveValue}
+          />
+        )}
 
         <SourceLine candidate={candidate} />
+
+        {error && (
+          <div style={{ marginTop: 14 }}>
+            <SystemNotice accent="#f87171">{error}</SystemNotice>
+          </div>
+        )}
+
+        {reviewable && (
+          <ActionsRow>
+            {confirming === 'approve' ? (
+              <>
+                <span style={{ fontSize: 13, color: '#b3b3b3', alignSelf: 'center' }}>Approve this researched value?</span>
+                <PrimaryButton accent={ACCENT} onClick={() => runReview('approve')} disabled={saving}>
+                  {saving ? 'APPROVING…' : 'CONFIRM APPROVE'}
+                </PrimaryButton>
+                <SmallActionButton onClick={() => setConfirming(null)} disabled={saving}>CANCEL</SmallActionButton>
+              </>
+            ) : confirming === 'reject' ? (
+              <>
+                <span style={{ fontSize: 13, color: '#b3b3b3', alignSelf: 'center' }}>Reject this researched value?</span>
+                <SmallActionButton tone="danger" onClick={() => runReview('reject')} disabled={saving}>
+                  {saving ? 'REJECTING…' : 'CONFIRM REJECT'}
+                </SmallActionButton>
+                <SmallActionButton onClick={() => setConfirming(null)} disabled={saving}>CANCEL</SmallActionButton>
+              </>
+            ) : (
+              <>
+                <PrimaryButton accent={ACCENT} onClick={() => setConfirming('approve')} disabled={saving}>APPROVE</PrimaryButton>
+                <SmallActionButton tone="danger" onClick={() => setConfirming('reject')} disabled={saving}>REJECT</SmallActionButton>
+              </>
+            )}
+          </ActionsRow>
+        )}
+
+        {!reviewable && (effectiveStatus === 'approved' || effectiveStatus === 'rejected') && (
+          <div style={{ marginTop: 14, fontSize: 12, color: '#8a8a8a' }}>
+            Reviewed{effectiveReviewedAt ? ` ${fmtDate(effectiveReviewedAt)}` : ''} — this decision is final in Phase 3C.
+          </div>
+        )}
       </FormSection>
     </AdminCard>
   );
