@@ -16,7 +16,14 @@
 
 import { ENRICHMENT_FIELDS } from "./researchExport.js";
 import { isValidHttpUrl } from "../components/PromoSlot.jsx";
-import { fetchAllPages } from "../App.jsx";
+// Independent review (PR #41): imports the neutral src/fetchAllPages.js
+// module, NOT App.jsx -- App.jsx itself imports AdminVenueEnrichment.jsx,
+// which imports this file, so importing fetchAllPages from App.jsx would
+// close a circular dependency (App.jsx -> AdminVenueEnrichment.jsx ->
+// venueEnrichmentReview.js -> App.jsx). fetchAllPages was extracted out of
+// App.jsx into its own dependency-free module specifically to give this
+// file a one-directional import instead.
+import { fetchAllPages } from "../fetchAllPages.js";
 
 // Re-exported under its own name here so AdminVenueEnrichment.jsx has one
 // single import path for every venue-research helper it needs, rather than
