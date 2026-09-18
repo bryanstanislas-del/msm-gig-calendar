@@ -23,6 +23,9 @@ import {
   isAlreadyDecidedOutcome,
   approveCandidate,
   rejectCandidate,
+  isApplicable,
+  applyCandidate,
+  isBlockedClaimedVenueOutcome,
 } from "./venueEnrichmentReview.js";
 
 const row = (overrides = {}) => ({
@@ -447,5 +450,128 @@ describe("approveCandidate / rejectCandidate (Phase 3C RPC wrappers)", () => {
     await approveCandidate(client, "candidate-5");
     await rejectCandidate(client, "candidate-5");
     expect(calls).toEqual(["approve_venue_enrichment_candidate", "reject_venue_enrichment_candidate"]);
+  });
+});
+
+describe("isApplicable (Phase 4B)", () => {
+  it("is applicable only when status is exactly approved", () => {
+    expect(isApplicable(row({ status: "approved" }))).toBe(true);
+  });
+
+  it("is not applicable for pending", () => {
+    expect(isApplicable(row({ status: "pending" }))).toBe(false);
+  });
+
+  it("is not applicable once already applied", () => {
+    expect(isApplicable(row({ status: "applied" }))).toBe(false);
+  });
+
+  it("is not applicable for any other non-approved status", () => {
+    for (const status of ["rejected", "stale_conflict", "skipped_no_source", "skipped_ambiguous"]) {
+      expect(isApplicable(row({ status }))).toBe(false);
+    }
+  });
+
+  it("is not applicable for a missing/undefined candidate", () => {
+    expect(isApplicable(undefined)).toBe(false);
+    expect(isApplicable(null)).toBe(false);
+  });
+});
+
+describe("apply outcome classification (Phase 4B)", () => {
+  it("recognises a blocked_claimed_venue outcome", () => {
+    expect(isBlockedClaimedVenueOutcome({ outcome: "blocked_claimed_venue" })).toBe(true);
+    expect(isBlockedClaimedVenueOutcome({ outcome: "applied" })).toBe(false);
+    expect(isBlockedClaimedVenueOutcome(null)).toBe(false);
+  });
+
+  it("a stale_conflict outcome from Apply is still recognised by the shared Phase 3C classifier", () => {
+    // apply_venue_enrichment_candidate returns the exact same
+    // { outcome: 'stale_conflict', ... } shape approve_venue_enrichment_
+    // candidate already does -- isStaleConflictOutcome (Phase 3C) is
+    // reused as-is for the apply-time case, no second classifier needed.
+    expect(isStaleConflictOutcome({ outcome: "stale_conflict" })).toBe(true);
+  });
+
+  it("an already-applied retry is still recognised by the shared Phase 3C classifier", () => {
+    expect(isAlreadyDecidedOutcome({ outcome: "already_in_requested_state" })).toBe(true);
+  });
+});
+
+describe("applyCandidate (Phase 4B RPC wrapper)", () => {
+  function fakeRpcClient(responder) {
+    const calls = [];
+    return {
+      calls,
+      rpc: (fnName, args) => {
+        calls.push({ fnName, args });
+        return Promise.resolve(responder(fnName, args));
+      },
+    };
+  }
+
+  it("calls ONLY apply_venue_enrichment_candidate, with exactly the candidate id and nothing else", async () => {
+    const client = fakeRpcClient(() => ({
+      data: { outcome: "applied", candidate_id: "candidate-1", venue_id: "venue-1", field: "phone", applied_value: "01202 399922", status: "applied" },
+      error: null,
+    }));
+    const result = await applyCandidate(client, "candidate-1");
+    expect(client.calls).toEqual([
+      { fnName: "apply_venue_enrichment_candidate", args: { p_candidate_id: "candidate-1" } },
+    ]);
+    expect(result).toEqual({
+      outcome: "applied", candidate_id: "candidate-1", venue_id: "venue-1", field: "phone", applied_value: "01202 399922", status: "applied",
+    });
+  });
+
+  it("never sends field, venue_id, or suggested_value -- only the candidate id", async () => {
+    const client = fakeRpcClient(() => ({ data: {}, error: null }));
+    await applyCandidate(client, "candidate-2");
+    expect(Object.keys(client.calls[0].args)).toEqual(["p_candidate_id"]);
+  });
+
+  it("surfaces the RPC's own error rather than swallowing it", async () => {
+    const client = fakeRpcClient(() => ({ data: null, error: { message: "Candidate abc123 cannot be applied from status pending (must be approved)" } }));
+    await expect(applyCandidate(client, "candidate-3")).rejects.toThrow("must be approved");
+  });
+
+  it("returns the applied outcome unmodified", async () => {
+    const client = fakeRpcClient(() => ({ data: { outcome: "applied", status: "applied" }, error: null }));
+    await expect(applyCandidate(client, "candidate-4")).resolves.toEqual({ outcome: "applied", status: "applied" });
+  });
+
+  it("returns the already_in_requested_state outcome unmodified (idempotent retry)", async () => {
+    const client = fakeRpcClient(() => ({ data: { outcome: "already_in_requested_state", status: "applied" }, error: null }));
+    await expect(applyCandidate(client, "candidate-5")).resolves.toEqual({ outcome: "already_in_requested_state", status: "applied" });
+  });
+
+  it("returns the stale_conflict outcome unmodified (apply-time staleness)", async () => {
+    const client = fakeRpcClient(() => ({
+      data: { outcome: "stale_conflict", candidate_id: "candidate-6", field: "phone", existing_value: null, live_value: "01202 000000", status: "stale_conflict" },
+      error: null,
+    }));
+    const result = await applyCandidate(client, "candidate-6");
+    expect(result.outcome).toBe("stale_conflict");
+    expect(result.live_value).toBe("01202 000000");
+  });
+
+  it("returns the blocked_claimed_venue outcome unmodified", async () => {
+    const client = fakeRpcClient(() => ({
+      data: { outcome: "blocked_claimed_venue", candidate_id: "candidate-7", venue_id: "venue-7", field: "phone", status: "approved" },
+      error: null,
+    }));
+    const result = await applyCandidate(client, "candidate-7");
+    expect(result.outcome).toBe("blocked_claimed_venue");
+    expect(result.status).toBe("approved");
+  });
+
+  it("recognises no other Supabase method exists on the wrapper's own call path -- only .rpc() is ever invoked", async () => {
+    const calls = [];
+    const client = {
+      rpc: (fnName) => { calls.push(fnName); return Promise.resolve({ data: { outcome: "applied" }, error: null }); },
+      from: () => { throw new Error(".from() must never be called by applyCandidate -- there is no fallback direct table update"); },
+    };
+    await applyCandidate(client, "candidate-8");
+    expect(calls).toEqual(["apply_venue_enrichment_candidate"]);
   });
 });

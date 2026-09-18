@@ -1,18 +1,23 @@
 /**
  * AdminVenueEnrichment.jsx — Venue Research, Phase 3B (read-only display)
- * + Phase 3C (individual Approve/Reject)
+ * + Phase 3C (individual Approve/Reject) + Phase 4B (individual Apply)
  *
  * Displays staged venue_enrichment_candidates research suggestions
  * (Phase 1/2) in a BATCH → VENUE → FIELD CANDIDATE hierarchy for admin
- * review, and (Phase 3C) lets an admin individually approve or reject a
- * single PENDING candidate. Neither action, nor anything else in this
- * file, ever writes to public.venues -- the only two candidate-status-
- * changing calls anywhere in this file are approveCandidate()/
- * rejectCandidate() (venueEnrichmentReview.js), which call the two
+ * review, lets an admin individually approve or reject a single PENDING
+ * candidate (Phase 3C), and lets an admin individually apply a single
+ * APPROVED candidate's suggested value to the one live public.venues field
+ * it targets (Phase 4B). The only three candidate-status-changing calls
+ * anywhere in this file are approveCandidate()/rejectCandidate()/
+ * applyCandidate() (venueEnrichmentReview.js), which call the three
  * admin-gated SECURITY DEFINER RPCs added in
- * 20260918150000_venue_enrichment_candidates_review.sql. There is no
- * direct `.update()`/`.delete()` on venue_enrichment_candidates anywhere
- * in this file, and no Apply-to-venues functionality of any kind.
+ * 20260918150000_venue_enrichment_candidates_review.sql and
+ * 20260918170000_venue_enrichment_candidate_apply.sql respectively. There
+ * is no direct `.update()`/`.delete()` on venue_enrichment_candidates OR
+ * public.venues anywhere in this file -- applyCandidate() is the only
+ * write path to public.venues this file can reach, and it only ever calls
+ * the RPC (candidate id only, no field/value/venue_id parameter). There is
+ * no bulk/"Apply All"/automatic Apply anywhere in this file.
  *
  * Data-read approach: the full venue_enrichment_candidates table is
  * small (tens of rows across the one pilot batch today) and admin-only
@@ -38,6 +43,7 @@ import {
   splitProposedAndSkipped, isGeneratedCandidate, isStaleCandidate,
   getStatusLabel, isValidHttpUrl, fetchAllCandidates,
   isReviewableCandidate, isStaleConflictOutcome, approveCandidate, rejectCandidate,
+  isApplicable, applyCandidate, isBlockedClaimedVenueOutcome,
 } from '../../venueEnrichment/venueEnrichmentReview.js';
 
 const ACCENT = ACCENTS.festivals; // cyan -- not yet used by any other admin panel, keeps this screen visually distinct from the commercial (amber) and editorial (green) panels
@@ -62,11 +68,12 @@ const CONFIDENCE_TONE = { HIGH: 'positive', MEDIUM: 'warning', LOW: 'negative' }
 function ReadOnlyNotice() {
   return (
     <SystemNotice accent={ACCENT}>
-      <strong>RESEARCH REVIEW — READ ONLY.</strong> These are staged research
-      suggestions from <code>venue_enrichment_candidates</code>. Nothing shown
-      here has been applied to the live venue, and this screen has no
-      capability to change venue or candidate data — approving or rejecting a
-      suggestion is a separate, not-yet-built phase.
+      <strong>RESEARCH REVIEW.</strong> These are staged research suggestions
+      from <code>venue_enrichment_candidates</code>. Approving or rejecting a
+      candidate only records a decision — it never touches the live venue.
+      Applying an approved candidate is the one action on this screen that
+      writes to the live venue, and it only ever writes the single field
+      you explicitly apply, one candidate at a time.
     </SystemNotice>
   );
 }
@@ -143,24 +150,26 @@ function StaleConflictBanner({ existingValue, liveValue }) {
   );
 }
 
-function ProposedCandidateCard({ candidate, liveVenue }) {
-  // reviewResult holds the RPC's own returned outcome after a successful
-  // Approve/Reject call this session -- e.g. { outcome:'approved',
-  // status:'approved', reviewed_at:'...' } or { outcome:'stale_conflict',
-  // existing_value, live_value }. Purely local/per-card: the database is
-  // always the real source of truth (candidate.status/.reviewed_at from
-  // the last fetch), this just reflects a just-made decision immediately
-  // without a full re-fetch of the batch -- exactly the same "reflect
-  // success state immediately" pattern AdminPromoSlots.jsx's per-slot
-  // save already uses.
-  const [reviewResult, setReviewResult] = useState(null);
-  const [confirming, setConfirming] = useState(null); // null | 'approve' | 'reject'
+function ProposedCandidateCard({ candidate, liveVenue, onApplied }) {
+  // actionResult holds the RPC's own returned outcome after a successful
+  // Approve/Reject/Apply call this session -- e.g. { outcome:'approved',
+  // status:'approved', reviewed_at:'...' }, { outcome:'stale_conflict',
+  // existing_value, live_value }, { outcome:'applied', applied_value } or
+  // { outcome:'blocked_claimed_venue', status:'approved' }. Purely
+  // local/per-card: the database is always the real source of truth
+  // (candidate.status/.reviewed_at from the last fetch), this just
+  // reflects a just-made decision immediately without a full re-fetch of
+  // the batch -- exactly the same "reflect success state immediately"
+  // pattern AdminPromoSlots.jsx's per-slot save already uses.
+  const [actionResult, setActionResult] = useState(null);
+  const [confirming, setConfirming] = useState(null); // null | 'approve' | 'reject' | 'apply'
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
-  const effectiveStatus = reviewResult?.status || candidate.status;
-  const effectiveReviewedAt = reviewResult?.reviewed_at || candidate.reviewed_at;
+  const effectiveStatus = actionResult?.status || candidate.status;
+  const effectiveReviewedAt = actionResult?.reviewed_at || candidate.reviewed_at;
   const reviewable = isReviewableCandidate({ status: effectiveStatus });
+  const applicable = isApplicable({ status: effectiveStatus });
 
   const liveValue = liveVenue ? liveVenue[candidate.field] : undefined;
   const stale = isStaleCandidate(candidate.existing_value, liveValue);
@@ -169,15 +178,24 @@ function ProposedCandidateCard({ candidate, liveVenue }) {
   // Prevents double submission structurally, not just via a disabled
   // prop: a second call while `saving` is already true is simply not
   // issued at all, mirroring AdminPromoSlots.jsx's savingSlot guard.
-  const runReview = async (action) => {
+  const runAction = async (action) => {
     if (saving) return;
     setSaving(true);
     setError(null);
     try {
-      const fn = action === 'approve' ? approveCandidate : rejectCandidate;
+      const fn = action === 'approve' ? approveCandidate : action === 'reject' ? rejectCandidate : applyCandidate;
       const result = await fn(supabase, candidate.id);
-      setReviewResult(result);
+      setActionResult(result);
       setConfirming(null);
+      // Refresh/reconcile: on a genuine apply success, the "CURRENT
+      // (LIVE)" panel above (sourced from the venue snapshot fetched once
+      // when this venue's review screen mounted) would otherwise keep
+      // showing the pre-apply value until the whole screen is reloaded --
+      // patched here via the parent-owned liveVenue state rather than a
+      // second live re-fetch.
+      if (action === 'apply' && result?.outcome === 'applied') {
+        onApplied?.(candidate.field, result.applied_value);
+      }
     } catch (e) {
       setError(e?.message || String(e));
     } finally {
@@ -234,20 +252,36 @@ function ProposedCandidateCard({ candidate, liveVenue }) {
         </div>
 
         {/* The pre-emptive, client-computed warning (Phase 3B) only makes
-            sense before any review attempt -- once a real Approve attempt
-            has server-confirmed staleness, the more specific banner below
-            replaces it rather than showing both. */}
-        {stale && !reviewResult && <StaleWarning existingValue={candidate.existing_value} liveValue={liveValue} />}
+            sense before any review attempt -- once a real Approve/Apply
+            attempt has server-confirmed staleness, the more specific
+            banner below replaces it rather than showing both. */}
+        {stale && !actionResult && <StaleWarning existingValue={candidate.existing_value} liveValue={liveValue} />}
 
-        {/* Covers both a stale_conflict just detected THIS session (reviewResult
-            from the RPC's own return value) and one already persisted from an
-            earlier session (candidate.status fetched straight from the DB) --
-            either way the banner explains why no review controls remain. */}
-        {(isStaleConflictOutcome(reviewResult) || (!reviewResult && candidate.status === 'stale_conflict')) && (
+        {/* Covers a stale_conflict detected THIS session -- either at
+            approval time or at apply time (Phase 4B), both return the same
+            outcome shape -- and one already persisted from an earlier
+            session (candidate.status fetched straight from the DB). */}
+        {(isStaleConflictOutcome(actionResult) || (!actionResult && candidate.status === 'stale_conflict')) && (
           <StaleConflictBanner
-            existingValue={reviewResult?.existing_value ?? candidate.existing_value}
-            liveValue={reviewResult ? reviewResult.live_value : liveValue}
+            existingValue={actionResult?.existing_value ?? candidate.existing_value}
+            liveValue={actionResult ? actionResult.live_value : liveValue}
           />
+        )}
+
+        {/* Phase 4B: a claimed-venue Apply block is not a failure -- the
+            candidate stays exactly 'approved', nothing was lost, and Apply
+            remains available to retry (e.g. after the venue is
+            unclaimed). */}
+        {isBlockedClaimedVenueOutcome(actionResult) && (
+          <div style={{
+            marginTop: 14, padding: '12px 16px', borderRadius: 8, fontSize: 12.5, lineHeight: 1.6,
+            background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.4)', color: '#fca5a5',
+          }}>
+            <strong>⚠ NOT APPLIED — THIS VENUE IS CLAIMED.</strong>
+            <div style={{ marginTop: 4, color: '#fecaca' }}>
+              Apply is blocked for claimed venues in this phase. No live data was changed and this candidate is still approved.
+            </div>
+          </div>
         )}
 
         <SourceLine candidate={candidate} />
@@ -263,7 +297,7 @@ function ProposedCandidateCard({ candidate, liveVenue }) {
             {confirming === 'approve' ? (
               <>
                 <span style={{ fontSize: 13, color: '#b3b3b3', alignSelf: 'center' }}>Approve this researched value?</span>
-                <PrimaryButton accent={ACCENT} onClick={() => runReview('approve')} disabled={saving}>
+                <PrimaryButton accent={ACCENT} onClick={() => runAction('approve')} disabled={saving}>
                   {saving ? 'APPROVING…' : 'CONFIRM APPROVE'}
                 </PrimaryButton>
                 <SmallActionButton onClick={() => setConfirming(null)} disabled={saving}>CANCEL</SmallActionButton>
@@ -271,7 +305,7 @@ function ProposedCandidateCard({ candidate, liveVenue }) {
             ) : confirming === 'reject' ? (
               <>
                 <span style={{ fontSize: 13, color: '#b3b3b3', alignSelf: 'center' }}>Reject this researched value?</span>
-                <SmallActionButton tone="danger" onClick={() => runReview('reject')} disabled={saving}>
+                <SmallActionButton tone="danger" onClick={() => runAction('reject')} disabled={saving}>
                   {saving ? 'REJECTING…' : 'CONFIRM REJECT'}
                 </SmallActionButton>
                 <SmallActionButton onClick={() => setConfirming(null)} disabled={saving}>CANCEL</SmallActionButton>
@@ -285,9 +319,44 @@ function ProposedCandidateCard({ candidate, liveVenue }) {
           </ActionsRow>
         )}
 
-        {!reviewable && (effectiveStatus === 'approved' || effectiveStatus === 'rejected') && (
+        {!reviewable && effectiveStatus === 'rejected' && (
           <div style={{ marginTop: 14, fontSize: 12, color: '#8a8a8a' }}>
-            Reviewed{effectiveReviewedAt ? ` ${fmtDate(effectiveReviewedAt)}` : ''} — this decision is final in Phase 3C.
+            Reviewed{effectiveReviewedAt ? ` ${fmtDate(effectiveReviewedAt)}` : ''} — this decision is final.
+          </div>
+        )}
+
+        {/* Phase 4B: the only new control this phase adds. Individual Apply
+            only -- no bulk/"Apply All"/automatic Apply anywhere in this
+            file. Same inline two-step confirm pattern as Approve/Reject
+            above, with copy that makes the live-write consequence explicit
+            (this is the first control in the whole feature that touches
+            public.venues). */}
+        {applicable && (
+          <>
+            <div style={{ marginTop: 14, fontSize: 12, color: '#8a8a8a' }}>
+              Reviewed{effectiveReviewedAt ? ` ${fmtDate(effectiveReviewedAt)}` : ''} — approved, not yet applied.
+            </div>
+            <ActionsRow>
+              {confirming === 'apply' ? (
+                <>
+                  <span style={{ fontSize: 13, color: '#b3b3b3', alignSelf: 'center' }}>
+                    Apply this value? This will update the live venue page.
+                  </span>
+                  <PrimaryButton accent={ACCENT} onClick={() => runAction('apply')} disabled={saving}>
+                    {saving ? 'APPLYING…' : 'CONFIRM APPLY'}
+                  </PrimaryButton>
+                  <SmallActionButton onClick={() => setConfirming(null)} disabled={saving}>CANCEL</SmallActionButton>
+                </>
+              ) : (
+                <PrimaryButton accent={ACCENT} onClick={() => setConfirming('apply')} disabled={saving}>APPLY</PrimaryButton>
+              )}
+            </ActionsRow>
+          </>
+        )}
+
+        {effectiveStatus === 'applied' && (
+          <div style={{ marginTop: 14, fontSize: 12, fontWeight: 700, color: '#4ade80' }}>
+            ✓ APPLIED — LIVE ON VENUE{effectiveReviewedAt ? ` · reviewed ${fmtDate(effectiveReviewedAt)}` : ''}
           </div>
         )}
       </FormSection>
@@ -376,7 +445,12 @@ function VenueReviewScreen({ batchId, venueGroup, onBack }) {
           )}
 
           {proposed.map((candidate) => (
-            <ProposedCandidateCard key={candidate.id} candidate={candidate} liveVenue={liveVenue} />
+            <ProposedCandidateCard
+              key={candidate.id}
+              candidate={candidate}
+              liveVenue={liveVenue}
+              onApplied={(field, value) => setLiveVenue((prev) => (prev ? { ...prev, [field]: value } : prev))}
+            />
           ))}
 
           {skipped.length > 0 && (
@@ -453,7 +527,7 @@ function BatchListScreen({ batches, onOpenBatch }) {
     <AdminPage>
       <AdminHeader
         title="VENUE RESEARCH"
-        subtitle="Read-only review of staged venue enrichment research (venue_enrichment_candidates). Nothing here is applied to public.venues."
+        subtitle="Review of staged venue enrichment research (venue_enrichment_candidates). Only an explicit, individual Apply on an approved candidate writes to public.venues."
       />
       <ReadOnlyNotice />
       {batches.length === 0 && <EmptyState>No research batches found.</EmptyState>}

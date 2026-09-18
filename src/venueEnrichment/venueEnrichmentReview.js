@@ -338,3 +338,42 @@ export async function rejectCandidate(supabaseClient, candidateId, reviewNotes) 
   if (error) throw new Error(error.message);
   return data;
 }
+
+// ── Phase 4B: individual Apply ──────────────────────────────────────────
+//
+// A candidate is applicable (eligible for the APPLY control) iff its
+// status is exactly 'approved' -- matches apply_venue_enrichment_
+// candidate's own server-side state-machine guard exactly (20260918170000_
+// venue_enrichment_candidate_apply.sql raises "must be approved" for any
+// other status). Checked here too so the UI never even offers a control
+// the database would reject -- not the security boundary itself (the RPC
+// is), just keeping the UI honest about what it can do.
+export function isApplicable(candidate) {
+  return candidate?.status === "approved";
+}
+
+// The full outcome vocabulary apply_venue_enrichment_candidate can return
+// in its `outcome` field.
+export const APPLY_OUTCOMES = [
+  "applied", "stale_conflict", "blocked_claimed_venue", "already_in_requested_state", "already_reviewed",
+];
+
+export function isBlockedClaimedVenueOutcome(result) {
+  return result?.outcome === "blocked_claimed_venue";
+}
+
+// applyCandidate -- the ONLY function in this module (or anywhere in
+// AdminVenueEnrichment.jsx) capable of writing to public.venues, and it
+// does so indirectly: the browser supplies ONLY the candidate's own id,
+// exactly matching apply_venue_enrichment_candidate's own signature.
+// There is no field/venue_id/suggested_value parameter here for a bug or a
+// compromised caller to mis-supply, and no fallback direct
+// `.from('venues').update(...)` path anywhere in this file or this
+// component -- the RPC is the only route.
+export async function applyCandidate(supabaseClient, candidateId) {
+  const { data, error } = await supabaseClient.rpc("apply_venue_enrichment_candidate", {
+    p_candidate_id: candidateId,
+  });
+  if (error) throw new Error(error.message);
+  return data;
+}
