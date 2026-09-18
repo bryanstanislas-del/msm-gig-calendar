@@ -360,6 +360,24 @@ $function$;
 grant execute on function public.approve_venue_enrichment_candidate(uuid, text) to authenticated;
 grant execute on function public.reject_venue_enrichment_candidate(uuid, text) to authenticated;
 
+-- CORRECTION (independent pre-merge review, PR #42): this project's own
+-- default privileges (`pg_default_acl` for role postgres, object type
+-- function, schema public) grant EXECUTE on every newly created public-
+-- schema function to anon/authenticated/service_role automatically --
+-- confirmed live against every comparable existing admin-review RPC
+-- (reject_claim_request, log_claim_contact, request_more_information,
+-- submit_claim_more_info), none of which retain anon in their actual
+-- grants, meaning each of their own migrations explicitly revoked it.
+-- Without the same revoke here, anon would keep EXECUTE by that same
+-- default -- still unable to actually approve/reject anything (the
+-- function's own is_admin_or_above() check independently blocks that
+-- regardless of who can call it), but inconsistent with this project's
+-- own established convention and with this migration's own stated
+-- intent ("Grant execution only as appropriate for authenticated
+-- callers"). Revoked explicitly rather than relying on the default.
+revoke execute on function public.approve_venue_enrichment_candidate(uuid, text) from anon;
+revoke execute on function public.reject_venue_enrichment_candidate(uuid, text) from anon;
+
 comment on function public.approve_venue_enrichment_candidate(uuid, text) is
   'Phase 3C: admin-only approval of a pending venue_enrichment_candidates row. Never writes to public.venues. Stale live-venue values block approval and transition the row to stale_conflict instead.';
 comment on function public.reject_venue_enrichment_candidate(uuid, text) is
