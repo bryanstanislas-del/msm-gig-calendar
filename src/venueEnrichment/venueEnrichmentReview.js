@@ -1,18 +1,25 @@
-// Venue Data Enrichment, Phase 3B -- pure, side-effect-free helpers for the
-// READ-ONLY Admin Venue Research review screen (AdminVenueEnrichment.jsx).
+// Venue Data Enrichment, Phase 3B/3C -- helpers for the Admin Venue
+// Research review screen (AdminVenueEnrichment.jsx).
 //
-// Nothing in this module reads or writes Supabase/the DB -- it only shapes
-// data the component already fetched (mirrors moderationHelpers.js's own
-// "kept out of App.jsx, free of any Supabase/React import" convention, and
+// Most of this module is pure and side-effect-free -- it only shapes data
+// the component already fetched (mirrors moderationHelpers.js's own "kept
+// out of App.jsx, free of any Supabase/React import" convention, and
 // PromoSlot.jsx's "every piece of logic with a real correctness
 // requirement is factored into a plain, exported, fully-unit-tested
 // function" convention, since this repo still has no jsdom/
 // @testing-library/react dependency to render components in tests).
 //
-// SCOPE: Phase 3B is read-only. There is no function anywhere in this file
-// capable of producing an INSERT/UPDATE/DELETE/UPSERT payload for
-// venue_enrichment_candidates or public.venues -- see this module's own
-// review (Phase 3A architecture audit) for why that boundary matters.
+// Phase 3C adds exactly two thin RPC wrapper functions (approveCandidate/
+// rejectCandidate) at the bottom of this file -- these DO perform I/O
+// (they call the two admin-gated SECURITY DEFINER functions in
+// 20260918150000_venue_enrichment_candidates_review.sql), but that is the
+// ONLY I/O this module performs, and neither wrapper is capable of
+// updating a candidate's status/reviewer fields directly -- there is no
+// `.update()` call anywhere in this file. There is no function anywhere
+// in this file capable of writing to public.venues, or of producing a
+// direct INSERT/UPDATE/DELETE/UPSERT payload for venue_enrichment_
+// candidates outside of calling those two RPCs -- see this module's own
+// review (Phase 3A/3C architecture audits) for why that boundary matters.
 
 import { ENRICHMENT_FIELDS } from "./researchExport.js";
 import { isValidHttpUrl } from "../components/PromoSlot.jsx";
@@ -268,4 +275,66 @@ export function fetchAllCandidates(supabaseClient) {
       .order("id", { ascending: true })
       .range(from, to)
   );
+}
+
+// ── Phase 3C: individual Approve/Reject ─────────────────────────────────
+//
+// A candidate is reviewable (eligible for the Approve/Reject controls) iff
+// its status is exactly 'pending' -- matches the two RPCs' own server-side
+// state-machine guard exactly (20260918150000_venue_enrichment_candidates_
+// review.sql: both functions raise "must be pending" for any other
+// status). Checked here too so the UI never even offers a control the
+// database would reject -- not the security boundary itself (the RPCs
+// are), just keeping the UI honest about what it can do.
+export function isReviewableCandidate(candidate) {
+  return candidate?.status === "pending";
+}
+
+// The full outcome vocabulary either RPC can return in its `outcome`
+// field, exposed here as the one shared source for both the RPC wrappers
+// below and any UI code that needs to branch on a result.
+export const REVIEW_OUTCOMES = [
+  "approved", "rejected", "stale_conflict",
+  "already_in_requested_state", "already_reviewed",
+];
+
+export function isStaleConflictOutcome(result) {
+  return result?.outcome === "stale_conflict";
+}
+
+// True for any outcome that reflects a decision already made (by this
+// call or an earlier/concurrent one) rather than a fresh state change --
+// useful for a UI that wants to treat both the same way (no error toast,
+// just "someone already handled this").
+export function isAlreadyDecidedOutcome(result) {
+  return result?.outcome === "already_in_requested_state" || result?.outcome === "already_reviewed";
+}
+
+// Thin RPC wrappers -- the ONLY two functions in this module (or anywhere
+// in AdminVenueEnrichment.jsx) capable of changing a candidate's status.
+// Deliberately NOT a single generic `reviewCandidate(id, action)` helper:
+// there is no string "action" parameter anywhere in this file for a bug
+// or a compromised caller to mis-supply -- which RPC gets called is
+// chosen by which JS function is called, mirroring the two dedicated
+// SQL functions (approve_venue_enrichment_candidate/reject_venue_
+// enrichment_candidate) exactly. Neither wrapper accepts or forwards a
+// status, reviewer, or any candidate-content field -- only the
+// candidate's own id and an optional free-text note, exactly matching
+// the RPCs' own signatures.
+export async function approveCandidate(supabaseClient, candidateId, reviewNotes) {
+  const { data, error } = await supabaseClient.rpc("approve_venue_enrichment_candidate", {
+    p_candidate_id: candidateId,
+    p_review_notes: reviewNotes || null,
+  });
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+export async function rejectCandidate(supabaseClient, candidateId, reviewNotes) {
+  const { data, error } = await supabaseClient.rpc("reject_venue_enrichment_candidate", {
+    p_candidate_id: candidateId,
+    p_review_notes: reviewNotes || null,
+  });
+  if (error) throw new Error(error.message);
+  return data;
 }

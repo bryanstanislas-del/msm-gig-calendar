@@ -18,6 +18,11 @@ import {
   isValidHttpUrl,
   fieldReviewOrderMatchesEnrichmentFields,
   fetchAllCandidates,
+  isReviewableCandidate,
+  isStaleConflictOutcome,
+  isAlreadyDecidedOutcome,
+  approveCandidate,
+  rejectCandidate,
 } from "./venueEnrichmentReview.js";
 
 const row = (overrides = {}) => ({
@@ -347,5 +352,100 @@ describe("fetchAllCandidates (pagination)", () => {
     };
 
     await expect(fetchAllCandidates(fakeClient)).resolves.toHaveLength(5);
+  });
+});
+
+describe("isReviewableCandidate (Phase 3C)", () => {
+  it("is reviewable only when status is exactly pending", () => {
+    expect(isReviewableCandidate(row({ status: "pending" }))).toBe(true);
+  });
+
+  it("is not reviewable for any other status", () => {
+    for (const status of ["approved", "rejected", "applied", "stale_conflict", "skipped_no_source", "skipped_ambiguous"]) {
+      expect(isReviewableCandidate(row({ status }))).toBe(false);
+    }
+  });
+
+  it("is not reviewable for a missing/undefined candidate", () => {
+    expect(isReviewableCandidate(undefined)).toBe(false);
+    expect(isReviewableCandidate(null)).toBe(false);
+  });
+});
+
+describe("review outcome classification (Phase 3C)", () => {
+  it("recognises a stale_conflict outcome", () => {
+    expect(isStaleConflictOutcome({ outcome: "stale_conflict" })).toBe(true);
+    expect(isStaleConflictOutcome({ outcome: "approved" })).toBe(false);
+    expect(isStaleConflictOutcome(null)).toBe(false);
+  });
+
+  it("recognises an already-decided outcome (idempotent retry or a concurrent decision)", () => {
+    expect(isAlreadyDecidedOutcome({ outcome: "already_in_requested_state" })).toBe(true);
+    expect(isAlreadyDecidedOutcome({ outcome: "already_reviewed" })).toBe(true);
+    expect(isAlreadyDecidedOutcome({ outcome: "approved" })).toBe(false);
+    expect(isAlreadyDecidedOutcome(null)).toBe(false);
+  });
+});
+
+describe("approveCandidate / rejectCandidate (Phase 3C RPC wrappers)", () => {
+  function fakeRpcClient(responder) {
+    const calls = [];
+    return {
+      calls,
+      rpc: (fnName, args) => {
+        calls.push({ fnName, args });
+        return Promise.resolve(responder(fnName, args));
+      },
+    };
+  }
+
+  it("approveCandidate calls ONLY approve_venue_enrichment_candidate, with exactly the candidate id and notes", async () => {
+    const client = fakeRpcClient(() => ({ data: { outcome: "approved", status: "approved" }, error: null }));
+    const result = await approveCandidate(client, "candidate-1", "looks right");
+    expect(client.calls).toEqual([
+      { fnName: "approve_venue_enrichment_candidate", args: { p_candidate_id: "candidate-1", p_review_notes: "looks right" } },
+    ]);
+    expect(result).toEqual({ outcome: "approved", status: "approved" });
+  });
+
+  it("rejectCandidate calls ONLY reject_venue_enrichment_candidate, with exactly the candidate id and notes", async () => {
+    const client = fakeRpcClient(() => ({ data: { outcome: "rejected", status: "rejected" }, error: null }));
+    const result = await rejectCandidate(client, "candidate-2", null);
+    expect(client.calls).toEqual([
+      { fnName: "reject_venue_enrichment_candidate", args: { p_candidate_id: "candidate-2", p_review_notes: null } },
+    ]);
+    expect(result).toEqual({ outcome: "rejected", status: "rejected" });
+  });
+
+  it("approveCandidate never calls the reject RPC, and vice versa", async () => {
+    const client = fakeRpcClient((fnName) => ({ data: { fnName }, error: null }));
+    await approveCandidate(client, "c1");
+    await rejectCandidate(client, "c2");
+    expect(client.calls.map((c) => c.fnName)).toEqual([
+      "approve_venue_enrichment_candidate",
+      "reject_venue_enrichment_candidate",
+    ]);
+  });
+
+  it("surfaces the RPC's own error rather than swallowing it", async () => {
+    const client = fakeRpcClient(() => ({ data: null, error: { message: "Candidate abc123 cannot be approved from status rejected (must be pending)" } }));
+    await expect(approveCandidate(client, "candidate-3")).rejects.toThrow("must be pending");
+  });
+
+  it("passes a null review note when none is given, never undefined or an empty-object default", async () => {
+    const client = fakeRpcClient(() => ({ data: {}, error: null }));
+    await approveCandidate(client, "candidate-4");
+    expect(client.calls[0].args.p_review_notes).toBeNull();
+  });
+
+  it("recognises no other Supabase method exists on the wrapper's own call path -- only .rpc() is ever invoked", async () => {
+    const calls = [];
+    const client = {
+      rpc: (fnName, args) => { calls.push(fnName); return Promise.resolve({ data: { outcome: "approved" }, error: null }); },
+      from: () => { throw new Error(".from() must never be called by the review wrappers"); },
+    };
+    await approveCandidate(client, "candidate-5");
+    await rejectCandidate(client, "candidate-5");
+    expect(calls).toEqual(["approve_venue_enrichment_candidate", "reject_venue_enrichment_candidate"]);
   });
 });
