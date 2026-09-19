@@ -26,6 +26,10 @@ import {
   isApplicable,
   applyCandidate,
   isBlockedClaimedVenueOutcome,
+  isVenueBulkEligible,
+  isBulkBlockedOutcome,
+  approveAllSafeCandidatesForVenue,
+  applyAllApprovedCandidatesForVenue,
 } from "./venueEnrichmentReview.js";
 
 const row = (overrides = {}) => ({
@@ -573,5 +577,127 @@ describe("applyCandidate (Phase 4B RPC wrapper)", () => {
     };
     await applyCandidate(client, "candidate-8");
     expect(calls).toEqual(["apply_venue_enrichment_candidate"]);
+  });
+});
+
+describe("isVenueBulkEligible (Phase 5D)", () => {
+  it("is eligible when unclaimed and not manual-review", () => {
+    expect(isVenueBulkEligible({ claimed: false, venue_enrichment_manual_review: false })).toBe(true);
+  });
+
+  it("is NOT eligible when claimed, regardless of the manual-review flag", () => {
+    expect(isVenueBulkEligible({ claimed: true, venue_enrichment_manual_review: false })).toBe(false);
+  });
+
+  it("is NOT eligible when manual-review is true, regardless of claimed", () => {
+    expect(isVenueBulkEligible({ claimed: false, venue_enrichment_manual_review: true })).toBe(false);
+  });
+
+  it("is NOT eligible when both are true", () => {
+    expect(isVenueBulkEligible({ claimed: true, venue_enrichment_manual_review: true })).toBe(false);
+  });
+
+  it("is NOT eligible for a missing venue (still loading, or not found)", () => {
+    expect(isVenueBulkEligible(null)).toBe(false);
+    expect(isVenueBulkEligible(undefined)).toBe(false);
+  });
+
+  it("treats a missing/undefined claimed or manual-review field as eligible (matches the DB's own not-true defaults), not as a reason to hide bulk controls", () => {
+    expect(isVenueBulkEligible({})).toBe(true);
+  });
+});
+
+describe("isBulkBlockedOutcome (Phase 5D)", () => {
+  it("recognises both blocked outcomes", () => {
+    expect(isBulkBlockedOutcome({ outcome: "blocked_claimed_venue" })).toBe(true);
+    expect(isBulkBlockedOutcome({ outcome: "blocked_manual_review" })).toBe(true);
+  });
+
+  it("does not misclassify a normal completed outcome", () => {
+    expect(isBulkBlockedOutcome({ outcome: "completed" })).toBe(false);
+    expect(isBulkBlockedOutcome(null)).toBe(false);
+  });
+});
+
+describe("approveAllSafeCandidatesForVenue / applyAllApprovedCandidatesForVenue (Phase 5D RPC wrappers)", () => {
+  function fakeRpcClient(responder) {
+    const calls = [];
+    return {
+      calls,
+      rpc: (fnName, args) => {
+        calls.push({ fnName, args });
+        return Promise.resolve(responder(fnName, args));
+      },
+    };
+  }
+
+  it("approveAllSafeCandidatesForVenue calls ONLY approve_all_safe_candidates_for_venue, with exactly the venue id and notes", async () => {
+    const client = fakeRpcClient(() => ({
+      data: { outcome: "completed", venue_id: "venue-1", eligible_count: 2, approved_count: 2, stale_count: 0, skipped_count: 0, candidates: [] },
+      error: null,
+    }));
+    const result = await approveAllSafeCandidatesForVenue(client, "venue-1", "bulk note");
+    expect(client.calls).toEqual([
+      { fnName: "approve_all_safe_candidates_for_venue", args: { p_venue_id: "venue-1", p_review_notes: "bulk note" } },
+    ]);
+    expect(result.approved_count).toBe(2);
+  });
+
+  it("approveAllSafeCandidatesForVenue passes a null review note when none is given", async () => {
+    const client = fakeRpcClient(() => ({ data: {}, error: null }));
+    await approveAllSafeCandidatesForVenue(client, "venue-2");
+    expect(client.calls[0].args.p_review_notes).toBeNull();
+  });
+
+  it("applyAllApprovedCandidatesForVenue calls ONLY apply_all_approved_candidates_for_venue, with exactly the venue id and nothing else", async () => {
+    const client = fakeRpcClient(() => ({
+      data: { outcome: "completed", venue_id: "venue-3", eligible_count: 1, applied_count: 1, stale_count: 0, skipped_count: 0, candidates: [] },
+      error: null,
+    }));
+    const result = await applyAllApprovedCandidatesForVenue(client, "venue-3");
+    expect(client.calls).toEqual([
+      { fnName: "apply_all_approved_candidates_for_venue", args: { p_venue_id: "venue-3" } },
+    ]);
+    expect(Object.keys(client.calls[0].args)).toEqual(["p_venue_id"]);
+    expect(result.applied_count).toBe(1);
+  });
+
+  it("surfaces the RPC's own error rather than swallowing it, for both wrappers", async () => {
+    const approveClient = fakeRpcClient(() => ({ data: null, error: { message: "Venue abc123 not found" } }));
+    await expect(approveAllSafeCandidatesForVenue(approveClient, "missing-venue")).rejects.toThrow("not found");
+
+    const applyClient = fakeRpcClient(() => ({ data: null, error: { message: "Only admins can apply venue enrichment candidates" } }));
+    await expect(applyAllApprovedCandidatesForVenue(applyClient, "venue-4")).rejects.toThrow("Only admins can apply");
+  });
+
+  it("returns a blocked_manual_review result unmodified, without throwing", async () => {
+    const client = fakeRpcClient(() => ({
+      data: { outcome: "blocked_manual_review", venue_id: "venue-5", eligible_count: 0, approved_count: 0, stale_count: 0, skipped_count: 0, candidates: [] },
+      error: null,
+    }));
+    const result = await approveAllSafeCandidatesForVenue(client, "venue-5");
+    expect(result.outcome).toBe("blocked_manual_review");
+    expect(isBulkBlockedOutcome(result)).toBe(true);
+  });
+
+  it("returns a blocked_claimed_venue result unmodified, without throwing", async () => {
+    const client = fakeRpcClient(() => ({
+      data: { outcome: "blocked_claimed_venue", venue_id: "venue-6", eligible_count: 0, applied_count: 0, stale_count: 0, skipped_count: 0, candidates: [] },
+      error: null,
+    }));
+    const result = await applyAllApprovedCandidatesForVenue(client, "venue-6");
+    expect(result.outcome).toBe("blocked_claimed_venue");
+    expect(isBulkBlockedOutcome(result)).toBe(true);
+  });
+
+  it("recognises no other Supabase method exists on either wrapper's own call path -- only .rpc() is ever invoked", async () => {
+    const calls = [];
+    const client = {
+      rpc: (fnName) => { calls.push(fnName); return Promise.resolve({ data: { outcome: "completed" }, error: null }); },
+      from: () => { throw new Error(".from() must never be called by the bulk wrappers -- there is no fallback direct table update"); },
+    };
+    await approveAllSafeCandidatesForVenue(client, "venue-7");
+    await applyAllApprovedCandidatesForVenue(client, "venue-7");
+    expect(calls).toEqual(["approve_all_safe_candidates_for_venue", "apply_all_approved_candidates_for_venue"]);
   });
 });
