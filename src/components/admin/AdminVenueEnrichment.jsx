@@ -44,6 +44,8 @@ import {
   getStatusLabel, isValidHttpUrl, fetchAllCandidates,
   isReviewableCandidate, isStaleConflictOutcome, approveCandidate, rejectCandidate,
   isApplicable, applyCandidate, isBlockedClaimedVenueOutcome,
+  isVenueBulkEligible, isBulkBlockedOutcome, approveAllSafeCandidatesForVenue,
+  applyAllApprovedCandidatesForVenue,
 } from '../../venueEnrichment/venueEnrichmentReview.js';
 
 const ACCENT = ACCENTS.festivals; // cyan -- not yet used by any other admin panel, keeps this screen visually distinct from the commercial (amber) and editorial (green) panels
@@ -93,6 +95,135 @@ function ClaimedVenueWarning() {
         regardless.
       </div>
     </div>
+  );
+}
+
+function ManualReviewBadge() {
+  return (
+    <div style={{
+      marginBottom: 24, padding: '16px 20px', borderRadius: 10,
+      background: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.5)',
+      color: '#fbbf24', fontSize: 14, fontWeight: 700, lineHeight: 1.6,
+    }}>
+      ⚠ MANUAL REVIEW REQUIRED
+      <div style={{ fontSize: 12.5, fontWeight: 500, color: '#fde68a', marginTop: 6 }}>
+        This venue's research was flagged during Phase 5C audit for an
+        identity, duplicate, location, event, or capacity question that
+        needs a human to look at it individually. This is an ENRICHMENT
+        REVIEW SAFETY flag only — it does not mean this venue is invalid,
+        a confirmed duplicate, or unsuitable for publication. Venue-level
+        bulk Approve/Apply are disabled for this venue; every candidate
+        below can still be approved, rejected, or applied individually.
+      </div>
+    </div>
+  );
+}
+
+// Phase 5D: venue-scoped bulk Approve/Apply. Offered ONLY when
+// isVenueBulkEligible(liveVenue) -- unclaimed AND not manual-review-flagged
+// -- but that check is purely a UI convenience (see the JS helper's own
+// comment): both bulk RPCs independently re-enforce claimed/manual-review/
+// admin gating server-side, so this component never needs to duplicate
+// that logic for correctness, only to decide what to show. Does not run
+// anything on mount -- both actions are strictly click + confirm gated,
+// mirroring ProposedCandidateCard's own two-step confirm pattern.
+function BulkVenueControls({ venueId, candidates, onComplete }) {
+  const [confirming, setConfirming] = useState(null); // null | 'approve' | 'apply'
+  const [processing, setProcessing] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+
+  const pendingCount = candidates.filter((c) => c.status === 'pending').length;
+  const approvedCount = candidates.filter((c) => c.status === 'approved').length;
+
+  if (pendingCount === 0 && approvedCount === 0) return null;
+
+  const run = async (action) => {
+    if (processing) return;
+    setProcessing(true);
+    setError(null);
+    try {
+      const fn = action === 'approve' ? approveAllSafeCandidatesForVenue : applyAllApprovedCandidatesForVenue;
+      const data = await fn(supabase, venueId);
+      setResult({ action, ...data });
+      setConfirming(null);
+      await onComplete();
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  return (
+    <AdminCard accent={ACCENT}>
+      <FormSection title="VENUE-LEVEL BULK ACTIONS" first>
+        <HelpText>
+          Scoped to this venue only — never approves or applies candidates
+          for any other venue. Each of these still performs the same
+          stale-value and provenance checks as the individual controls
+          below, one candidate at a time.
+        </HelpText>
+
+        {pendingCount > 0 && (
+          <ActionsRow>
+            {confirming === 'approve' ? (
+              <>
+                <span style={{ fontSize: 13, color: '#b3b3b3', alignSelf: 'center' }}>
+                  Approve all {pendingCount} pending candidate{pendingCount === 1 ? '' : 's'} for this venue?
+                </span>
+                <PrimaryButton accent={ACCENT} onClick={() => run('approve')} disabled={processing}>
+                  {processing ? 'APPROVING…' : 'CONFIRM'}
+                </PrimaryButton>
+                <SmallActionButton onClick={() => setConfirming(null)} disabled={processing}>CANCEL</SmallActionButton>
+              </>
+            ) : (
+              <PrimaryButton accent={ACCENT} onClick={() => setConfirming('approve')} disabled={processing}>
+                APPROVE ALL SAFE FOR THIS VENUE ({pendingCount})
+              </PrimaryButton>
+            )}
+          </ActionsRow>
+        )}
+
+        {approvedCount > 0 && (
+          <ActionsRow>
+            {confirming === 'apply' ? (
+              <>
+                <span style={{ fontSize: 13, color: '#b3b3b3', alignSelf: 'center' }}>
+                  Apply all {approvedCount} approved candidate{approvedCount === 1 ? '' : 's'} for this venue? This will update the live venue page.
+                </span>
+                <PrimaryButton accent={ACCENT} onClick={() => run('apply')} disabled={processing}>
+                  {processing ? 'APPLYING…' : 'CONFIRM'}
+                </PrimaryButton>
+                <SmallActionButton onClick={() => setConfirming(null)} disabled={processing}>CANCEL</SmallActionButton>
+              </>
+            ) : (
+              <PrimaryButton accent={ACCENT} onClick={() => setConfirming('apply')} disabled={processing}>
+                APPLY ALL APPROVED FOR THIS VENUE ({approvedCount})
+              </PrimaryButton>
+            )}
+          </ActionsRow>
+        )}
+
+        {result && !isBulkBlockedOutcome(result) && (
+          <div style={{ marginTop: 14, fontSize: 12.5, color: '#4ade80', fontWeight: 700 }}>
+            ✓ {result.action === 'approve' ? 'APPROVED' : 'APPLIED'} {result.action === 'approve' ? result.approved_count : result.applied_count} of {result.eligible_count} eligible
+            {result.stale_count > 0 && ` · ${result.stale_count} stale (skipped, not overwritten)`}
+            {result.skipped_count > 0 && ` · ${result.skipped_count} already decided`}
+          </div>
+        )}
+        {result && isBulkBlockedOutcome(result) && (
+          <div style={{ marginTop: 14, fontSize: 12.5, color: '#fbbf24', fontWeight: 700 }}>
+            ⚠ NOT PROCESSED — {result.outcome === 'blocked_claimed_venue' ? 'this venue is claimed.' : 'this venue requires manual review.'}
+          </div>
+        )}
+        {error && (
+          <div style={{ marginTop: 14 }}>
+            <SystemNotice accent="#f87171">{error}</SystemNotice>
+          </div>
+        )}
+      </FormSection>
+    </AdminCard>
   );
 }
 
@@ -387,25 +518,52 @@ function SkippedCandidateRow({ candidate }) {
 
 function VenueReviewScreen({ batchId, venueGroup, onBack }) {
   const [liveVenue, setLiveVenue] = useState(null);
+  const [candidates, setCandidates] = useState(venueGroup.candidates);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  useEffect(() => {
-    let cancelled = false;
+  // Shared by the initial mount fetch and Phase 5D's bulk-action
+  // "refresh candidate/live venue state after completion" requirement --
+  // re-reads exactly this venue's own live row and its own candidate rows,
+  // never a broader query. venueGroup.candidates (the prop) stays the
+  // initial snapshot from the one-time batch-wide fetch; `candidates`
+  // state is what actually renders, so a bulk action's effect is visible
+  // immediately without re-fetching the whole batch.
+  const loadVenueAndCandidates = () => {
     setLoading(true);
     setError(null);
-    supabase.from('venues').select('*').eq('id', venueGroup.venue_id)
-      .then(({ data, error: err }) => {
-        if (cancelled) return;
-        if (err) { setError(err.message); return; }
-        setLiveVenue(data?.[0] || null);
+    return Promise.all([
+      supabase.from('venues').select('*').eq('id', venueGroup.venue_id),
+      supabase.from('venue_enrichment_candidates').select('*').eq('venue_id', venueGroup.venue_id),
+    ])
+      .then(([{ data: venueRows, error: venueErr }, { data: candidateRows, error: candidateErr }]) => {
+        if (venueErr) { setError(venueErr.message); return; }
+        if (candidateErr) { setError(candidateErr.message); return; }
+        setLiveVenue(venueRows?.[0] || null);
+        setCandidates(candidateRows || []);
       })
-      .finally(() => { if (!cancelled) setLoading(false); });
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    loadVenueAndCandidates().then(() => {
+      // no-op if unmounted mid-flight -- state setters above already ran,
+      // but avoids a "set state on unmounted component" warning on a slow
+      // network by short-circuiting the loading flag flip only.
+      if (cancelled) return;
+    });
     return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [venueGroup.venue_id]);
 
-  const { proposed, skipped } = useMemo(() => splitProposedAndSkipped(venueGroup.candidates), [venueGroup.candidates]);
-  const retrievedDates = venueGroup.candidates.map((c) => c.retrieved_at).filter(Boolean).sort();
+  const { proposed, skipped } = useMemo(() => splitProposedAndSkipped(candidates), [candidates]);
+  const statusCounts = useMemo(() => {
+    const counts = {};
+    for (const c of candidates) counts[c.status] = (counts[c.status] || 0) + 1;
+    return counts;
+  }, [candidates]);
+  const retrievedDates = candidates.map((c) => c.retrieved_at).filter(Boolean).sort();
 
   return (
     <AdminPage>
@@ -429,16 +587,29 @@ function VenueReviewScreen({ batchId, venueGroup, onBack }) {
               to "Unknown venue"/no claimed badge instead of crashing the
               whole review screen. */}
           {(liveVenue?.claimed || venueGroup.venue?.claimed) && <ClaimedVenueWarning />}
+          {liveVenue?.venue_enrichment_manual_review && <ManualReviewBadge />}
 
           <ReadOnlyNotice />
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 24 }}>
-            {Object.entries(venueGroup.statusCounts).filter(([, n]) => n > 0).map(([status, n]) => (
+            {Object.entries(statusCounts).filter(([, n]) => n > 0).map(([status, n]) => (
               <Pill key={status} tone={status === 'skipped_ambiguous' ? 'warning' : 'neutral'}>
                 {getStatusLabel(status)}: {n}
               </Pill>
             ))}
           </div>
+
+          {/* Phase 5D: venue-scoped bulk Approve/Apply, offered only for a
+              venue that is both unclaimed and not manual-review-flagged.
+              liveVenue is null only while the very first fetch is still in
+              flight (loading is true at that point, so this branch isn't
+              reached) or if the venue's own row failed to load (error is
+              set instead) -- isVenueBulkEligible(null) is false either
+              way, so this fails safe to "no bulk controls" rather than
+              guessing. */}
+          {isVenueBulkEligible(liveVenue) && (
+            <BulkVenueControls venueId={venueGroup.venue_id} candidates={candidates} onComplete={loadVenueAndCandidates} />
+          )}
 
           {proposed.length === 0 && skipped.length === 0 && (
             <EmptyState>No candidates for this venue in this batch.</EmptyState>
@@ -477,7 +648,11 @@ function VenueListScreen({ batchId, allRows, onBack, onOpenVenue }) {
     if (ids.length === 0) { setLoading(false); return; }
     setLoading(true);
     setError(null);
-    supabase.from('venues').select('id,name,city,claimed,claim_status').in('id', ids)
+    // venue_enrichment_manual_review added to this existing per-batch
+    // query (Phase 5D) -- same single query, same row set, one extra
+    // cheap column, so the MANUAL REVIEW badge below is available with no
+    // additional round trip.
+    supabase.from('venues').select('id,name,city,claimed,claim_status,venue_enrichment_manual_review').in('id', ids)
       .then(({ data, error: err }) => {
         if (cancelled) return;
         if (err) { setError(err.message); return; }
@@ -504,6 +679,9 @@ function VenueListScreen({ batchId, allRows, onBack, onOpenVenue }) {
                 {group.venue?.name || 'Unknown venue'}
                 {group.venue?.claimed && (
                   <span style={{ marginLeft: 10, fontSize: 11, fontWeight: 800, color: '#f87171' }}>CLAIMED</span>
+                )}
+                {group.venue?.venue_enrichment_manual_review && (
+                  <span style={{ marginLeft: 10, fontSize: 11, fontWeight: 800, color: '#fbbf24' }}>MANUAL REVIEW REQUIRED</span>
                 )}
               </div>
               <div style={{ fontSize: 13, color: '#8a8a8a', marginTop: 2 }}>{group.venue?.city}</div>

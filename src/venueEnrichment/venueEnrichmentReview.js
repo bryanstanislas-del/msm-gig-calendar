@@ -377,3 +377,50 @@ export async function applyCandidate(supabaseClient, candidateId) {
   if (error) throw new Error(error.message);
   return data;
 }
+
+// ── Phase 5D: venue-level bulk Approve/Apply ────────────────────────────
+//
+// isVenueBulkEligible is a DISPLAY-ONLY gate -- it decides whether this
+// screen even OFFERS the two bulk buttons for a given venue. It is
+// deliberately NOT the security boundary: both bulk RPCs independently
+// re-check claimed/manual-review/admin status server-side (see the Phase
+// 5D migration's own header comment), so a client bypass of this function
+// can only ever reach a bulk RPC call that itself still refuses. This
+// mirrors isReviewableCandidate/isApplicable above, which are the exact
+// same kind of "keep the UI honest, not the security boundary" check for
+// the single-candidate controls.
+export function isVenueBulkEligible(venue) {
+  return !!venue && venue.claimed !== true && venue.venue_enrichment_manual_review !== true;
+}
+
+// The full outcome vocabulary either bulk RPC can return in its `outcome`
+// field -- 'completed' covers the normal path (whether or not any
+// candidate was actually eligible); 'blocked_claimed_venue'/
+// 'blocked_manual_review' mean zero candidates were touched at all.
+export const BULK_OUTCOMES = ["completed", "blocked_claimed_venue", "blocked_manual_review"];
+
+export function isBulkBlockedOutcome(result) {
+  return result?.outcome === "blocked_claimed_venue" || result?.outcome === "blocked_manual_review";
+}
+
+// Thin RPC wrappers, same shape/convention as approveCandidate/
+// rejectCandidate/applyCandidate above -- the caller supplies only the
+// venue id (and, for approve, an optional free-text note); everything
+// about WHICH candidates get processed and how each one is validated
+// happens server-side in the RPC itself.
+export async function approveAllSafeCandidatesForVenue(supabaseClient, venueId, reviewNotes) {
+  const { data, error } = await supabaseClient.rpc("approve_all_safe_candidates_for_venue", {
+    p_venue_id: venueId,
+    p_review_notes: reviewNotes || null,
+  });
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+export async function applyAllApprovedCandidatesForVenue(supabaseClient, venueId) {
+  const { data, error } = await supabaseClient.rpc("apply_all_approved_candidates_for_venue", {
+    p_venue_id: venueId,
+  });
+  if (error) throw new Error(error.message);
+  return data;
+}
