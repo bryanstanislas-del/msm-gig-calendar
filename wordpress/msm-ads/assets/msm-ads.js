@@ -1,5 +1,5 @@
 /*!
- * MSM Ads - homepage adapter (phase 1) v0.2.0
+ * MSM Ads - homepage adapter (phase 1) v0.2.1
  *
  * Every advert on the page (JS mode: swapped in by this script; server
  * mode: rendered by PHP) is managed by a Slot controller that:
@@ -102,14 +102,15 @@
     if (!this.checkExpiry()) return;
     this.armExpiry();
     this.armRefresh();
-    if (this.img && this.img.complete === true) {
+    if (!this.img) { this.end("image_error"); return; }
+    // Always listen for the whole slot lifetime: a cached/PHP-rendered image
+    // that already loaded can still fail later (e.g. the responsive <source>
+    // switches after a viewport change), even after an impression counted.
+    this.img.addEventListener("load", this.onLoad);
+    this.img.addEventListener("error", this.onError);
+    if (this.img.complete === true) {
       // Cached image (or PHP-rendered and already decoded/failed).
       if (imageOk(this.img)) this.handleLoad(); else this.end("image_error");
-    } else if (this.img) {
-      this.img.addEventListener("load", this.onLoad);
-      this.img.addEventListener("error", this.onError);
-    } else {
-      this.end("image_error");
     }
   };
 

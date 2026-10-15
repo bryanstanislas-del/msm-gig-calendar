@@ -1,4 +1,4 @@
-# MSM Ads — WordPress homepage adapter v0.2.0
+# MSM Ads — WordPress homepage adapter v0.2.1
 
 **Not installed anywhere.** Install on a staging WordPress first. The plugin holds no secrets and makes no payments.
 

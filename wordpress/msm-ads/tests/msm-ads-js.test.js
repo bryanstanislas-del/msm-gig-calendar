@@ -376,6 +376,34 @@ describe("server (PHP-rendered) mode", () => {
     expect(e.container.children.map((c) => c.className)).toEqual(["house"]);
     expect(e.pendingTimers()).toBe(0);
   });
+  it("cached image that loaded, counted, then fails later (responsive source change) restores the house advert", async () => {
+    const e = await setup({ server: { attrs: serverAttrs(), img: { complete: true, naturalWidth: 1200 } } });
+    expect(e.img.listeners.error).toHaveLength(1); // listener attached even though already complete
+    e.view(1);
+    await e.advance(1000);
+    expect(e.beacons).toHaveLength(1);
+    e.img.naturalWidth = 0;
+    e.img.fire("error");
+    await e.advance(0);
+    expect(e.container.children.map((c) => c.className)).toEqual(["house"]);
+    expect(e.pendingTimers()).toBe(0);
+    expect(e.img.listeners.error).toHaveLength(0); // cleaned up
+    await e.advance(10 * MIN);
+    expect(e.beacons).toHaveLength(1);
+    expect(e.fetches).toHaveLength(0); // no refresh left running
+  });
+  it("JS mode: image error after the impression counted still restores the house advert", async () => {
+    const e = await setup();
+    await e.loadImage();
+    e.view(1);
+    await e.advance(1000);
+    expect(e.beacons).toHaveLength(1);
+    e.img.naturalWidth = 0;
+    e.img.fire("error");
+    await e.advance(0);
+    expect(e.showingHouse).toBe(true);
+    expect(e.pendingTimers()).toBe(0);
+  });
   it("cached broken image (complete, naturalWidth 0) restores the house advert immediately", async () => {
     const e = await setup({ server: { attrs: serverAttrs(), img: { complete: true, naturalWidth: 0 } } });
     expect(e.container.children.map((c) => c.className)).toEqual(["house"]);

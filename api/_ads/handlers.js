@@ -1,6 +1,6 @@
 // Advertising API request handlers (server only). Each handler receives
 // (req, res, deps) with deps = { cfg, supabase, stripe, now } so tests can
-// inject labelled mocks. Routed by api/ads/[action].js.
+// inject labelled mocks. Routed by api/ads.js (via the /api/ads/:action rewrite in vercel.json).
 //
 // Security rules applied here (and re-enforced in the database):
 //   * No service-role key, Stripe secret or tracking secret ever leaves

@@ -15,7 +15,7 @@ Payment never approves or publishes anything. See [phase1-architecture.md](phase
 | Additive migration (not applied) | `supabase/migrations/20261015120000_ads_platform_phase1.sql` |
 | Manual, guarded rollback | `supabase/rollbacks/20261015120000_ads_platform_phase1_down.sql` |
 | DB tests (local only) | `supabase/tests/ads/*.sql`, `scripts/ads-local-db-test.sh` |
-| Server API (one Vercel function) | `api/ads/[action].js`, `api/_ads/*.js` |
+| Server API (one Vercel function) | `api/ads.js` (reached via the `/api/ads/:action` rewrite in `vercel.json`), `api/_ads/*.js` |
 | Shared rules (browser + server) | `src/ads/*.js` |
 | Advertiser portal / admin UI | `src/components/ads/AdvertiserPortal.jsx`, `src/components/admin/AdminAds.jsx`, small additive edits in `src/App.jsx` |
 | WordPress adapter (not installed) | `wordpress/msm-ads/` (see its `INSTALL.md`) |
@@ -99,14 +99,15 @@ The existing Ready preview is **not** a staging verification. With no overrides 
 
    Then redeploy the preview. Confirm in the browser network tab that the preview calls the **staging** Supabase host.
 3. **Stripe test webhook → preview.** In Stripe **test mode**, add an endpoint `https://<preview-url>/api/ads/webhook` for `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired` and `charge.refunded`. If Vercel Deployment Protection is on for previews, Stripe gets a 401: use a Protection Bypass for Automation secret on the URL or test with `stripe listen --forward-to`, and do not disable protection for production.
-4. **Verify raw-body handling on Vercel** (cannot be proven locally): `stripe listen --forward-to <preview>/api/ads/webhook` then `stripe trigger checkout.session.completed`. Expect `200` with outcome `ignored_unknown_session`, not `400 INVALID_SIGNATURE` / `RAW_BODY_UNAVAILABLE`.
-5. **Run the slice on the preview** as a staging admin. Activate the TEST unit and package, enable portal, checkout and delivery, then work through:
+4. **Verify API routing on the preview** (works with or without the env vars above; check it on the current preview too): open `<preview>/api/ads/delivery?placement=wordpress-home-top` directly. Expect JSON `{"placement":"wordpress-home-top","label":"Advertisement","ads":[]}` while ads are disabled, **not** the Calendar HTML. `/api/ads/<action>` reaches the static function `api/ads.js` only through the explicit `vercel.json` rewrite; a dynamic `api/ads/[action].js` was shadowed by the SPA fallback on the 96cc773 preview. Locally this is covered by `tests/vercelRouting.test.js`, which models the routes from Vercel's own transformer against the real build.
+5. **Verify raw-body handling on Vercel** (cannot be proven locally): `stripe listen --forward-to <preview>/api/ads/webhook` then `stripe trigger checkout.session.completed`. Expect `200` with outcome `ignored_unknown_session`, not `400 INVALID_SIGNATURE` / `RAW_BODY_UNAVAILABLE`.
+6. **Run the slice on the preview** as a staging admin. Activate the TEST unit and package, enable portal, checkout and delivery, then work through:
    - hold → pay with a test card → booking becomes Paid / Under Review (never approved by payment) → upload → approve → `/api/ads/delivery?placement=wordpress-home-top` returns the advert.
    - Pause it, refund it in Stripe (test), and turn off the kill switch, checking delivery empties each time.
    - Download CSV and PDF reports.
-6. **Staging WordPress** (not production) per `wordpress/msm-ads/INSTALL.md`, with `MSM_ADS_API_BASE` = the preview URL. Check house fallback, hard expiry (book a 1-day slot), revocation within the latency below, and impressions only after the image loads.
-7. Only after steps 1–6 pass: mark the PR ready, review, merge. **Merging deploys production code that stays inert**, because production has no ads env vars and the production database has no ads tables or toggles.
-8. Production enablement is a separate, later decision: apply the migration to production, add Production-scoped env vars (Stripe stays test until live mode is built and approved), set up scheduled maintenance (`ad_expire_stale_holds()`, `ad_purge_tracking_state()` every ~15 min; not configured), install the plugin on the live WordPress, and only then switch on toggles.
+7. **Staging WordPress** (not production) per `wordpress/msm-ads/INSTALL.md`, with `MSM_ADS_API_BASE` = the preview URL. Check house fallback, hard expiry (book a 1-day slot), revocation within the latency below, and impressions only after the image loads.
+8. Only after steps 1–7 pass: mark the PR ready, review, merge. **Merging deploys production code that stays inert**, because production has no ads env vars and the production database has no ads tables or toggles.
+9. Production enablement is a separate, later decision: apply the migration to production, add Production-scoped env vars (Stripe stays test until live mode is built and approved), set up scheduled maintenance (`ad_expire_stale_holds()`, `ad_purge_tracking_state()` every ~15 min; not configured), install the plugin on the live WordPress, and only then switch on toggles.
 
 ## Removal latency (how quickly an advert disappears)
 

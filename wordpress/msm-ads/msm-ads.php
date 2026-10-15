@@ -2,7 +2,7 @@
 /**
  * Plugin Name: MSM Ads - homepage adapter (phase 1)
  * Description: Shows APPROVED, paid adverts from the MSM advertising platform in the existing homepage positions, falling back to the existing house adverts. Disabled until MSM_ADS_ENABLED is true.
- * Version: 0.2.0
+ * Version: 0.2.1
  * Requires PHP: 7.4
  * Author: Music Scene Magazine
  *
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('MSM_ADS_VERSION', '0.2.0');
+define('MSM_ADS_VERSION', '0.2.1');
 
 /** Positions that exist on the homepage (only "top" is sold in phase 1). */
 function msm_ads_home_placements()

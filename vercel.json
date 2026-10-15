@@ -10,6 +10,7 @@
     }
   ],
   "rewrites": [
+    { "source": "/api/ads/:action", "destination": "/api/ads?action=:action" },
     { "source": "/api/(.*)",     "destination": "/api/$1" },
     { "source": "/sitemap.xml",  "destination": "/api/sitemap" },
     { "source": "/robots.txt",   "destination": "/api/robots" },
