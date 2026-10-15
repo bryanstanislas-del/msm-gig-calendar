@@ -385,6 +385,29 @@ begin
   perform zz_test.ok(r ->> 'outcome' = 'refunded' and (select status from public.ad_bookings where id = b2) = 'refunded', 'manual refund recorded');
   perform zz_test.ok(not (select requires_refund from public.ad_payments where checkout_session_id = 'cs_test_b2a'), 'refund flag cleared');
 
+  -- Dynamic payment methods: delayed-notification methods stay gated.
+  -- "unpaid" completion never confirms; async failure never confirms; only
+  -- async_payment_succeeded confirms -- and still never approves.
+  perform zz_test.as_service();
+  perform public.ad_record_checkout_session(b3, 'cs_test_b3a', 2000, 'gbp', false, now() + interval '40 minutes');
+  r := public.ad_apply_stripe_event(jsonb_build_object('id', 'evt_b3a_unpaid', 'type', 'checkout.session.completed', 'livemode', false,
+         'session_id', 'cs_test_b3a', 'payment_intent_id', 'pi_test_b3a', 'booking_id', b3, 'payment_status', 'unpaid', 'amount_total', 2000, 'currency', 'gbp'));
+  perform zz_test.ok(r ->> 'outcome' = 'awaiting_async_payment', 'unpaid (delayed method) completion recorded as awaiting');
+  perform zz_test.ok((select status from public.ad_bookings where id = b3) = 'held'
+                     and (select status from public.ad_payments where checkout_session_id = 'cs_test_b3a') = 'open', 'unpaid completion does not confirm or mark paid');
+  r := public.ad_apply_stripe_event(jsonb_build_object('id', 'evt_b3a_failed', 'type', 'checkout.session.async_payment_failed', 'livemode', false,
+         'session_id', 'cs_test_b3a', 'booking_id', b3));
+  perform zz_test.ok(r ->> 'outcome' = 'session_closed' and (select status from public.ad_payments where checkout_session_id = 'cs_test_b3a') = 'failed'
+                     and (select status from public.ad_bookings where id = b3) = 'held', 'async failure closes payment, booking stays unpaid');
+  perform public.ad_record_checkout_session(b3, 'cs_test_b3b', 2000, 'gbp', false, now() + interval '40 minutes');
+  r := public.ad_apply_stripe_event(jsonb_build_object('id', 'evt_b3b_unpaid', 'type', 'checkout.session.completed', 'livemode', false,
+         'session_id', 'cs_test_b3b', 'payment_intent_id', 'pi_test_b3b', 'booking_id', b3, 'payment_status', 'unpaid', 'amount_total', 2000, 'currency', 'gbp'));
+  r := public.ad_apply_stripe_event(jsonb_build_object('id', 'evt_b3b_succeeded', 'type', 'checkout.session.async_payment_succeeded', 'livemode', false,
+         'session_id', 'cs_test_b3b', 'payment_intent_id', 'pi_test_b3b', 'booking_id', b3, 'payment_status', 'paid', 'amount_total', 2000, 'currency', 'gbp'));
+  perform zz_test.ok(r ->> 'outcome' = 'confirmed' and (select status from public.ad_bookings where id = b3) = 'confirmed', 'async success confirms');
+  perform zz_test.ok((select approved_version_id is null and review_status = 'awaiting_creative' from public.ad_campaigns where booking_id = b3), 'async success never approves');
+  perform zz_test.as_postgres();
+
   -- Late payment where capacity is still free -> confirmed_late.
   perform zz_test.as_user(u_other);
   b4 := public.ad_create_hold(p_daily, today + 20, today + 20);

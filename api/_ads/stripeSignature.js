@@ -1,11 +1,15 @@
 // Stripe webhook signature verification (server only).
 //
-// Implements Stripe's documented scheme without the SDK: the
-// `Stripe-Signature` header carries `t=<unix>` and one or more `v1=<hex>`
-// entries; v1 = HMAC-SHA256(endpointSecret, `${t}.${rawBody}`). Verification
-// MUST use the exact raw request bytes -- a re-serialised JSON body will not
-// match. Timestamps outside the tolerance window are rejected (replay guard).
-import { createHmac, timingSafeEqual } from "node:crypto";
+// Verification is delegated to the official SDK (Stripe.webhooks.
+// constructEvent -- static, needs no API key) on the EXACT raw request
+// bytes; a re-serialised JSON body will not match. Stricter checks kept in
+// front of it: the endpoint secret must be configured (whsec_), only raw
+// Buffer/string bodies are accepted, and future-dated signatures beyond the
+// tolerance are rejected (the SDK only rejects timestamps that are too old).
+// computeSignature() mirrors Stripe's documented v1 scheme
+// (HMAC-SHA256(secret, `${t}.${body}`)) and is used by tests to sign fixtures.
+import { createHmac } from "node:crypto";
+import Stripe from "stripe";
 
 export const DEFAULT_TOLERANCE_SECONDS = 300;
 
@@ -38,18 +42,15 @@ export function verifyStripeEvent(rawBody, header, secret, { nowSeconds = Math.f
   if (rawBody == null || (typeof rawBody !== "string" && !Buffer.isBuffer(rawBody))) throw new SignatureError("raw body unavailable");
   const { t, v1 } = parseSignatureHeader(header);
   if (t == null || v1.length === 0) throw new SignatureError("malformed signature header");
-  if (Math.abs(nowSeconds - t) > tolerance) throw new SignatureError("timestamp outside tolerance");
-  const expected = Buffer.from(computeSignature(secret, t, rawBody), "hex");
-  const match = v1.some((sig) => {
-    const given = Buffer.from(sig, "hex");
-    return given.length === expected.length && timingSafeEqual(given, expected);
-  });
-  if (!match) throw new SignatureError("signature mismatch");
-  const text = Buffer.isBuffer(rawBody) ? rawBody.toString("utf8") : rawBody;
+  if (t - nowSeconds > tolerance) throw new SignatureError("timestamp outside tolerance");
   try {
-    return JSON.parse(text);
-  } catch {
-    throw new SignatureError("body is not JSON");
+    return Stripe.webhooks.constructEvent(rawBody, header, secret, tolerance, undefined, nowSeconds * 1000);
+  } catch (err) {
+    if (err?.type === "StripeSignatureVerificationError") {
+      throw new SignatureError(/tolerance/i.test(err.message) ? "timestamp outside tolerance" : "signature mismatch");
+    }
+    if (err instanceof SyntaxError) throw new SignatureError("body is not JSON");
+    throw err;
   }
 }
 

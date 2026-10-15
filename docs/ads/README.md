@@ -46,7 +46,7 @@ Server-only (Vercel project env, **never** `VITE_*`, never in WordPress or the b
 | `SUPABASE_URL` | Supabase project URL | not set for ads |
 | `SUPABASE_ANON_KEY` | public anon key (user-scoped RPCs) | not set for ads |
 | `SUPABASE_SERVICE_ROLE_KEY` | narrow service RPCs + private storage reads | **missing, must be added by MSM** |
-| `STRIPE_SECRET_KEY` | Stripe **test** secret (`sk_test_…`/`rk_test_…`); any other key is refused | **missing** |
+| `STRIPE_SECRET_KEY` | Stripe **test** key; prefer a **restricted** `rk_test_…` key (see "Stripe integration"); any non-test key is refused | **missing** |
 | `STRIPE_WEBHOOK_SECRET` | `whsec_…` for the test webhook endpoint | **missing** |
 | `ADS_TRACKING_SECRET` | ≥32 random chars; signs serve tokens and keys visitor hashes | **missing** |
 | `ADS_PUBLIC_BASE_URL` | defaults to `https://calendar.musicscenemagazine.co.uk` | optional |
@@ -98,7 +98,7 @@ The existing Ready preview is **not** a staging verification. With no overrides 
    - `STRIPE_SECRET_KEY` (test key), `STRIPE_WEBHOOK_SECRET`, `ADS_TRACKING_SECRET`, `ADS_API_ENABLED=true`, and `ADS_PUBLIC_BASE_URL` = the preview URL.
 
    Then redeploy the preview. Confirm in the browser network tab that the preview calls the **staging** Supabase host.
-3. **Stripe test webhook → preview.** In Stripe **test mode**, add an endpoint `https://<preview-url>/api/ads/webhook` for `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired` and `charge.refunded`. If Vercel Deployment Protection is on for previews, Stripe gets a 401: use a Protection Bypass for Automation secret on the URL or test with `stripe listen --forward-to`, and do not disable protection for production.
+3. **Stripe test webhook → preview.** In Stripe **test mode**, add an endpoint `https://<preview-url>/api/ads/webhook`, created with API version **`2026-09-30.endive`** (the version the code pins), for `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired` and `charge.refunded`. If Vercel Deployment Protection is on for previews, Stripe gets a 401: use a Protection Bypass for Automation secret on the URL or test with `stripe listen --forward-to`, and do not disable protection for production.
 4. **Verify API routing on the preview** (works with or without the env vars above; check it on the current preview too): open `<preview>/api/ads/delivery?placement=wordpress-home-top` directly. Expect JSON `{"placement":"wordpress-home-top","label":"Advertisement","ads":[]}` while ads are disabled, **not** the Calendar HTML. `/api/ads/<action>` reaches the static function `api/ads.js` only through the explicit `vercel.json` rewrite; a dynamic `api/ads/[action].js` was shadowed by the SPA fallback on the 96cc773 preview. Locally this is covered by `tests/vercelRouting.test.js`, which models the routes from Vercel's own transformer against the real build.
 5. **Verify raw-body handling on Vercel** (cannot be proven locally): `stripe listen --forward-to <preview>/api/ads/webhook` then `stripe trigger checkout.session.completed`. Expect `200` with outcome `ignored_unknown_session`, not `400 INVALID_SIGNATURE` / `RAW_BODY_UNAVAILABLE`.
 6. **Run the slice on the preview** as a staging admin. Activate the TEST unit and package, enable portal, checkout and delivery, then work through:
@@ -124,6 +124,17 @@ Hidden tabs do not poll. A CDN in front of WordPress must not cache `/wp-json/ms
 - Fastest: turn `ads_delivery_enabled` off (adverts disappear within the removal latency above), or set `ADS_API_ENABLED` to anything but `true`, or set `MSM_ADS_ENABLED` to false in WordPress / deactivate the plugin.
 - Code: revert the PR. The Calendar does not depend on any ads object.
 - Database: export the ads tables, empty the `ad-creatives-private` bucket via the dashboard or API, then run `supabase/rollbacks/20261015120000_ads_platform_phase1_down.sql`. It refuses to run while any non-test booking, live payment or stored file exists.
+
+## Stripe integration (TEST mode only)
+
+- **SDK**: official `stripe` 23.0.0 (exact). One lazily created client instance per key, `new Stripe(key, { apiVersion: '2026-09-30.endive', maxNetworkRetries: 2, timeout: 15000 })`, in `api/_ads/stripeClient.js`. There is no global API key and no hand-built REST calls.
+- **API version pinned to `2026-09-30.endive`**, the version stripe-node 23.0.0 targets (a test asserts they match). Create the webhook endpoint with the same version so event payloads keep the shape `normaliseStripeEvent()` reads.
+- **Dynamic payment methods**: there is no `payment_method_types` allowlist; that parameter was removed from Checkout Session creation in `2026-09-30.endive`. Stripe offers whatever is enabled under Dashboard → Settings → Payment methods for GBP.
+- **Delayed payment methods stay gated.** A completion with `payment_status = "unpaid"` is recorded as `awaiting_async_payment` and confirms nothing. Only a verified `paid` completion or `checkout.session.async_payment_succeeded` confirms, and nothing ever approves. If a delayed payment lands after the hold has lapsed and the dates were resold, the booking becomes `payment_conflict` (refund required). For a 60-minute hold, consider leaving only instant methods (cards and wallets) enabled in the test account's Dashboard.
+- **`integration_identifier = "msm-ads-phase1"`** is set on every Checkout Session, so this integration's sessions can be identified. It is optional in the API.
+- **Idempotency**: SDK `idempotencyKey = msm-ads-checkout-<booking_id>`; SDK retries reuse it. Line items use inline `price_data`/`product_data` from the immutable server snapshot. The server re-checks the returned session (`cs_test_`, `livemode=false`, amount, currency, checkout URL) before recording it.
+- **Webhook verification** uses `Stripe.webhooks.constructEvent` (no API key needed) on the raw body, plus stricter local checks: a `whsec_` secret is required, raw bytes only, and future-dated signatures are rejected.
+- **Minimum restricted TEST key permission**: **Checkout Sessions → Write**. That is the only API call the code makes (`checkout.sessions.create`). There are no retrieve/list calls, refunds are issued manually in the Dashboard, and webhook verification uses the signing secret rather than the API key. Inline `price_data`/`product_data` creates no saved Products or Prices. **Unverified:** if Stripe answers a permission error naming another resource on the first real test call, grant that resource and record it here.
 
 ## Unresolved commercial decisions (MSM to decide)
 

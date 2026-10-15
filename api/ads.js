@@ -45,7 +45,7 @@ export default async function handler(req, res) {
   const deps = {
     cfg,
     supabase: createSupabaseRest(cfg, fetch),
-    stripe: createStripeClient(cfg, fetch),
+    stripe: createStripeClient(cfg),
     now: () => new Date(),
   };
   try {
