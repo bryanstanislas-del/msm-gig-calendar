@@ -127,5 +127,26 @@ check(msm_ads_home_slot('top') !== '', 'served before end');
 foreach ($GLOBALS['transients'] as $k => $v) { $v[0]['serve_until'] = time() - 1; $GLOBALS['transients'][$k] = $v; }
 check(msm_ads_home_slot('top') === '', 'cached ad hidden after end instant');
 
+// 9. Server-mode markup carries what msm-ads.js needs for hard expiry/revocation.
+reset_state(api_response(array(good_ad())));
+$html = msm_ads_home_slot('top');
+check(strpos($html, 'data-msm-ad-creative="11111111-2222-4333-8444-555555555555"') !== false, 'creative id attribute');
+check(preg_match('/data-msm-ad-until="(\d{4}-\d\d-\d\dT[^"]+)"/', $html, $m) === 1 && abs(strtotime($m[1]) - (time() + 3600)) <= 2, 'serve_until attribute (ISO 8601)');
+
+// 10. msm_ads_home_slot_with_fallback keeps the house advert restorable.
+$house = '<a href="https://www.example.test/subscribe"><img src="house.png" alt="House"></a>';
+reset_state(api_response(array(good_ad())));
+$html = msm_ads_home_slot_with_fallback('top', $house);
+check(strpos($html, '<div class="msm-ad"') === 0, 'advert first');
+check(substr($html, -strlen('<template class="msm-ad-house">' . $house . '</template>')) === '<template class="msm-ad-house">' . $house . '</template>', 'house advert preserved in template');
+reset_state(api_response(array()));
+check(msm_ads_home_slot_with_fallback('top', $house) === $house, 'no advert -> house markup unchanged');
+reset_state(new WP_Error());
+check(msm_ads_home_slot_with_fallback('top', $house) === $house, 'API failure -> house markup unchanged');
+check(msm_ads_home_slot_with_fallback('sidebar', $house) === $house, 'unknown position -> house markup');
+$GLOBALS['filters']['msm_home_ad_delivery'][] = function ($v) { return false; };
+check(msm_ads_home_slot_with_fallback('top', $house) === '', 'filter false -> slot hidden (contract)');
+array_pop($GLOBALS['filters']['msm_home_ad_delivery']);
+
 echo $failures ? "$failures of $count checks FAILED\n" : "msm-ads WordPress adapter: all $count checks passed\n";
 exit($failures ? 1 : 0);

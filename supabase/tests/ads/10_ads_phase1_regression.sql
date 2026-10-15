@@ -60,6 +60,7 @@ declare
   q jsonb; r jsonb; n integer; t text; ok boolean;
   ck1 text := repeat('a', 64); ck2 text := repeat('b', 64);
   dsk jsonb; mob jsonb;
+  b5 uuid; c5 uuid; v5 uuid; v6 uuid;
 begin
   -- ── Fixtures ────────────────────────────────────────────────────────
   insert into auth.users (email) values ('zztest-owner@example.invalid') returning id into u_owner;
@@ -412,15 +413,75 @@ begin
   r := public.ad_apply_stripe_event(jsonb_build_object('id', 'evt_b1_double_refund', 'type', 'charge.refunded', 'livemode', false,
          'payment_intent_id', 'pi_test_b1b', 'amount_refunded', 3000));
   perform zz_test.ok((select status from public.ad_bookings where id = b1) = 'confirmed', 'refunding the duplicate keeps the original booking live');
+  perform zz_test.ok(r ->> 'outcome' = 'non_funding_payment_refunded', 'duplicate refund recognised as non-funding');
+  perform zz_test.as_postgres();
+  perform zz_test.ok(ads_internal.booking_funded(b1), 'booking still funded by payment A after duplicate B refunded');
+  perform zz_test.ok((select funding_payment_id from public.ad_bookings where id = b1) = (select id from public.ad_payments where checkout_session_id = 'cs_test_b1a'), 'funding payment is A, never the duplicate');
+
+  -- Replacement artwork can still be approved after the duplicate refund.
+  t := adv_owner || '/' || c1 || '/' || gen_random_uuid() || '-desktop.png';
+  insert into storage.objects (bucket_id, name, owner) values ('ad-creatives-private', t, u_owner);
+  perform zz_test.as_service();
+  v4 := public.ad_submit_creative_version(u_owner, c1, dsk || jsonb_build_object('path', t), mob, 'https://example.org/v4', 'ZZTEST v4');
+  perform zz_test.as_user(u_admin);
+  perform public.ad_admin_review(v4, 'approve');
+  perform zz_test.ok((public.ad_public_delivery('wordpress-home-top') -> 0 ->> 'creative_version_id')::uuid = v4, 'replacement approved + delivered after duplicate refund');
+
+  -- Original (first) approval also succeeds after a refunded duplicate.
+  perform zz_test.as_user(u_owner);
+  b5 := public.ad_create_hold(p_daily, today + 25, today + 25);
+  select id into c5 from public.ad_campaigns where booking_id = b5;
+  perform zz_test.as_service();
+  perform public.ad_record_checkout_session(b5, 'cs_test_b5a', 1000, 'gbp', false, now() + interval '40 minutes');
+  perform public.ad_record_checkout_session(b5, 'cs_test_b5b', 1000, 'gbp', false, now() + interval '40 minutes');
+  r := public.ad_apply_stripe_event(jsonb_build_object('id', 'evt_b5a', 'type', 'checkout.session.completed', 'livemode', false,
+         'session_id', 'cs_test_b5a', 'payment_intent_id', 'pi_test_b5a', 'booking_id', b5, 'payment_status', 'paid', 'amount_total', 1000, 'currency', 'gbp'));
+  perform zz_test.ok(r ->> 'outcome' = 'confirmed', 'b5 payment A confirms');
+  r := public.ad_apply_stripe_event(jsonb_build_object('id', 'evt_b5b', 'type', 'checkout.session.completed', 'livemode', false,
+         'session_id', 'cs_test_b5b', 'payment_intent_id', 'pi_test_b5b', 'booking_id', b5, 'payment_status', 'paid', 'amount_total', 1000, 'currency', 'gbp'));
+  perform zz_test.ok(r ->> 'outcome' = 'unexpected_payment_refund_required', 'b5 duplicate B flagged');
+  r := public.ad_apply_stripe_event(jsonb_build_object('id', 'evt_b5b_refund', 'type', 'charge.refunded', 'livemode', false,
+         'payment_intent_id', 'pi_test_b5b', 'amount_refunded', 1000));
+  perform zz_test.as_postgres();
+  t := adv_owner || '/' || c5 || '/' || gen_random_uuid() || '-desktop.png';
+  insert into storage.objects (bucket_id, name, owner) values ('ad-creatives-private', t, u_owner);
+  dsk := dsk || jsonb_build_object('path', t);
+  t := adv_owner || '/' || c5 || '/' || gen_random_uuid() || '-mobile.png';
+  insert into storage.objects (bucket_id, name, owner) values ('ad-creatives-private', t, u_owner);
+  perform zz_test.as_service();
+  v5 := public.ad_submit_creative_version(u_owner, c5, dsk, mob || jsonb_build_object('path', t), 'https://example.org/b5', 'ZZTEST b5');
+  perform zz_test.as_user(u_admin);
+  perform public.ad_admin_review(v5, 'approve');
+  perform zz_test.ok((select approved_version_id from public.ad_campaigns where id = c5) = v5, 'original approval succeeds after duplicate refunded');
+  -- Refunding the FUNDING payment of b5 closes it; nothing further can be approved.
+  perform zz_test.as_service();
+  r := public.ad_apply_stripe_event(jsonb_build_object('id', 'evt_b5a_refund', 'type', 'charge.refunded', 'livemode', false,
+         'payment_intent_id', 'pi_test_b5a', 'amount_refunded', 1000));
+  perform zz_test.as_postgres();
+  perform zz_test.ok(r ->> 'outcome' = 'refunded' and (select status from public.ad_bookings where id = b5) = 'refunded' and not ads_internal.booking_funded(b5), 'funding refund closes b5');
+  perform zz_test.as_service();
+  perform zz_test.expect_error(format($q$select public.ad_submit_creative_version(%L, %L, %L, %L, 'https://example.org/b5x', 'ZZTEST b5x')$q$, u_owner, c5, dsk, mob || jsonb_build_object('path', t)), '%ADS_INVALID_STATE%', 'no new artwork on refunded booking');
 
   -- Partial refund flags, full refund stops delivery.
   r := public.ad_apply_stripe_event(jsonb_build_object('id', 'evt_b1_partial', 'type', 'charge.refunded', 'livemode', false,
          'payment_intent_id', 'pi_test_b1', 'amount_refunded', 1000));
-  perform zz_test.ok(r ->> 'outcome' = 'partially_refunded_flagged' and (select status from public.ad_bookings where id = b1) = 'confirmed', 'partial refund flagged only');
+  perform zz_test.ok(r ->> 'outcome' = 'partially_refunded_flagged' and (select status from public.ad_bookings where id = b1) = 'confirmed', 'partial refund flagged');
+  perform zz_test.ok(public.ad_public_delivery('wordpress-home-top') = '[]'::jsonb, 'partial refund of FUNDING payment stops delivery (no unfunded delivery)');
+  perform zz_test.as_postgres();
+  t := adv_owner || '/' || c1 || '/' || gen_random_uuid() || '-desktop.png';
+  insert into storage.objects (bucket_id, name, owner) values ('ad-creatives-private', t, u_owner);
+  perform zz_test.as_service();
+  v6 := public.ad_submit_creative_version(u_owner, c1, dsk || jsonb_build_object('path', t), mob, 'https://example.org/v6', 'ZZTEST v6');
+  perform zz_test.as_user(u_admin);
+  perform zz_test.expect_error(format($q$select public.ad_admin_review(%L, 'approve')$q$, v6), '%ADS_NOT_FUNDED%', 'partially refunded funding payment blocks approval');
+  perform zz_test.as_service();
   r := public.ad_apply_stripe_event(jsonb_build_object('id', 'evt_b1_full', 'type', 'charge.refunded', 'livemode', false,
          'payment_intent_id', 'pi_test_b1', 'amount_refunded', 3000));
   perform zz_test.ok((select status from public.ad_bookings where id = b1) = 'refunded', 'full refund closes booking');
   perform zz_test.ok(public.ad_public_delivery('wordpress-home-top') = '[]'::jsonb, 'refunded booking stops delivering');
+  perform zz_test.as_user(u_admin);
+  perform zz_test.expect_error(format($q$select public.ad_admin_review(%L, 'approve')$q$, v6), '%ADS_NOT_PAID%', 'refunded booking cannot be approved');
+  perform zz_test.as_service();
   r := public.ad_apply_stripe_event(jsonb_build_object('id', 'evt_b1_completed_after_refund', 'type', 'checkout.session.async_payment_succeeded', 'livemode', false,
          'session_id', 'cs_test_b1a', 'booking_id', b1, 'payment_status', 'paid', 'amount_total', 3000, 'currency', 'gbp'));
   perform zz_test.ok(r ->> 'outcome' = 'ignored_already_refunded' and (select status from public.ad_bookings where id = b1) = 'refunded', 'success after refund cannot resurrect');

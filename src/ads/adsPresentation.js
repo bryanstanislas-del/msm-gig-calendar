@@ -71,6 +71,7 @@ const ERROR_TEXT = {
   ADS_INVALID_DESTINATION: "The destination link is not allowed.",
   ADS_INVALID_CREATIVE: "The artwork could not be accepted.",
   ADS_PRODUCT_UNAVAILABLE: "That package is not available.",
+  ADS_NOT_FUNDED: "The payment for this booking has been refunded, so it cannot be approved or shown.",
 };
 
 export function friendlyAdsError(err) {

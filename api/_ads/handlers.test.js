@@ -238,12 +238,44 @@ describe("impression beacon", () => {
   });
 });
 
+describe("creative image endpoint lifetime is capped at the booked end", () => {
+  const path = `${ADV}/${B}/${V}-desktop.png`;
+  it("caps signed URL TTL and redirect cache at serve_until", async () => {
+    const signedUrl = vi.fn(async () => "https://LOCAL-MOCK.supabase.invalid/signed");
+    const serveUntil = new Date(NOW.getTime() + 120 * 1000).toISOString();
+    const r = res();
+    await handlers.creative(req({ query: { v: V, p: "wordpress-home-top", s: "desktop" } }), r,
+      deps({ supabase: MOCK_supabase({ signedUrl, rpcAsService: vi.fn(async () => ({ eligible: true, desktop_object_path: path, serve_until: serveUntil })) }) }));
+    expect(r.statusCode).toBe(302);
+    expect(signedUrl).toHaveBeenCalledWith("ad-creatives-private", path, 120);
+    expect(r.headers["cache-control"]).toBe("public, max-age=120, s-maxage=120");
+  });
+  it("uses the 600s/300s ceilings when the booking ends later, and 404s once ended", async () => {
+    const signedUrl = vi.fn(async () => "https://LOCAL-MOCK.supabase.invalid/signed");
+    let r = res();
+    await handlers.creative(req({ query: { v: V, p: "wordpress-home-top", s: "desktop" } }), r,
+      deps({ supabase: MOCK_supabase({ signedUrl, rpcAsService: vi.fn(async () => ({ eligible: true, desktop_object_path: path, serve_until: "2026-10-30T00:00:00Z" })) }) }));
+    expect(signedUrl).toHaveBeenCalledWith("ad-creatives-private", path, 600);
+    expect(r.headers["cache-control"]).toBe("public, max-age=300, s-maxage=300");
+    r = res();
+    await handlers.creative(req({ query: { v: V, p: "wordpress-home-top", s: "desktop" } }), r,
+      deps({ supabase: MOCK_supabase({ signedUrl, rpcAsService: vi.fn(async () => ({ eligible: true, desktop_object_path: path, serve_until: NOW.toISOString() })) }) }));
+    expect(r.statusCode).toBe(404);
+  });
+  it("delivery cache never extends past the soonest serve_until", async () => {
+    const row = { creative_version_id: V, alt_text: "x", desktop: { width: 1200, height: 250 }, mobile: { width: 600, height: 250 }, serve_until: new Date(NOW.getTime() + 20e3).toISOString() };
+    const r = res();
+    await handlers.delivery(req({ query: { placement: "wordpress-home-top" } }), r, deps({ supabase: MOCK_supabase({ rpcAsAnon: vi.fn(async () => [row]) }) }));
+    expect(r.headers["cache-control"]).toBe("public, max-age=20, s-maxage=20");
+  });
+});
+
 describe("creative image endpoint (approved + live only)", () => {
   it("redirects to a short-lived signed URL only when eligible", async () => {
     const path = `${ADV}/${B}/${V}-desktop.png`;
     let r = res();
     await handlers.creative(req({ query: { v: V, p: "wordpress-home-top", s: "desktop" } }), r,
-      deps({ supabase: MOCK_supabase({ rpcAsService: vi.fn(async () => ({ eligible: true, desktop_object_path: path })) }) }));
+      deps({ supabase: MOCK_supabase({ rpcAsService: vi.fn(async () => ({ eligible: true, desktop_object_path: path, serve_until: "2026-10-30T00:00:00Z" })) }) }));
     expect(r.statusCode).toBe(302);
     r = res();
     await handlers.creative(req({ query: { v: V, p: "wordpress-home-top", s: "desktop" } }), r,

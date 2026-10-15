@@ -52,21 +52,34 @@ Signature verified on the raw body (`api/_ads/stripeSignature.js`, 300 s toleran
 | same, already paid / already refunded | no-op (`already_applied` / `ignored_already_refunded`) |
 | unknown session but known booking | payment row recreated at the **snapshot** amount |
 | `checkout.session.expired` / `async_payment_failed` | only an `open` payment changes (an expiry arriving after payment is ignored) |
-| `charge.refunded` | updates the refunded amount; full refund → booking `refunded` unless another valid payment exists; partial → flagged. If the payment intent is not known yet, it raises `ADS_RETRY_LATER` (rolled back, HTTP 503) so Stripe retries after the completion event |
+| `charge.refunded` | updates the refunded amount. Only a refund of the booking's **funding payment** changes the booking: full → `refunded`, partial → still `confirmed` but unfunded, so delivery and approval stop pending an MSM decision. Refunding a duplicate or conflicting payment never touches a funded booking (`non_funding_payment_refunded`). An unfunded booking (`payment_conflict`/`held`/`expired`/`cancelled`) closes as `refunded`. If the payment intent is not known yet, it raises `ADS_RETRY_LATER` (rolled back, HTTP 503) so Stripe retries after the completion event |
 
 The return URL is never treated as evidence. The portal only re-reads the booking.
+
+### Funding invariant
+
+`ad_bookings.funding_payment_id` is set exactly once: to the payment whose verified event confirmed the booking. Duplicate, late-conflicting or post-cancellation payments are flagged `requires_refund` and never become the funding payment.
+
+`ads_internal.booking_funded(booking)` is true iff the booking is `confirmed` **and** its funding payment is `paid`, has `amount_refunded_pence = 0`, and matches the snapshot amount and currency. The **same function** gates public delivery (`eligible_creatives`) and approval (`ad_admin_review`). So:
+
+- refunding duplicate payment B leaves A funding the booking, and original or replacement approval still succeeds;
+- any refund of A (partial or full) immediately stops delivery and blocks approval;
+- no code path can deliver or approve an unfunded booking.
+
+Regression: `supabase/tests/ads/10_ads_phase1_regression.sql` (booking b5 and the b1 replacement/partial-refund sequence).
 
 ## Review and approval
 
 - A creative version is created only when **complete** (both images verified server-side for magic bytes, exact pixel size and ≤1 MB, plus an https destination and alt text). Content columns are immutable by trigger.
 - The **review clock** starts once per version, at the moment "booking confirmed (fully paid)" and "complete version" first coincide. Deadline: `review_due_before` = 00:00 Europe/London after the **next UK working day** (weekends and the `ad_uk_holidays` table skipped; DST-aware). The portal shows "Under review — decision due by end of Mon 19 Oct 2026 (UK time)".
-- `ad_admin_review(version, approve|reject, reason)` is admin-only and bound to one version id. It only accepts the latest submitted version of a **paid, unrefunded** booking. A rejection needs a reason (shown to the advertiser).
+- `ad_admin_review(version, approve|reject, reason)` is admin-only and bound to one version id. It only accepts the latest submitted version of a **funded** booking (see the funding invariant). A refunded duplicate payment does not block it. A rejection needs a reason (shown to the advertiser).
 - Replacement: a new version goes back to review. The previously approved version keeps serving until the replacement is approved, then becomes `superseded`. A pending unreviewed version is superseded by a newer submission.
 
 ## Delivery, clicks and impressions
 
-- `ad_public_delivery(placement)` (anon) returns only `creative_version_id`, placement, alt text, dimensions and `serve_until` for: delivery toggle on, unit active, booking `confirmed`, campaign not paused, approved version, and now inside `[00:00 London start_date, 00:00 London end_date+1)`. There is no advertiser, booking, billing, contact or note data.
-- `/api/ads/delivery` adds image URLs on the calendar domain and an HMAC **serve token** binding (version, placement, issued-at). Cache: 60 s.
+- `ad_public_delivery(placement)` (anon) returns only `creative_version_id`, placement, alt text, dimensions and `serve_until` for: delivery toggle on, unit active, booking `confirmed` and **funded**, campaign not paused, approved version, and now inside `[00:00 London start_date, 00:00 London end_date+1)`. There is no advertiser, booking, billing, contact or note data.
+- `/api/ads/delivery` adds image URLs on the calendar domain and an HMAC **serve token** binding (version, placement, issued-at). Cache: 60 s, capped at the soonest `serve_until`. `/api/ads/creative` signs image URLs for ≤ 600 s and caches its redirect ≤ 300 s, both capped at `serve_until`.
+- The WordPress script enforces hard expiry, resume rechecks and a bounded 2-minute eligibility refresh in both rendering modes (see "Removal latency" in README.md).
 - `/api/ads/click?t=` verifies the token, then redirects only to the destination stored on a version that is, or was, approved. Anything else goes to `ADS_CLICK_FALLBACK_URL`. Clicks count only while eligible, non-bot and deduped. There is no open redirect: the destination never comes from the request.
 - `/api/ads/impression` (sendBeacon, text/plain) counts only a valid, ≤24 h token for a currently eligible version at that placement. The browser script sends it after **≥50% of pixels are visible for ≥1 continuous second while the tab is visible**, at most once per page view.
 - Privacy: the visitor key = HMAC(secret, London day | IP | UA), held for 30 minutes for dedupe, plus hourly rate buckets (120 events/hour). Only daily aggregates are kept. No IPs, cookies or personal data are stored.

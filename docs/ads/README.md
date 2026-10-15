@@ -71,27 +71,56 @@ PGHOST=/path/to/socket-or-localhost PGPORT=5432 PGUSER=postgres npm run test:ads
 
 `test:ads-db` builds throwaway databases from `supabase/tests/ads/00_local_supabase_shim.sql`. That shim is a minimal stand-in for the Supabase roles, `auth`, `storage`, `profiles`, `user_roles` and `is_admin_or_above()`, copied from read-only introspection of the live definitions. The script then applies the ads migration and runs:
 
-- **RLS/state machine suite** (160+ checks): owner, other user, anon, admin (role- and profile-based) permissions; self-pay/approve/price/date tampering; shared inventory; webhook duplicates, mode mismatch, tampered amounts, out-of-order expiry/refund, late payment with and without capacity, double payment, partial/full refunds; payment-vs-approval separation; creative immutability and replacement review; draft/rejected never served or redirected; pause/kill switch; booked-date window; metrics dedupe, eligibility, rate limit; report clamping; DST and UK holiday deadlines.
+- **RLS/state machine suite** (175+ checks, including the funding invariant): owner, other user, anon, admin (role- and profile-based) permissions; self-pay/approve/price/date tampering; shared inventory; webhook duplicates, mode mismatch, tampered amounts, out-of-order expiry/refund, late payment with and without capacity, double payment, partial/full refunds; payment-vs-approval separation; creative immutability and replacement review; draft/rejected never served or redirected; pause/kill switch; booked-date window; metrics dedupe, eligibility, rate limit; report clamping; DST and UK holiday deadlines.
 - **Concurrency**: 12 parallel sessions race for one capacity-1 day across both packages (exactly 1 succeeds), and 8 parallel deliveries of the same webhook (exactly 1 applies).
 - **End-to-end**: real API handlers + real DB functions (only Stripe session creation and storage bytes are mocked).
 - **Rollback**: guard refuses with files present, then removes every ads object and nothing else.
 
-Results at time of writing: 985 Vitest tests passed (the DB end-to-end file is skipped without a local DB), 38 PHP checks passed, all DB suites passed, and `vite build` succeeded.
+See the PR description for the latest exact test counts.
 
-## Deploy steps (for MSM, later; staging first)
+## Verification and deploy order (isolated preview BEFORE merge)
 
-1. Review and merge this PR. Merging deploys only code that is inert without env vars and toggles.
-2. On a **staging/branch** Supabase database first, apply `20261015120000_ads_platform_phase1.sql` (e.g. `supabase db push` or the SQL editor). Check that `ad-creatives-private` exists and is private.
-3. In Stripe **test mode**, create a webhook endpoint `https://<calendar host>/api/ads/webhook` for `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired` and `charge.refunded`.
-4. Set the server env vars above on the Vercel **preview** environment and redeploy.
-5. **Verify raw-body handling on Vercel**: `stripe listen --forward-to <preview>/api/ads/webhook` then `stripe trigger checkout.session.completed`. Expect `200` with outcome `ignored_unknown_session` (or an outcome for a real test booking), **not** `400 INVALID_SIGNATURE` / `RAW_BODY_UNAVAILABLE`. This is the one integration point that cannot be proven locally.
-6. As an admin, open **ADS**: activate the TEST unit and a TEST package, then enable the portal, checkout and delivery toggles. Book, pay with a Stripe test card, upload, approve, and confirm delivery JSON at `/api/ads/delivery?placement=wordpress-home-top`.
-7. Install the WordPress plugin on a **staging** WordPress per `wordpress/msm-ads/INSTALL.md`.
-8. Schedule maintenance (not configured in this PR): `ad_expire_stale_holds()` (holds also expire lazily on each new reservation) and `ad_purge_tracking_state()` every ~15 min. Use pg_cron, or a Vercel cron calling a small authenticated endpoint (not built).
+**Two different Vercel deployments exist and they must not be confused:**
+
+| | Automatic PR preview (already "Ready" for PR #46) | Production |
+|---|---|---|
+| Created by | Vercel, on every push to this branch | merging to `main` |
+| URL | a `*.vercel.app` preview URL | `calendar.musicscenemagazine.co.uk` |
+| Uses | **Preview**-scoped env vars | **Production**-scoped env vars |
+| Today | ads code is present but inert: no ads env vars, so `/api/ads/*` reports disabled and delivery is empty. **Caution:** the browser still uses the hard-coded *production* Supabase project unless the preview overrides below are set | unchanged until merge |
+
+The existing Ready preview is **not** a staging verification. With no overrides it reads the production database (where no ads tables exist), so the ADVERTISE tab simply stays hidden. Everything below happens **before merge**, on isolated resources:
+
+1. **Isolated database.** Create a Supabase **branch or separate staging project**, never production. Apply `20261015120000_ads_platform_phase1.sql` there only, and check that `ad-creatives-private` exists and is private.
+2. **Preview-scoped env vars only.** In Vercel, add variables scoped to **Preview** and, where possible, to this git branch only (branch-specific preview variables), **never Production**:
+   - `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY`: the **staging** project (build-time; makes the preview browser use staging instead of production).
+   - `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`: staging.
+   - `STRIPE_SECRET_KEY` (test key), `STRIPE_WEBHOOK_SECRET`, `ADS_TRACKING_SECRET`, `ADS_API_ENABLED=true`, and `ADS_PUBLIC_BASE_URL` = the preview URL.
+
+   Then redeploy the preview. Confirm in the browser network tab that the preview calls the **staging** Supabase host.
+3. **Stripe test webhook → preview.** In Stripe **test mode**, add an endpoint `https://<preview-url>/api/ads/webhook` for `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired` and `charge.refunded`. If Vercel Deployment Protection is on for previews, Stripe gets a 401: use a Protection Bypass for Automation secret on the URL or test with `stripe listen --forward-to`, and do not disable protection for production.
+4. **Verify raw-body handling on Vercel** (cannot be proven locally): `stripe listen --forward-to <preview>/api/ads/webhook` then `stripe trigger checkout.session.completed`. Expect `200` with outcome `ignored_unknown_session`, not `400 INVALID_SIGNATURE` / `RAW_BODY_UNAVAILABLE`.
+5. **Run the slice on the preview** as a staging admin. Activate the TEST unit and package, enable portal, checkout and delivery, then work through:
+   - hold → pay with a test card → booking becomes Paid / Under Review (never approved by payment) → upload → approve → `/api/ads/delivery?placement=wordpress-home-top` returns the advert.
+   - Pause it, refund it in Stripe (test), and turn off the kill switch, checking delivery empties each time.
+   - Download CSV and PDF reports.
+6. **Staging WordPress** (not production) per `wordpress/msm-ads/INSTALL.md`, with `MSM_ADS_API_BASE` = the preview URL. Check house fallback, hard expiry (book a 1-day slot), revocation within the latency below, and impressions only after the image loads.
+7. Only after steps 1–6 pass: mark the PR ready, review, merge. **Merging deploys production code that stays inert**, because production has no ads env vars and the production database has no ads tables or toggles.
+8. Production enablement is a separate, later decision: apply the migration to production, add Production-scoped env vars (Stripe stays test until live mode is built and approved), set up scheduled maintenance (`ad_expire_stale_holds()`, `ad_purge_tracking_state()` every ~15 min; not configured), install the plugin on the live WordPress, and only then switch on toggles.
+
+## Removal latency (how quickly an advert disappears)
+
+| Event | JS mode (default) | Server mode (PHP-rendered) with JS | Server mode, visitor without JS |
+|---|---|---|---|
+| Booked end (`serve_until`) | at the exact instant in a visible tab; immediately on resume for a suspended/background tab (`visibilitychange`/`pageshow`) | same | up to the page-cache TTL (keep ≤ 5 min) |
+| Pause, refund, kill switch, rejected replacement | ≤ ~4 min while visible: 120 s refresh + 60 s WordPress transient + 60 s delivery edge cache; on resume, rechecked at once if the last check is > 30 s old | same | up to the page-cache TTL + 2 min |
+| Image URL validity | signed URL ≤ 600 s and never past the booked end; its redirect is cached ≤ 300 s (also capped at the booked end) | same | same |
+
+Hidden tabs do not poll. A CDN in front of WordPress must not cache `/wp-json/msm-ads/v1/slot` beyond 60 s, otherwise add its TTL to the figures above. A refresh that fails on the network keeps the advert (it was eligible) but never past its hard expiry. Impressions are only counted while the advert is eligible: the server re-checks eligibility on every beacon, so a revoked advert cannot be counted even during this window.
 
 ## Rollback
 
-- Fastest: turn `ads_delivery_enabled` off (adverts disappear and house ads return within the 60 s cache), or set `ADS_API_ENABLED` to anything but `true`, or set `MSM_ADS_ENABLED` to false in WordPress / deactivate the plugin.
+- Fastest: turn `ads_delivery_enabled` off (adverts disappear within the removal latency above), or set `ADS_API_ENABLED` to anything but `true`, or set `MSM_ADS_ENABLED` to false in WordPress / deactivate the plugin.
 - Code: revert the PR. The Calendar does not depend on any ads object.
 - Database: export the ads tables, empty the `ad-creatives-private` bucket via the dashboard or API, then run `supabase/rollbacks/20261015120000_ads_platform_phase1_down.sql`. It refuses to run while any non-test booking, live payment or stored file exists.
 

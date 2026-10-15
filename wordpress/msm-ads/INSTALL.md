@@ -1,4 +1,4 @@
-# MSM Ads — WordPress homepage adapter v0.1.0
+# MSM Ads — WordPress homepage adapter v0.2.0
 
 **Not installed anywhere.** Install on a staging WordPress first. The plugin holds no secrets and makes no payments.
 
@@ -24,20 +24,22 @@
 
 **JS mode (default, no theme changes):** on the front page the script asks the same-origin route `/wp-json/msm-ads/v1/slot?placement=…` (a server-side proxy with cache and validation) and swaps the house advert only if a valid advert exists. If the artwork fails to load, the house advert is restored.
 
-**Server mode (optional theme edit):** wrap each existing house advert:
+**Server mode (optional theme edit):** render the house advert into a buffer and let the plugin decide. The house markup is kept in a `<template>` so the script can restore it at expiry, on revocation or if the image fails:
 
 ```php
 <div id="msm-wp-home-top">
-  <?php $msm_ad = function_exists('msm_ads_home_slot') ? msm_ads_home_slot('top') : ''; ?>
-  <?php if ($msm_ad !== '') { echo $msm_ad; } else { ?>
+  <?php ob_start(); ?>
     <!-- existing house advert markup, unchanged -->
-  <?php } ?>
+  <?php $msm_house = ob_get_clean(); ?>
+  <?php echo function_exists('msm_ads_home_slot_with_fallback') ? msm_ads_home_slot_with_fallback('top', $msm_house) : $msm_house; ?>
 </div>
 ```
 
-`msm_ads_home_slot()` applies the filter `msm_home_ad_delivery` with `['placement' => 'wordpress-home-top', 'position' => 'top']`. It mirrors the article contract: `false` hides, `''` keeps the house advert, any other string is advert HTML. An earlier filter's decision is never overridden.
+It applies the filter `msm_home_ad_delivery` with `['placement' => 'wordpress-home-top', 'position' => 'top']` and mirrors the article contract: `false` hides the slot, `''` keeps the house advert, any other string is advert HTML (an earlier filter's decision is never overridden). `msm_ads_home_slot($position)` (advert HTML or `''`) still exists, but it gives the script nothing to restore, so at expiry the slot would just empty.
 
-**Page caching:** in server mode a full-page cache can keep showing an advert after its booked end (the delivery and impression checks stop counting it, but the cached HTML still shows it). Keep the homepage cache TTL ≤ 5 minutes, or use JS mode, which fetches fresh data on every page view.
+**Lifecycle (both modes, needs JS):** every advert is removed at its exact booked end (and immediately when a backgrounded or suspended tab resumes). Eligibility is re-checked through the WordPress proxy at most every 2 minutes while the tab is visible, so pause, refund, kill switch and rejected replacements take effect. Image failure restores the house advert. Impressions count only after the real image has loaded and ≥50% of it has been visible for ≥1 continuous second, re-verified at that boundary. See "Removal latency" in `docs/ads/README.md`.
+
+**Page caching:** visitors without JavaScript keep whatever the cached HTML contains until the page cache expires. Keep the homepage page-cache TTL ≤ 5 minutes in server mode, and do not let a CDN cache `/wp-json/msm-ads/v1/slot` beyond 60 s.
 
 ## Article contract (unchanged)
 

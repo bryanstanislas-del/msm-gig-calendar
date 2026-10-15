@@ -218,11 +218,25 @@ export async function handleDelivery(req, res, { cfg, supabase, now }) {
       serve_until: r.serve_until,
     };
   });
-  return send(res, 200, { ...empty, ads }, cache);
+  // Never let an edge/browser cache keep an advert past its booked end.
+  const soonest = Math.min(DELIVERY_CACHE_MAX_SECONDS, ...ads.map((a) => secondsUntil(a.serve_until, now)));
+  const maxAge = Math.max(0, soonest);
+  return send(res, 200, { ...empty, ads }, { ...cache, "Cache-Control": maxAge > 0 ? `public, max-age=${maxAge}, s-maxage=${maxAge}` : "no-store" });
 }
 
 // ── GET /api/ads/creative?v=&p=&s=desktop|mobile  (approved only) ──────
-export async function handleCreative(req, res, { cfg, supabase }) {
+// Signed image URLs and their cached redirect never outlive the booked end:
+// TTL = min(600 s, seconds until serve_until); cache = min(300 s, same).
+export const CREATIVE_SIGNED_URL_MAX_SECONDS = 600;
+export const CREATIVE_REDIRECT_CACHE_MAX_SECONDS = 300;
+export const DELIVERY_CACHE_MAX_SECONDS = 60;
+
+function secondsUntil(iso, now) {
+  const t = Date.parse(iso || "");
+  return Number.isFinite(t) ? Math.floor((t - now().getTime()) / 1000) : -1;
+}
+
+export async function handleCreative(req, res, { cfg, supabase, now }) {
   if (req.method !== "GET") return send(res, 405, { error: "METHOD_NOT_ALLOWED" });
   const v = queryParam(req, "v"), p = queryParam(req, "p"), s = queryParam(req, "s");
   if (!UUID_RE.test(v || "") || !isKnownPlacement(p) || !["desktop", "mobile"].includes(s)) return send(res, 400, { error: "BAD_REQUEST" });
@@ -235,9 +249,13 @@ export async function handleCreative(req, res, { cfg, supabase }) {
   }
   const path = look?.eligible ? look[`${s}_object_path`] : null;
   if (!path || !PATH_RE.test(path)) return send(res, 404, { error: "NOT_FOUND" });
-  const url = await supabase.signedUrl(BUCKET, path, 600);
+  const remaining = secondsUntil(look.serve_until, now);
+  if (remaining <= 0) return send(res, 404, { error: "NOT_FOUND" });
+  const ttl = Math.min(CREATIVE_SIGNED_URL_MAX_SECONDS, remaining);
+  const url = await supabase.signedUrl(BUCKET, path, ttl);
   if (!url) return send(res, 404, { error: "NOT_FOUND" });
-  return redirect(res, url, "public, max-age=300, s-maxage=300");
+  const cache = Math.min(CREATIVE_REDIRECT_CACHE_MAX_SECONDS, remaining);
+  return redirect(res, url, `public, max-age=${cache}, s-maxage=${cache}`);
 }
 
 function trackingContext(req, cfg, now) {

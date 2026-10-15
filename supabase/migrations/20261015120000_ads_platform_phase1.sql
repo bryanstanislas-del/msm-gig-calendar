@@ -306,6 +306,12 @@ create index ad_payments_booking_idx on public.ad_payments (booking_id);
 create trigger ad_payments_updated_at before update on public.ad_payments
   for each row execute function public.update_updated_at();
 
+-- The ONE payment that funds a confirmed booking (set by the webhook when
+-- it confirms). Duplicate/conflicting payments never become the funding
+-- payment, so refunding them never affects the booking; refunding the
+-- funding payment always does. See ads_internal.booking_funded().
+alter table public.ad_bookings add column funding_payment_id uuid references public.ad_payments(id);
+
 create table public.ad_payment_events (
   id uuid primary key default gen_random_uuid(),
   provider_event_id text not null unique,
@@ -605,6 +611,20 @@ begin
   end if;
 end; $$;
 
+-- FUNDING INVARIANT (single definition used by delivery AND approval):
+-- confirmed booking whose funding payment is still fully paid (no refund
+-- of any size) for exactly the immutable snapshot amount.
+create or replace function ads_internal.booking_funded(p_booking_id uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select exists (
+    select 1 from public.ad_bookings b
+    join public.ad_payments p on p.id = b.funding_payment_id and p.booking_id = b.id
+    join public.ad_purchase_snapshots s on s.booking_id = b.id
+    where b.id = p_booking_id and b.status = 'confirmed'
+      and p.status = 'paid' and p.amount_refunded_pence = 0
+      and p.amount_pence = s.total_pence and p.currency = s.currency)
+$$;
+
 -- Eligible (servable right now) creatives for a placement code.
 create or replace function ads_internal.eligible_creatives(p_placement text)
 returns table (creative_version_id uuid, booking_id uuid, unit_id uuid, serve_until timestamptz,
@@ -621,6 +641,7 @@ language sql stable security definer set search_path = '' as $$
   join public.ad_creative_versions v on v.id = c.approved_version_id and v.status = 'approved'
   where u.code = p_placement and u.active
     and ads_internal.setting_bool('ads_delivery_enabled')
+    and ads_internal.booking_funded(b.id)
     and now() >= ads_internal.london_day_start(b.start_date)
     and now() <  ads_internal.london_day_start(b.end_date + 1)
   order by b.confirmed_at, b.id
@@ -877,6 +898,7 @@ begin
         if cardinality(ads_internal.full_days(
              units, b.start_date, b.end_date, b.id)) = 0 then
           update public.ad_bookings set status = 'confirmed', confirmed_at = now(), closed_at = null,
+            funding_payment_id = pay.id,
             status_reason = case when b.status = 'expired' or b.hold_expires_at <= now()
                                  then 'Paid after hold lapsed; capacity still available' end
             where id = b.id;
@@ -912,13 +934,19 @@ begin
           status = case when greatest(amount_refunded_pence, refunded) >= amount_pence then 'refunded' else 'partially_refunded' end,
           requires_refund = case when greatest(amount_refunded_pence, refunded) >= amount_pence then false else requires_refund end
       where id = pay.id returning * into pay;
+    -- Only the FUNDING payment's refund changes the booking. A refunded
+    -- duplicate/conflict payment leaves a funded booking untouched; an
+    -- unfunded booking (payment_conflict/held/expired) closes as refunded.
     if pay.status = 'refunded' then
       update public.ad_bookings set status = 'refunded', closed_at = now(), status_reason = 'Payment refunded'
-        where id = pay.booking_id and status in ('confirmed', 'payment_conflict', 'held', 'expired')
-          and not exists (select 1 from public.ad_payments p2 where p2.booking_id = pay.booking_id
-                          and p2.id <> pay.id and p2.status = 'paid');
-      v_outcome := 'refunded';
+        where id = pay.booking_id
+          and (funding_payment_id = pay.id
+               or (funding_payment_id is null and status in ('payment_conflict', 'held', 'expired', 'cancelled')));
+      v_outcome := case when found then 'refunded' else 'non_funding_payment_refunded' end;
     else
+      update public.ad_bookings
+        set status_reason = 'Funding payment partially refunded: delivery and approval suspended pending MSM decision'
+        where id = pay.booking_id and funding_payment_id = pay.id;
       v_outcome := 'partially_refunded_flagged';
     end if;
   else
@@ -1019,7 +1047,8 @@ language sql stable security definer set search_path = '' as $$
                         where v.id = p_version_id
                           and (v.status = 'approved' or (v.status = 'superseded' and v.reviewed_at is not null))),
     'desktop_object_path', (select e.desktop_object_path from ads_internal.eligible_creatives(p_placement) e where e.creative_version_id = p_version_id),
-    'mobile_object_path',  (select e.mobile_object_path  from ads_internal.eligible_creatives(p_placement) e where e.creative_version_id = p_version_id))
+    'mobile_object_path',  (select e.mobile_object_path  from ads_internal.eligible_creatives(p_placement) e where e.creative_version_id = p_version_id),
+    'serve_until',         (select e.serve_until         from ads_internal.eligible_creatives(p_placement) e where e.creative_version_id = p_version_id))
 $$;
 
 create or replace function public.ad_record_metric(p_kind text, p_version_id uuid, p_placement text, p_client_key text)
@@ -1142,8 +1171,10 @@ begin
   end if;
   if p_decision = 'approve' then
     if b.status <> 'confirmed' then raise exception 'ADS_NOT_PAID: booking must be paid and confirmed before approval'; end if;
-    if exists (select 1 from public.ad_payments where booking_id = b.id and status in ('refunded', 'partially_refunded')) then
-      raise exception 'ADS_NOT_PAID: booking has a refund recorded';
+    -- Same invariant as delivery: refunds of duplicate payments are
+    -- irrelevant; any refund of the funding payment blocks approval.
+    if not ads_internal.booking_funded(b.id) then
+      raise exception 'ADS_NOT_FUNDED: the payment funding this booking has been (partly) refunded';
     end if;
     update public.ad_creative_versions set status = 'superseded'
       where id = c.approved_version_id and id <> v.id;

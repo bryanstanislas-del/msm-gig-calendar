@@ -2,7 +2,7 @@
 /**
  * Plugin Name: MSM Ads - homepage adapter (phase 1)
  * Description: Shows APPROVED, paid adverts from the MSM advertising platform in the existing homepage positions, falling back to the existing house adverts. Disabled until MSM_ADS_ENABLED is true.
- * Version: 0.1.0
+ * Version: 0.2.0
  * Requires PHP: 7.4
  * Author: Music Scene Magazine
  *
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('MSM_ADS_VERSION', '0.1.0');
+define('MSM_ADS_VERSION', '0.2.0');
 
 /** Positions that exist on the homepage (only "top" is sold in phase 1). */
 function msm_ads_home_placements()
@@ -174,6 +174,8 @@ function msm_ads_render($ad)
     $d = $ad['desktop'];
     $m = $ad['mobile'];
     return '<div class="msm-ad" data-msm-ad-placement="' . esc_attr($ad['placement']) . '"'
+        . ' data-msm-ad-creative="' . esc_attr($ad['creative_id']) . '"'
+        . ' data-msm-ad-until="' . esc_attr(gmdate('c', (int) $ad['serve_until'])) . '"'
         . ' data-msm-ad-token="' . esc_attr($ad['impression_token']) . '"'
         . ' data-msm-ad-impression="' . esc_url($ad['impression_url']) . '">'
         . '<span class="msm-ad__label">' . esc_html__('Advertisement', 'msm-ads') . '</span>'
@@ -198,6 +200,33 @@ function msm_ads_home_slot($position)
     }
     $html = apply_filters('msm_home_ad_delivery', '', array('placement' => $map[$position]['placement'], 'position' => $position));
     return is_string($html) ? $html : '';
+}
+
+/**
+ * Server mode with a preserved house fallback (recommended over
+ * msm_ads_home_slot). Pass the theme's existing house-advert HTML:
+ *   - no advert      -> returns $house_html unchanged
+ *   - filter false   -> returns '' (slot hidden, per the filter contract)
+ *   - advert         -> advert HTML + <template class="msm-ad-house"> holding
+ *                       the house HTML, which msm-ads.js restores on expiry,
+ *                       revocation or image failure.
+ * $house_html is the theme's own trusted markup (not user input).
+ */
+function msm_ads_home_slot_with_fallback($position, $house_html)
+{
+    $map = msm_ads_home_placements();
+    $house_html = (string) $house_html;
+    if (!isset($map[$position])) {
+        return $house_html;
+    }
+    $html = apply_filters('msm_home_ad_delivery', '', array('placement' => $map[$position]['placement'], 'position' => $position));
+    if ($html === false) {
+        return '';
+    }
+    if (!is_string($html) || $html === '') {
+        return $house_html;
+    }
+    return $html . '<template class="msm-ad-house">' . $house_html . '</template>';
 }
 
 /**
