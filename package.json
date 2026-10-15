@@ -7,7 +7,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:wp": "php wordpress/msm-ads/tests/run-tests.php",
-    "test:ads-db": "bash scripts/ads-local-db-test.sh"
+    "test:ads-db": "bash scripts/ads-local-db-test.sh",
+    "test:ads-staging": "bash scripts/ads-staging-bootstrap-test.sh"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",

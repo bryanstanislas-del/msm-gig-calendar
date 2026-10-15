@@ -91,7 +91,7 @@ See the PR description for the latest exact test counts.
 
 The existing Ready preview is **not** a staging verification. With no overrides it reads the production database (where no ads tables exist), so the ADVERTISE tab simply stays hidden. Everything below happens **before merge**, on isolated resources:
 
-1. **Isolated database.** Create a Supabase **branch or separate staging project**, never production. Apply `20261015120000_ads_platform_phase1.sql` there only, and check that `ad-creatives-private` exists and is private.
+1. **Isolated database.** Use the separate staging project **msm-ads-staging (`oyakrgdmplmxmlhjfqcd`)**, never production. A fresh project lacks the Calendar's `profiles`/`user_roles`/role helpers, so first follow **`supabase/staging/README.md`**: read-only preflight → guarded bootstrap → this migration **unchanged** → read-only postflight → synthetic accounts via the dashboard → separately authorised admin grant.
 2. **Preview-scoped env vars only.** In Vercel, add variables scoped to **Preview** and, where possible, to this git branch only (branch-specific preview variables), **never Production**:
    - `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY`: the **staging** project (build-time; makes the preview browser use staging instead of production).
    - `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`: staging.
