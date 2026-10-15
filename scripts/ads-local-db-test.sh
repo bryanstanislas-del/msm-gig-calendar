@@ -100,5 +100,14 @@ EVENTS=$($PSQL -d "$CONC" -tA -c "select count(*) from public.ad_payment_events 
 echo "   confirmed=$CONFIRMED duplicate=$DUP stored_events=$EVENTS"
 [[ "$CONFIRMED" == "1" && "$DUP" == "7" && "$EVENTS" == "1" ]] || { echo "FAIL: webhook concurrency"; exit 1; }
 
-$PSQL -d "$ADMIN_URL" -c "drop database ads_phase1_rls" -c "drop database ads_phase1_conc" >/dev/null
+echo "== End-to-end handlers + local DB (Stripe/storage bytes mocked)"
+fresh_db ads_phase1_int
+if [[ -n "${ADS_TEST_DATABASE_URL:-}" ]]; then
+  ADS_INTEGRATION_DB_URL="$(dburl ads_phase1_int)" npx vitest run api/_ads/dbIntegration.test.js 2>&1 | grep -E "Tests|FAIL|Error" 
+else
+  ADS_INTEGRATION_DB=ads_phase1_int npx vitest run api/_ads/dbIntegration.test.js 2>&1 | grep -E "Tests|FAIL|Error"
+fi
+[[ "${PIPESTATUS[0]}" == "0" ]] || { echo "FAIL: integration"; exit 1; }
+
+$PSQL -d "$ADMIN_URL" -c "drop database ads_phase1_rls" -c "drop database ads_phase1_conc" -c "drop database ads_phase1_int" >/dev/null
 echo "ALL ADS LOCAL DB TESTS PASSED"
