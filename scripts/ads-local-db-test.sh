@@ -109,5 +109,19 @@ else
 fi
 [[ "${PIPESTATUS[0]}" == "0" ]] || { echo "FAIL: integration"; exit 1; }
 
+echo "== Rollback script (guarded) on a fresh copy"
+fresh_db ads_phase1_down
+DOWN="$(dburl ads_phase1_down)"
+BEFORE=$($PSQL -d "$DOWN" -tA -c "select count(*) from pg_class where relnamespace = 'public'::regnamespace and relname not like 'ad\_%'")
+$PSQL -d "$DOWN" -c "insert into storage.objects (bucket_id, name) values ('ad-creatives-private', 'x')" >/dev/null
+if $PSQL -d "$DOWN" -f supabase/rollbacks/20261015120000_ads_platform_phase1_down.sql >/dev/null 2>&1; then echo "FAIL: rollback ran with objects present"; exit 1; fi
+$PSQL -d "$DOWN" -c "delete from storage.objects where bucket_id = 'ad-creatives-private'" >/dev/null
+PGOPTIONS="-c client_min_messages=warning" $PSQL -d "$DOWN" -f supabase/rollbacks/20261015120000_ads_platform_phase1_down.sql >/dev/null
+LEFT=$($PSQL -d "$DOWN" -tA -c "select (select count(*) from pg_class where relnamespace = 'public'::regnamespace and relname like 'ad\_%') + (select count(*) from pg_proc where proname like 'ad\_%') + (select count(*) from pg_namespace where nspname = 'ads_internal') + (select count(*) from storage.buckets where id = 'ad-creatives-private')")
+AFTER=$($PSQL -d "$DOWN" -tA -c "select count(*) from pg_class where relnamespace = 'public'::regnamespace and relname not like 'ad\_%'")
+echo "   ads objects left=$LEFT non-ads public relations before=$BEFORE after=$AFTER"
+[[ "$LEFT" == "0" && "$BEFORE" == "$AFTER" ]] || { echo "FAIL: rollback"; exit 1; }
+$PSQL -d "$ADMIN_URL" -c "drop database ads_phase1_down" >/dev/null
+
 $PSQL -d "$ADMIN_URL" -c "drop database ads_phase1_rls" -c "drop database ads_phase1_conc" -c "drop database ads_phase1_int" >/dev/null
 echo "ALL ADS LOCAL DB TESTS PASSED"
