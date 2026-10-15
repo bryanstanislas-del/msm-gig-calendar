@@ -5,6 +5,14 @@ Target: Supabase project **msm-ads-staging**, ref **`oyakrgdmplmxmlhjfqcd`** (Lo
 
 These scripts create only what the unchanged ads migration and the existing App's auth/admin path need: minimal `profiles` and `user_roles`, plus `has_role()`, `is_admin_or_above()` and `update_updated_at()` with bodies identical to production. There are no Calendar tables, no real customer rows, no admin accounts, and every ads toggle stays OFF.
 
+## Status (reported by MSM, 2026-10-15)
+
+- Steps 0–4 below are **done on `oyakrgdmplmxmlhjfqcd` only**: preflight EMPTY → bootstrap → ads migration unchanged → postflight, with **all 8 checks passed**. All ads switches OFF.
+- Steps 5–6 and the admin grant are **not done**: no synthetic users and no admin exist yet.
+- Production `fmlaaiolqwknowhtdeue`: **nothing applied**.
+
+See "Current status" in `docs/ads/README.md` for Vercel and Stripe.
+
 ## Guard and its honest limit
 
 Postgres cannot report which Supabase project it belongs to (every project's database is named `postgres`), so no script can prove it is running on `oyakrgdmplmxmlhjfqcd`. The bootstrap therefore enforces, inside one transaction, before creating anything:

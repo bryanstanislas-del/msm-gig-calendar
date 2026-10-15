@@ -1,6 +1,19 @@
 # MSM shared advertising platform — Phase 1
 
-**Status: built and tested locally; NOT deployed, NOT applied to any remote database, NOT installed in WordPress, NOT connected to a real Stripe account.** Everything ships disabled by default.
+**Status: built and tested locally. Applied ONLY to the staging Supabase project (see below). NOT applied to production, NOT deployed to production, NOT installed in WordPress, NOT connected to Stripe with any key.** Everything ships disabled by default.
+
+## Current status (reported by MSM, 2026-10-15; not re-verified from this sandbox)
+
+| Area | State |
+|---|---|
+| **Production** Supabase `fmlaaiolqwknowhtdeue` | **Nothing applied.** No ads migration, no bootstrap, no writes. |
+| **Staging** Supabase msm-ads-staging `oyakrgdmplmxmlhjfqcd` | Staging bootstrap **and** the ads migration applied (by MSM via the SQL Editor), to this project only. All 8 read-only postflight checks passed. All ads switches OFF. **No synthetic users and no admin yet.** |
+| Vercel | Branch-only (this PR's branch) Preview env vars point at the staging Supabase URL, anon key and service key. Preview of `b283488` is **Ready** (deployment `EbehPxa4R17cD2nRXShJP859sYSD`). Nothing in Production env; **production not deployed**. |
+| `ADS_API_ENABLED` | **Off** (not set). The ads API therefore reports disabled / delivery empty. |
+| Deployed API | **Unverified.** Browser security policy blocked direct checks of the preview's `/api/ads/*`, so the routing fix and JSON responses have not been observed live. |
+| Stripe | Browser signed in to the **sandbox** `acct_1UQvPbRhBFkeZB2o` (ROV Media Ltd., livemode=false). **No Stripe keys configured anywhere and no webhook endpoints.** Checkout and webhooks are untested against Stripe. |
+| WordPress | Plugin **not installed** anywhere. |
+
 
 Phase 1 is one vertical slice for **one position, the WordPress homepage top** (`#msm-wp-home-top`, placement `wordpress-home-top`):
 
@@ -42,17 +55,17 @@ Server-only (Vercel project env, **never** `VITE_*`, never in WordPress or the b
 
 | Name | Purpose | Status |
 |---|---|---|
-| `ADS_API_ENABLED` | `true` to enable `/api/ads/*` | not set (API returns disabled / house fallback) |
-| `SUPABASE_URL` | Supabase project URL | not set for ads |
-| `SUPABASE_ANON_KEY` | public anon key (user-scoped RPCs) | not set for ads |
-| `SUPABASE_SERVICE_ROLE_KEY` | narrow service RPCs + private storage reads | **missing, must be added by MSM** |
-| `STRIPE_SECRET_KEY` | Stripe **test** key; prefer a **restricted** `rk_test_…` key (see "Stripe integration"); any non-test key is refused | **missing** |
-| `STRIPE_WEBHOOK_SECRET` | `whsec_…` for the test webhook endpoint | **missing** |
+| `ADS_API_ENABLED` | `true` to enable `/api/ads/*` | **off / not set** in every environment (API returns disabled / house fallback) |
+| `SUPABASE_URL` | Supabase project URL | Preview (this branch only): **staging** URL configured, per MSM. Production: not set for ads |
+| `SUPABASE_ANON_KEY` | public anon key (user-scoped RPCs) | Preview (this branch only): **staging** anon key configured, per MSM. Production: not set for ads |
+| `SUPABASE_SERVICE_ROLE_KEY` | narrow service RPCs + private storage reads | Preview (this branch only): **staging** service key configured, per MSM. Production: **not set** |
+| `STRIPE_SECRET_KEY` | Stripe **test** key; prefer a **restricted** `rk_test_…` key (see "Stripe integration"); any non-test key is refused | **not configured anywhere** |
+| `STRIPE_WEBHOOK_SECRET` | `whsec_…` for the test webhook endpoint | **not configured** (no webhook endpoint exists yet) |
 | `ADS_TRACKING_SECRET` | ≥32 random chars; signs serve tokens and keys visitor hashes | **missing** |
 | `ADS_PUBLIC_BASE_URL` | defaults to `https://calendar.musicscenemagazine.co.uk` | optional |
 | `ADS_CLICK_FALLBACK_URL` | where invalid clicks go (default `https://musicscenemagazine.co.uk/`) | optional |
 
-No credentials were created, changed or used while building this. When something is missing, the endpoints answer `503 ADS_NOT_CONFIGURED` and list the missing variable **names** (never values). Delivery quietly returns no adverts, so the house advert stays.
+Claude created, changed and used no credentials; the staging values above were configured by MSM. When something is missing, the endpoints answer `503 ADS_NOT_CONFIGURED` and list the missing variable **names** (never values). Delivery quietly returns no adverts, so the house advert stays.
 
 WordPress (`wp-config.php`): `MSM_ADS_ENABLED` (default false), `MSM_ADS_API_BASE`, `MSM_ADS_MODE` (`js` default / `server`). None of these are secrets.
 
@@ -131,7 +144,7 @@ Hidden tabs do not poll. A CDN in front of WordPress must not cache `/wp-json/ms
 - **API version pinned to `2026-09-30.endive`**, the version stripe-node 23.0.0 targets (a test asserts they match). Create the webhook endpoint with the same version so event payloads keep the shape `normaliseStripeEvent()` reads.
 - **Dynamic payment methods**: there is no `payment_method_types` allowlist; that parameter was removed from Checkout Session creation in `2026-09-30.endive`. Stripe offers whatever is enabled under Dashboard → Settings → Payment methods for GBP.
 - **Delayed payment methods stay gated.** A completion with `payment_status = "unpaid"` is recorded as `awaiting_async_payment` and confirms nothing. Only a verified `paid` completion or `checkout.session.async_payment_succeeded` confirms, and nothing ever approves. If a delayed payment lands after the hold has lapsed and the dates were resold, the booking becomes `payment_conflict` (refund required). For a 60-minute hold, consider leaving only instant methods (cards and wallets) enabled in the test account's Dashboard.
-- **`integration_identifier = "msm-ads-phase1"`** is set on every Checkout Session, so this integration's sessions can be identified. It is optional in the API.
+- **`integration_identifier = "msm-ads-phase1-yszxhowc"`** is set on every Checkout Session, so this integration's sessions can be identified. It is a label plus a fixed suffix of 8 random letters, as Stripe's best-practice guidance requires. The suffix was generated once and committed, never per request, so params for a booking stay identical across idempotent retries. The parameter is optional in the API.
 - **Idempotency**: SDK `idempotencyKey = msm-ads-checkout-<booking_id>`; SDK retries reuse it. Line items use inline `price_data`/`product_data` from the immutable server snapshot. The server re-checks the returned session (`cs_test_`, `livemode=false`, amount, currency, checkout URL) before recording it.
 - **Webhook verification** uses `Stripe.webhooks.constructEvent` (no API key needed) on the raw body, plus stricter local checks: a `whsec_` secret is required, raw bytes only, and future-dated signatures are rejected.
 - **Minimum restricted TEST key permission**: **Checkout Sessions → Write**. That is the only API call the code makes (`checkout.sessions.create`). There are no retrieve/list calls, refunds are issued manually in the Dashboard, and webhook verification uses the signing secret rather than the API key. Inline `price_data`/`product_data` creates no saved Products or Prices. **Unverified:** if Stripe answers a permission error naming another resource on the first real test call, grant that resource and record it here.

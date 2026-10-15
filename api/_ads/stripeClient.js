@@ -18,8 +18,14 @@ import Stripe from "stripe";
 
 /** Pinned Stripe API version (the version stripe-node 23.0.0 was built for). */
 export const STRIPE_API_VERSION = "2026-09-30.endive";
-/** Groups every Checkout Session this integration creates (Dashboard/API filtering). */
-export const INTEGRATION_IDENTIFIER = "msm-ads-phase1";
+/**
+ * Groups every Checkout Session this integration creates (Dashboard/API
+ * filtering). Label + a FIXED 8-random-letter suffix, generated once and
+ * committed (never per request), per Stripe's best-practice guidance. Being
+ * constant, it keeps the create params -- and so idempotent replays --
+ * identical for the same booking.
+ */
+export const INTEGRATION_IDENTIFIER = "msm-ads-phase1-yszxhowc";
 
 export function checkoutIdempotencyKey(bookingId) {
   return `msm-ads-checkout-${bookingId}`;

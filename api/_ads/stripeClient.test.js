@@ -17,6 +17,11 @@ describe("checkout session params", () => {
     expect(p).not.toHaveProperty("payment_method_types");
     expect(p).not.toHaveProperty("allowed_payment_method_types");
     expect(p.integration_identifier).toBe(INTEGRATION_IDENTIFIER);
+    expect(INTEGRATION_IDENTIFIER).toBe("msm-ads-phase1-yszxhowc");
+    expect(INTEGRATION_IDENTIFIER).toMatch(/^msm-ads-phase1-[a-z]{8}$/); // label + fixed 8-letter suffix
+  });
+  it("is deterministic per booking (fixed identifier keeps idempotent replays identical)", () => {
+    expect(buildCheckoutParams({ quote, baseUrl: cfg.baseUrl })).toEqual(buildCheckoutParams({ quote, baseUrl: cfg.baseUrl }));
   });
   it("prices only from the server snapshot and binds the booking", () => {
     expect(p.line_items).toEqual([{ quantity: 1, price_data: { currency: "gbp", unit_amount: 3000,
