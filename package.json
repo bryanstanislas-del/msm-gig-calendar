@@ -5,7 +5,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:wp": "php wordpress/msm-ads/tests/run-tests.php",
+    "test:ads-db": "bash scripts/ads-local-db-test.sh"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",

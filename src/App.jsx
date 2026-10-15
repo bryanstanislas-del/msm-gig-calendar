@@ -147,6 +147,10 @@ import AdminSupporters  from './components/admin/AdminSupporters';
 import AdminHallOfFame  from './components/admin/AdminHallOfFame';
 import AdminFestivals   from './components/admin/AdminFestivals';
 import AdminPromoSlots  from './components/admin/AdminPromoSlots';
+// MSM shared advertising platform, phase 1 (all toggles default OFF).
+import AdminAds from './components/admin/AdminAds';
+import AdvertiserPortal from './components/ads/AdvertiserPortal';
+import { getFlags as getAdsFlags } from './ads/adsClient.js';
 import AdminVenueEnrichment from './components/admin/AdminVenueEnrichment';
 import PromoSlot, { indexPromoSlotsBySlot, buildListViewItems } from './components/PromoSlot.jsx';
 import ClaimDirectoryPage from './components/ClaimDirectoryPage';
@@ -9724,7 +9728,9 @@ function MainApp() {
   // the only thing driving `tab` afterwards, so switching views still works
   // exactly as before on either breakpoint.
   const [tab,     setTab]     = useState(() =>
-    (typeof window !== "undefined" && window.innerWidth <= 600) ? "list" : "calendar"
+    // Advertising phase 1: Stripe Checkout returns to /?view=advertise.
+    (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("view") === "advertise") ? "advertise"
+    : (typeof window !== "undefined" && window.innerWidth <= 600) ? "list" : "calendar"
   ); // calendar | list | submit | admin
   const [selGig,  setSelGig]  = useState(null);
   const [filters, setFilters] = useState({ city:"All", venue:"All", genre:"All", dateFrom:"", dateTo:"" });
@@ -9737,6 +9743,16 @@ function MainApp() {
   // a missing key exactly like an inactive slot, so nothing renders until
   // (or unless) this loads, and nothing breaks if it never does.
   const [promoSlots, setPromoSlots] = useState({});
+  // Advertising phase 1: the ADVERTISE tab only appears when MSM has
+  // switched the portal on (ad_settings.ads_portal_enabled, default OFF).
+  // Independent of every Calendar fetch; a failure just keeps it hidden.
+  const [adsFlags, setAdsFlags] = useState({ portal: false });
+  useEffect(() => {
+    getAdsFlags().then((f) => {
+      setAdsFlags(f || { portal: false });
+      if (!f?.portal) setTab((t) => (t === "advertise" ? "calendar" : t));
+    });
+  }, []);
   const isMobile = useIsMobile();
 
   const isAdmin = auth?.profile?.role === "admin";
@@ -9868,7 +9884,7 @@ function MainApp() {
   const displayedGigs = tab === "list" ? listGigs : filteredGigs;
 
   // If user clicked Submit Gig or Admin tab and isn't logged in, show auth panel
-  if (!auth && (tab === "submit" || tab === "admin")) {
+  if (!auth && (tab === "submit" || tab === "admin" || (tab === "advertise" && adsFlags.portal))) {
     return <AuthPanel onAuth={handleAuth} onBack={()=>setTab("calendar")} />;
   }
 
@@ -9880,6 +9896,7 @@ function MainApp() {
     ...(auth ? [{ id:"profile", label: auth.profile?.profile_type === "venue" ? "MY VENUE" : "MY PROFILE" }] : []),
     ...(auth ? [{ id:"following", label:"MY FOLLOWING" }] : []),
     ...(auth ? [{ id:"notifications", label: unreadCount > 0 ? `NOTIFICATIONS (${unreadCount})` : "NOTIFICATIONS" }] : []),
+    ...(auth && adsFlags.portal ? [{ id:"advertise", label:"ADVERTISE" }] : []),
     ...(isAdmin ? [
       { id:"dashboard", label:"DASHBOARD" },
       { id:"admin",     label:`MODERATION (${gigCounts.pending})` },
@@ -9894,6 +9911,7 @@ function MainApp() {
       { id:"featured",      label:"FEATURED" },
       { id:"editorial",     label:"EDITORIAL" },
       { id:"promo-slots",   label:"PROMO SLOTS" },
+      { id:"ads",           label:"ADS" },
       { id:"supporters",    label:"SUPPORTERS" },
       { id:"hall-of-fame",  label:"HALL OF FAME" },
       { id:"festivals",     label:"FESTIVALS" },
@@ -10030,6 +10048,14 @@ function MainApp() {
         {/* PROMO SLOTS -- Editorial Promo + Future Advertising Positions, Phase 1 */}
         {tab==="promo-slots" && isAdmin && (
           <AdminPromoSlots />
+        )}
+
+        {/* ADVERTISING (phase 1) -- portal gated by ads_portal_enabled; admin always reachable to manage toggles */}
+        {tab==="advertise" && auth && adsFlags.portal && (
+          <AdvertiserPortal user={auth.user} logo={<MSMLogo height={56} />} />
+        )}
+        {tab==="ads" && isAdmin && (
+          <AdminAds />
         )}
 
         {/* FOUNDING SUPPORTERS */}
