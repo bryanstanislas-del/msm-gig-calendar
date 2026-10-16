@@ -39,6 +39,7 @@ echo "== 2. Bootstrap (opted in) + UNCHANGED ads migration on an empty platform 
 $PSQL -d stg_a -f "$TMP/boot_confirmed.sql" >/dev/null && pass "bootstrap applied" || bad "bootstrap failed"
 $PSQL -d stg_a -f "$MIG" >/dev/null && pass "ads migration applied unchanged" || bad "ads migration failed"
 $PSQL -d stg_a -f "$MIG2" >/dev/null && pass "forward migration (standard earliest start) applied" || bad "forward migration failed"
+$PSQL -d stg_a -f supabase/migrations/20261016120000_ads_review_corrections_priority.sql >/dev/null && pass "forward migration (review/corrections/priority) applied" || bad "review migration failed"
 post=$($PSQL -d stg_a -tA -F'|' -f supabase/staging/03_postflight_readonly.sql)
 echo "$post" | sed 's/^/     /'
 [[ "$(echo "$post" | awk -F'|' '$2!="t"' | wc -l)" == "0" ]] && pass "postflight all ok" || bad "postflight"

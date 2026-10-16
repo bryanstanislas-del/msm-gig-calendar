@@ -109,7 +109,10 @@ begin
   perform public.ad_admin_set_setting('ads_checkout_enabled', true);
   perform public.ad_admin_set_setting('ads_delivery_enabled', true);
   perform public.ad_admin_set_setting('min_lead_days', null, 0);
-  perform zz_test.expect_error($q$select public.ad_admin_set_setting('ads_priority_review_enabled', true)$q$, '%ADS_NOT_AVAILABLE_IN_PHASE_1%', 'priority review cannot be enabled');
+  -- Agreed 2026-10-16: priority cover is an admin switch (default OFF).
+  perform zz_test.ok((select not bool_value from public.ad_settings where key = 'ads_priority_review_enabled'), 'priority cover defaults off');
+  perform public.ad_admin_set_setting('ads_priority_review_enabled', true);
+  perform public.ad_admin_set_setting('ads_priority_review_enabled', false);
   perform zz_test.expect_error($q$select public.ad_admin_set_setting('stripe_livemode', true)$q$, '%ADS_NOT_AVAILABLE_IN_PHASE_1%', 'live mode cannot be enabled');
   perform zz_test.expect_error($q$select public.ad_admin_set_setting('ads_venue_gig_targeting_enabled', true)$q$, '%ADS_NOT_AVAILABLE_IN_PHASE_1%', 'venue/gig ads stay off');
   update public.ad_inventory_units set active = true where code = 'wordpress-home-top';

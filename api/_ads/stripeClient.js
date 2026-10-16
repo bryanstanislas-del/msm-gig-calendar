@@ -31,21 +31,36 @@ export function checkoutIdempotencyKey(bookingId) {
   return `msm-ads-checkout-${bookingId}`;
 }
 
+/**
+ * Line items from the immutable snapshot split (placement + optional
+ * priority fee). They always sum to quote.total_pence; anything inconsistent
+ * is refused rather than sent.
+ */
+export function checkoutLineItems(quote) {
+  const fee = Number(quote.priority_fee_pence || 0);
+  const placement = quote.placement_pence == null ? quote.total_pence - fee : Number(quote.placement_pence);
+  if (!Number.isInteger(fee) || !Number.isInteger(placement) || fee < 0 || placement <= 0 || placement + fee !== quote.total_pence) {
+    throw new Error("Inconsistent price snapshot");
+  }
+  const prefix = quote.is_test ? "TEST - " : "";
+  const items = [{
+    quantity: 1,
+    price_data: { currency: quote.currency, unit_amount: placement,
+      product_data: { name: `${prefix}${quote.product_name} (${quote.start_date} to ${quote.end_date}, UK dates)`.slice(0, 250) } },
+  }];
+  if (fee > 0) {
+    items.push({ quantity: 1, price_data: { currency: quote.currency, unit_amount: fee,
+      product_data: { name: `${prefix}Priority initial review (within 12 elapsed hours of payment + complete material)` } } });
+  }
+  return items;
+}
+
 export function buildCheckoutParams({ quote, baseUrl }) {
   const id = quote.booking_id;
   return {
     mode: "payment",
     integration_identifier: INTEGRATION_IDENTIFIER,
-    line_items: [{
-      quantity: 1,
-      price_data: {
-        currency: quote.currency,
-        unit_amount: quote.total_pence,
-        product_data: {
-          name: `${quote.is_test ? "TEST - " : ""}${quote.product_name} (${quote.start_date} to ${quote.end_date}, UK dates)`.slice(0, 250),
-        },
-      },
-    }],
+    line_items: checkoutLineItems(quote),
     client_reference_id: id,
     metadata: { booking_id: id },
     payment_intent_data: { metadata: { booking_id: id } },

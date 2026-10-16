@@ -58,6 +58,23 @@ export function londonDayStart(isoDate) {
   return instant;
 }
 
+/** Europe/London wall-clock time (hour:minute on isoDate) as an absolute Date. */
+export function londonLocalToInstant(isoDate, hour, minute = 0) {
+  const { y, m, d } = parseIsoDate(isoDate);
+  const guess = Date.UTC(y, m - 1, d, hour, minute);
+  let instant = new Date(guess - offsetMinutes(new Date(guess)) * 60000);
+  instant = new Date(guess - offsetMinutes(instant) * 60000);
+  return instant;
+}
+
+/** "+01:00" / "+00:00" -- the Europe/London UTC offset in force at `instant`. */
+export function londonOffsetLabel(instant) {
+  const mins = offsetMinutes(new Date(instant));
+  const sign = mins < 0 ? "-" : "+";
+  const a = Math.abs(mins);
+  return `${sign}${String(Math.floor(a / 60)).padStart(2, "0")}:${String(a % 60).padStart(2, "0")}`;
+}
+
 export function daysInclusive(startIso, endIso) {
   const a = parseIsoDate(startIso), b = parseIsoDate(endIso);
   return Math.round((Date.UTC(b.y, b.m - 1, b.d) - Date.UTC(a.y, a.m - 1, a.d)) / 86400000) + 1;

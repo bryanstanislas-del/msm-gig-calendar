@@ -35,6 +35,17 @@ describe("checkout session params", () => {
   });
 });
 
+describe("priority fee line item", () => {
+  it("splits placement + priority fee and sums to the snapshot total", () => {
+    const p = buildCheckoutParams({ quote: { ...quote, total_pence: 16000, placement_pence: 1000, priority_fee_pence: 15000 }, baseUrl: cfg.baseUrl });
+    expect(p.line_items.map((l) => l.price_data.unit_amount)).toEqual([1000, 15000]);
+    expect(p.line_items[1].price_data.product_data.name).toMatch(/Priority initial review/);
+  });
+  it("refuses an inconsistent split instead of sending it", () => {
+    expect(() => buildCheckoutParams({ quote: { ...quote, total_pence: 16000, placement_pence: 1000, priority_fee_pence: 14000 }, baseUrl: cfg.baseUrl })).toThrow(/Inconsistent/);
+  });
+});
+
 describe("SDK client construction (MOCK constructor)", () => {
   function MOCK_Stripe() {
     const create = vi.fn(async () => ({ id: "cs_test_x" }));

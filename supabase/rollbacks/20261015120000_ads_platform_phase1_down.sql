@@ -1,4 +1,5 @@
--- ROLLBACK for 20261015120000_ads_platform_phase1.sql. MANUAL USE ONLY.
+-- ROLLBACK for ALL ads migrations (20261015120000 and every later ads forward
+-- migration). MANUAL USE ONLY.
 -- Lives outside supabase/migrations so it is never applied automatically.
 --
 -- Refuses to run if any non-TEST booking, any live-mode payment, or any
@@ -37,13 +38,16 @@ begin
   end loop;
 end $$;
 
-drop table if exists
-  public.ad_rate_limits, public.ad_metric_dedupe, public.ad_metrics_daily, public.ad_admin_notes,
-  public.ad_audit_log, public.ad_payment_events, public.ad_payments, public.ad_campaigns cascade;
-drop table if exists
-  public.ad_creative_versions, public.ad_purchase_snapshots, public.ad_booking_inventory_days,
-  public.ad_bookings, public.ad_advertisers, public.ad_product_units, public.ad_products,
-  public.ad_inventory_units, public.ad_uk_holidays, public.ad_settings cascade;
+-- Every advertising table (public.ad_*), including those added by later
+-- forward migrations (20261016090000, 20261016120000, ...).
+do $$
+declare t record;
+begin
+  for t in select c.oid::regclass as rel from pg_class c join pg_namespace n on n.oid = c.relnamespace
+           where n.nspname = 'public' and c.relkind = 'r' and c.relname like 'ad\_%' loop
+    execute format('drop table if exists %s cascade', t.rel);
+  end loop;
+end $$;
 drop schema if exists ads_internal cascade;
 
 commit;

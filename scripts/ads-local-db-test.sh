@@ -36,13 +36,14 @@ PSQL="psql -X -q -v ON_ERROR_STOP=1"
 fresh_db() {
   $PSQL -d "$ADMIN_URL" -c "drop database if exists $1" -c "create database $1" >/dev/null
   $PSQL -d "$(dburl "$1")" -f "$SHIM" >/dev/null
-  $PSQL -d "$(dburl "$1")" -f "$MIG" >/dev/null
-  $PSQL -d "$(dburl "$1")" -f "$MIG2" >/dev/null
+  for m in supabase/migrations/2026101*_ads_*.sql; do $PSQL -d "$(dburl "$1")" -f "$m" >/dev/null; done
 }
 
 echo "== RLS / state machine / dates suite"
 fresh_db ads_phase1_rls
 $PSQL -d "$(dburl ads_phase1_rls)" -f supabase/tests/ads/10_ads_phase1_regression.sql 2>&1 | grep -E "NOTICE|ERROR|FAIL"
+echo "== Review / corrections / priority suite"
+$PSQL -d "$(dburl ads_phase1_rls)" -f supabase/tests/ads/20_review_corrections_priority.sql 2>&1 | grep -E "NOTICE|ERROR|FAIL"
 
 echo "== Concurrency: parallel holds on a capacity-1 unit"
 fresh_db ads_phase1_conc
