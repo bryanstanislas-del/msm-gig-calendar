@@ -61,7 +61,7 @@ begin
   perform zz_t.as_user(adm);
   perform zz_t.ok(public.is_admin_or_above() and public.has_role('admin'), 'user_roles admin is admin');
   perform zz_t.ok((select count(*) from public.user_roles) = 1, 'admin still reads only own role rows');
-  perform zz_t.ok((select count(*) from public.ad_settings) = 10, 'admin can read ads settings via RLS');
+  perform zz_t.ok((select count(*) from public.ad_settings) >= 12, 'admin can read ads settings via RLS (10 phase-1 + 2 review/terms settings)');
   perform zz_t.as_user(padm);
   perform zz_t.ok(public.is_admin_or_above(), 'profiles.role admin is admin');
   perform zz_t.as_user(b);

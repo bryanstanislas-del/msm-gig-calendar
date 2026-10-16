@@ -40,11 +40,14 @@ $PSQL -d stg_a -f "$TMP/boot_confirmed.sql" >/dev/null && pass "bootstrap applie
 $PSQL -d stg_a -f "$MIG" >/dev/null && pass "ads migration applied unchanged" || bad "ads migration failed"
 $PSQL -d stg_a -f "$MIG2" >/dev/null && pass "forward migration (standard earliest start) applied" || bad "forward migration failed"
 $PSQL -d stg_a -f supabase/migrations/20261016120000_ads_review_corrections_priority.sql >/dev/null && pass "forward migration (review/corrections/priority) applied" || bad "review migration failed"
+$PSQL -d stg_a -f supabase/migrations/20261016150000_ads_refund_cancellation_assessment.sql >/dev/null && pass "forward migration (refund/cancellation assessment) applied" || bad "refund migration failed"
 post=$($PSQL -d stg_a -tA -F'|' -f supabase/staging/03_postflight_readonly.sql)
 echo "$post" | sed 's/^/     /'
 [[ "$(echo "$post" | awk -F'|' '$2!="t"' | wc -l)" == "0" ]] && pass "postflight all ok" || bad "postflight"
 out=$($PSQL -d stg_a -f supabase/tests/staging/10_bootstrap_privileges.sql 2>&1) && grep -q "ALL CHECKS PASSED" <<<"$out" && pass "privilege/semantics checks" || { bad "privileges"; echo "$out" | grep -E "ERROR|FAIL"; }
 out=$($PSQL -d stg_a -f supabase/tests/ads/10_ads_phase1_regression.sql 2>&1) && grep -q "ALL CHECKS PASSED" <<<"$out" && pass "full ads regression suite on bootstrapped DB" || { bad "ads regression"; echo "$out" | grep -E "ERROR|FAIL"; }
+out=$($PSQL -d stg_a -f supabase/tests/ads/20_review_corrections_priority.sql 2>&1) && grep -q "ALL CHECKS PASSED" <<<"$out" && pass "review/corrections/priority suite on bootstrapped DB" || { bad "review suite"; echo "$out" | grep -E "ERROR|FAIL"; }
+out=$($PSQL -d stg_a -f supabase/tests/ads/30_refunds_cancellation.sql 2>&1) && grep -q "ALL CHECKS PASSED" <<<"$out" && pass "refunds/cancellation suite on bootstrapped DB" || { bad "refund suite"; echo "$out" | grep -E "ERROR|FAIL"; }
 echo "   client grants on profiles/user_roles:"
 q stg_a "select '     ' || table_name || ' ' || grantee || ' ' || string_agg(privilege_type, ',' order by privilege_type) from information_schema.role_table_grants where table_schema='public' and table_name in ('profiles','user_roles') and grantee in ('anon','authenticated','PUBLIC') group by table_name, grantee order by 1"
 
