@@ -16,7 +16,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import * as ads from "../../ads/adsClient.js";
-import { describeBooking, formatPence, holdMinutesLeft, canStartCheckout, friendlyAdsError, clampToEarliest, earliestStartExplanation } from "../../ads/adsPresentation.js";
+import { describeBooking, formatPence, holdMinutesLeft, canStartCheckout, friendlyAdsError, clampToEarliest, earliestStartExplanation, reviewPromiseText, correctionText, confirmationText } from "../../ads/adsPresentation.js";
 import { destinationUrlProblem, altTextProblem, creativeFileProblem } from "../../ads/validation.js";
 import { addDays, formatDeadline, londonDayStart } from "../../ads/londonTime.js";
 import { REPORT_LIMITATIONS } from "../../ads/reportLimitations.js";
@@ -85,9 +85,11 @@ function NewBooking({ products, onHeld }) {
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
   const [q, setQ] = useState(null);
+  const [priority, setPriority] = useState(false);
+  const [priorityOffered, setPriorityOffered] = useState(false);
   const { busy, error, run } = useAsync();
   const product = products.find((p) => p.id === productId);
-  useEffect(() => { setQ(null); }, [productId, start, end]);
+  useEffect(() => { setQ(null); }, [productId, start, end, priority]);
   useEffect(() => {
     run(async () => {
       const info = await ads.getEarliestStart();
@@ -117,19 +119,34 @@ function NewBooking({ products, onHeld }) {
           <input id="adp-end" type="date" value={end} min={start || minStart} disabled={!minStart} onChange={(e) => setEnd(e.target.value)} />
         </div>
       </div>
-      {earliest && <p className="msm-adp__help">{earliestStartExplanation(earliest)}</p>}
+      {earliest && <p className="msm-adp__help">{earliestStartExplanation(earliest, priorityOffered)}</p>}
+      {priorityOffered && (
+        <label style={{ display: "flex", gap: 10, alignItems: "flex-start", fontWeight: 400 }}>
+          <input type="checkbox" checked={priority} onChange={(e) => setPriority(e.target.checked)} style={{ width: 22, minHeight: 22, marginTop: 2 }} />
+          <span>Add optional priority review (first review decision within 12 elapsed hours). The exact price and deadline are shown when you check the price.</span>
+        </label>
+      )}
       <p className="msm-adp__help">Your advert can run from 00:00 UK time on the first day until the end of the last day (UK time), once MSM has approved it. Payment does not approve or publish an advert.</p>
-      <button disabled={busy || !productId || !start || !end} onClick={() => run(async () => setQ(await ads.quote(productId, start, end)))}>Check availability & price</button>
+      <button disabled={busy || !productId || !start || !end} onClick={() => run(async () => {
+        const r = await ads.quote(productId, start, end, priority && priorityOffered);
+        setPriorityOffered(Boolean(r.priority_available));
+        if (!r.priority_available && priority) setPriority(false);
+        setQ(r);
+      })}>Check availability & price</button>
       {q && (
         <div aria-live="polite">
           <dl>
             <dt>Available</dt><dd>{q.available ? "Yes" : `No - booked on ${q.unavailable_days.join(", ")}`}</dd>
             <dt>Days</dt><dd>{q.billable_days}</dd>
+            {q.priority_review && <><dt>Placement</dt><dd>{formatPence(q.placement_pence, q.currency)}</dd>
+              <dt>Priority review</dt><dd>{formatPence(q.priority_fee_pence, q.currency)}</dd></>}
             <dt>Total</dt><dd>{formatPence(q.total_pence, q.currency)}{q.is_test ? " (TEST price - not a real charge)" : ""}</dd>
             <dt>Runs</dt><dd>{new Date(q.live_from).toLocaleString("en-GB", { timeZone: "Europe/London" })} to end of {end} (UK time)</dd>
           </dl>
+          <p className="msm-adp__help">{reviewPromiseText(q)}</p>
+          {q.terms_version && <p className="msm-adp__help">Order terms version: {q.terms_version}{/^DRAFT/.test(q.terms_version) ? " (draft - not final terms)" : ""}</p>}
           <button className="primary" disabled={busy || !q.available}
-            onClick={() => run(async () => { await ads.createHold(productId, start, end); onHeld(); })}>Hold these dates</button>
+            onClick={() => run(async () => { await ads.createHold(productId, start, end, Boolean(q.priority_review)); onHeld(); })}>Hold these dates</button>
           <p className="msm-adp__help">Holds are kept for a short time while you pay. The price is fixed by MSM's system when you hold.</p>
         </div>
       )}
@@ -201,7 +218,7 @@ function ReportBox({ booking }) {
   );
 }
 
-function BookingCard({ booking, advertiserId, flags, specByCode, onChange }) {
+function BookingCard({ booking, advertiserId, flags, specByCode, sla, confirmation, onChange }) {
   const snap = booking.ad_purchase_snapshots;
   const campaign = Array.isArray(booking.ad_campaigns) ? booking.ad_campaigns[0] : booking.ad_campaigns;
   const versions = (campaign?.ad_creative_versions || []).slice().sort((a, b) => b.version_no - a.version_no);
@@ -234,6 +251,10 @@ function BookingCard({ booking, advertiserId, flags, specByCode, onChange }) {
           {flags.checkout && !canStartCheckout(booking) && <p className="msm-adp__help">Less than 31 minutes left on this hold - cancel it and hold the dates again to pay.</p>}
         </>
       )}
+      {confirmation && <p className="msm-adp__help" role="note">{confirmationText(confirmation)}</p>}
+      {(sla?.corrections || []).filter((c) => c.status !== "withdrawn").map((c) => (
+        <p key={c.id} className={c.status === "responded" ? "msm-adp__help" : "msm-adp__err"} role={c.status === "responded" ? undefined : "alert"}>{correctionText(c)}</p>
+      ))}
       {versions.length > 0 && (
         <ul className="msm-adp__help">
           {versions.map((v) => (
@@ -254,6 +275,8 @@ export default function AdvertiserPortal({ user, logo }) {
   const [advertiser, setAdvertiser] = useState(undefined);
   const [products, setProducts] = useState([]);
   const [bookings, setBookings] = useState([]);
+  const [slaById, setSlaById] = useState({});
+  const [confirmations, setConfirmations] = useState({});
   const [loadError, setLoadError] = useState("");
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   const returned = params.get("checkout") === "returned";
@@ -266,7 +289,14 @@ export default function AdvertiserPortal({ user, logo }) {
       const adv = await ads.getMyAdvertiser(user.id);
       setAdvertiser(adv);
       setProducts((await ads.listProducts()).filter((p) => p.active));
-      if (adv) setBookings(await ads.listBookings());
+      if (adv) {
+        const list = await ads.listBookings();
+        setBookings(list);
+        const paid = list.filter((b) => b.status === "confirmed").map((b) => b.id);
+        setConfirmations(await ads.listConfirmations(paid));
+        const slas = await Promise.all(paid.map((id) => ads.reviewSla(id).catch(() => null)));
+        setSlaById(Object.fromEntries(paid.map((id, i) => [id, slas[i]])));
+      }
     } catch (e) {
       setLoadError(friendlyAdsError(e));
     }
@@ -306,9 +336,10 @@ export default function AdvertiserPortal({ user, logo }) {
             {advertiser && products.length > 0 && <NewBooking products={products} onHeld={refresh} />}
             {advertiser && products.length === 0 && <p className="msm-adp__help">No positions are on sale right now.</p>}
             {advertiser && bookings.map((b) => (
-              <BookingCard key={b.id} booking={b} advertiserId={advertiser.id} flags={flags} specByCode={specByCode} onChange={refresh} />
+              <BookingCard key={b.id} booking={b} advertiserId={advertiser.id} flags={flags} specByCode={specByCode}
+                sla={slaById[b.id]} confirmation={confirmations[b.id]} onChange={refresh} />
             ))}
-            <p className="msm-adp__help">Every advert is reviewed by MSM before it appears. Paid adverts are normally reviewed by the end of the next UK working day after full payment and complete artwork/link. Approval is not guaranteed.</p>
+            <p className="msm-adp__help">Every advert is reviewed by MSM before it appears. Standard review: by the end of the next UK working day after payment has cleared and complete artwork/link are received (optional priority review, when offered: within 12 elapsed hours). Approval is not guaranteed.</p>
           </>
         )}
       </div>

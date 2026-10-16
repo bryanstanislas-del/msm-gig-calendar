@@ -58,10 +58,21 @@ export async function listProducts() {
   return data || [];
 }
 
-export const quote = (productId, start, end) => rpc("ad_quote", { p_product_id: productId, p_start: start, p_end: end });
+/** Quote incl. the optional priority review (ad_quote 4-arg: fee, exact deadline if ready now, terms version). */
+export const quote = (productId, start, end, priority = false) => rpc("ad_quote", { p_product_id: productId, p_start: start, p_end: end, p_priority: Boolean(priority) });
 /** Server-derived earliest STANDARD start date (review window); see ads_internal.earliest_standard_start. */
 export const getEarliestStart = () => rpc("ad_earliest_start");
-export const createHold = (productId, start, end) => rpc("ad_create_hold", { p_product_id: productId, p_start: start, p_end: end });
+export const createHold = (productId, start, end, priority = false) => rpc("ad_create_hold", { p_product_id: productId, p_start: start, p_end: end, p_priority: Boolean(priority) });
+/** Review deadlines + correction requests for one booking (owner or admin; internal cause only for admin). */
+export const reviewSla = (bookingId) => rpc("ad_review_sla", { p_booking_id: bookingId });
+export async function listConfirmations(bookingIds) {
+  if (!bookingIds.length) return {};
+  const { data, error } = await supabase.from("ad_booking_confirmations")
+    .select("booking_id, confirmed_at, total_pence, placement_pence, priority_fee_pence, priority_review, currency, terms_version, review_rule, booked_from, booked_until")
+    .in("booking_id", bookingIds);
+  if (error) throw new Error(error.message);
+  return Object.fromEntries((data || []).map((c) => [c.booking_id, c]));
+}
 export const cancelHold = (bookingId) => rpc("ad_cancel_hold", { p_booking_id: bookingId });
 
 const BOOKING_SELECT = `id, advertiser_id, start_date, end_date, status, status_reason, hold_expires_at, is_test, created_at, confirmed_at,
@@ -139,7 +150,30 @@ export async function adminListSettings() {
 export const adminSetSetting = (key, bool, int) => rpc("ad_admin_set_setting", { p_key: key, p_bool: bool ?? null, p_int: int ?? null });
 export const adminReview = (versionId, decision, reason) => rpc("ad_admin_review", { p_version_id: versionId, p_decision: decision, p_reason: reason || null });
 export const adminSetPaused = (campaignId, paused, reason) => rpc("ad_admin_set_paused", { p_campaign_id: campaignId, p_paused: paused, p_reason: reason || null });
-export const adminCancelBooking = (bookingId, reason) => rpc("ad_admin_cancel_booking", { p_booking_id: bookingId, p_reason: reason });
+/** Removal only (no automatic refund). partyType: business | undetermined (consumer path disabled server-side). */
+export const adminCancelBooking = (bookingId, reason, partyType = "undetermined") =>
+  rpc("ad_admin_cancel_booking", { p_booking_id: bookingId, p_reason: reason, p_party_type: partyType });
+export const adminRequestCorrection = (versionId, cause, reasons) =>
+  rpc("ad_admin_request_correction", { p_version_id: versionId, p_cause: cause, p_reasons: reasons });
+/** Admin fallback when the mailer cannot report delivery (e.g. phoned/confirmed in account). */
+export const adminRecordCorrectionNotice = (requestId, status, note) =>
+  rpc("ad_admin_record_correction_notice", { p_request_id: requestId, p_status: status, p_note: note });
+/** lost: [{ from, until, evidence }] ISO instants; the server recomputes and clips everything. */
+export const adminProposeRefund = (bookingId, includePriorityFee, lost, note) =>
+  rpc("ad_admin_propose_refund", { p_booking_id: bookingId, p_include_priority_fee: Boolean(includePriorityFee), p_lost: lost || [], p_note: note });
+export const adminProposeCancellationRefund = (bookingId, deliveredPence, netLossPence, evidence, note) =>
+  rpc("ad_admin_propose_cancellation_refund", { p_booking_id: bookingId, p_delivered_value_pence: deliveredPence, p_net_loss_pence: netLossPence, p_evidence: evidence, p_note: note });
+export const adminDecideRefund = (assessmentId, decision, note) => rpc("ad_admin_decide_refund", { p_assessment_id: assessmentId, p_decision: decision, p_note: note });
+/** Records what happened in Stripe AFTER a manual refund there. Never moves money. */
+export const adminRecordRefundProcessing = (assessmentId, status, providerRefundId, idempotencyKey, note) =>
+  rpc("ad_admin_record_refund_processing", { p_assessment_id: assessmentId, p_status: status, p_provider_refund_id: providerRefundId || null, p_idempotency_key: idempotencyKey, p_note: note || null });
+export async function adminListRefunds() {
+  const { data, error } = await supabase.from("ad_refund_assessments")
+    .select("id, booking_id, kind, status, total_pence, gates, note, proposed_at, decided_at, decision_note, target_pay_by, ad_refund_lines(kind, pence, lost_seconds, purchased_seconds, details), ad_refund_processing_events(status, provider_refund_id, occurred_at, note)")
+    .order("proposed_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return data || [];
+}
 export const adminExpireHolds = () => rpc("ad_expire_stale_holds");
 
 export async function adminListInventory() {
