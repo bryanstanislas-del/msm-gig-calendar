@@ -41,7 +41,7 @@ Existing Calendar behaviour is unchanged: `promo_slots` / `PromoSlot.jsx` / `Adm
 | `stripe_livemode` | Expected Stripe mode | **locked false** |
 | `hold_minutes` (60), `min_lead_days` (0 after `20261016090000`; optional extra floor), `max_advance_days` (365), `max_active_holds_per_advertiser` (3) | tunables | TEST values |
 
-**Earliest bookable start (standard).** This is derived server-side from the agreed review window: review by the **end of the next UK working day** after payment **and** complete artwork/link. So the earliest start is the day after that working day, computed as if the advertiser were ready **now**. For example, ready Friday 17:00 → review by end of Monday → earliest start **Tuesday**. Weekends and `ad_uk_holidays` are skipped, and the calculation is Europe/London and DST-aware. `ad_quote`/`ad_create_hold` reject earlier dates whatever the client sends, and the portal's date picker uses `ad_earliest_start()` for its min/default. **Delayed readiness:** if payment or artwork arrives later, the review deadline moves later. If approval lands after the first booked day, the advert runs only on the remaining booked days; dates are not moved and nothing is refunded automatically (policy undecided). Approval is never promised. `min_lead_days`, if raised, only adds a later floor (today + N).
+**Earliest bookable start (standard).** This is derived server-side from the agreed review window: review by the **end of the next UK working day** after payment **and** complete artwork/link. So the earliest start is the day after that working day, computed as if the advertiser were ready **now**. For example, ready Friday 17:00 → review by end of Monday → earliest start **Tuesday**. Weekends and `ad_uk_holidays` are skipped, and the calculation is Europe/London and DST-aware. `ad_quote`/`ad_create_hold` reject earlier dates whatever the client sends, and the portal's date picker uses `ad_earliest_start()` for its min/default. **Delayed readiness (current implementation, NOT agreed policy):** if payment or artwork arrives later, the review deadline moves later. If approval lands after the first booked day, the advert runs only on the remaining booked days; dates are not moved and nothing is refunded automatically. This is an **implementation limitation**. The agreed policy is different and unbuilt: see **RELEASE BLOCKER: agreed date revision** below. Approval is never promised. `min_lead_days`, if raised, only adds a later floor (today + N).
 
 There is also a server kill switch, `ADS_API_ENABLED`. Seeded inventory (`wordpress-home-top/-middle/-bottom`) and the two TEST packages (`TEST-wp-home-top-daily`, `TEST-wp-home-top-weekly`, which share the same physical unit) are all `active = false`, `is_test = true`, and use placeholder prices.
 
@@ -149,7 +149,7 @@ Hidden tabs do not poll. A CDN in front of WordPress must not cache `/wp-json/ms
 
 - Real prices, packages, minimum/maximum lengths, lead time and rotation capacity per position. Everything seeded is TEST.
 - VAT treatment and invoices/receipts (snapshot stores `vat_treatment = 'undetermined-test'`; no invoice is produced).
-- Refund/cancellation policy, including what happens if approval lands after the start date (currently the advert simply runs for the remaining booked days with no automatic partial refund).
+- Refund/cancellation policy: **no refund policy has been agreed or implemented**, and none is assumed here. The agreed handling of late or changed campaigns is **date revision with the advertiser** (see the release blocker below). The current "remaining booked days only" behaviour is not policy.
 - Advertiser terms, creative/content policy, and whether advertisers need manual vetting (anyone signed in can create an advertiser profile and up to 3 holds of 60 minutes each).
 - Final WordPress artwork sizes (seeded 1200×250 desktop / 600×250 mobile, matching the Calendar promo convention) and the "Advertisement" label wording.
 - Priority review (£150, 12 elapsed hours): final terms, and confirmation of the refund-if-missed rule (see the unmet requirement below).
@@ -157,6 +157,22 @@ Hidden tabs do not poll. A CDN in front of WordPress must not cache `/wp-json/ms
 - Retention period for financial/audit records.
 
 ## Incomplete / deliberately deferred
+
+- **RELEASE BLOCKER / UNMET AGREED REQUIREMENT: campaigns needing changes stay on hold, and affected dates are revised WITH the advertiser.**
+  - **Agreed by Bryan:** a campaign that needs changes remains on hold, and any booked dates affected (e.g. review or approval landing on or after the first booked day, or changes requested) are revised together with the advertiser.
+  - **Implemented today, a limitation only:** a rejected or changes-needed campaign simply isn't delivered while its booked dates keep elapsing. A late approval runs only the remaining booked days. A rejected replacement leaves the previously approved version serving. Dates are never moved, and there is no hold state, rescheduling or agreement flow. No refund policy exists or is implied.
+  - **Implementation still needed** (design only; not built in this PR):
+    1. **On-hold state**: an explicit campaign/booking state such as "changes requested / on hold" that suspends delivery and the booked-date clock, set by the admin review action with a reason, and visible to both sides. It must also decide what happens to a previously approved version (keep serving vs. pause), which is a commercial decision.
+    2. **Reschedule proposal record**: an append-only table (booking id, proposed start/end UK dates, proposer, reason, status proposed/accepted/declined/expired/withdrawn, timestamps, audit). Every proposal is snapshotted, so the original booking dates are never silently overwritten.
+    3. **Availability re-check**: accepting a proposal must, in one transaction under the same per-unit row locks as holds, re-check capacity for the new dates (shared inventory across packages), reserve the new days, release the old unconsumed days, and refuse on conflict. Dates must respect the earliest standard start rule and DST/holidays.
+    4. **Advertiser agreement**: the change takes effect only after explicit acceptance by the booking owner (owner-only RPC). MSM may propose; the advertiser may propose and MSM accept. There is no unilateral admin date move, and no change from a client-supplied date without the server checks.
+    5. **Pricing/snapshot rules**: the purchase snapshot is immutable, so a revision needs an amendment record linked to it. What happens if the revised dates change the number of days or price (top-up, credit, refund) is **undecided** and must be agreed before building. Nothing here assumes a refund.
+    6. **Payment and funding invariant**: revisions must keep `booking_funded()` true for the funding payment. Any extra charge or refund path must reuse the verified-webhook flow; refunds stay manual until a policy exists.
+    7. **Delivery and reporting**: delivery and the WordPress `serve_until` must follow the accepted dates only. Reports cover the delivered dates and show the revision history.
+    8. **UI, notifications and tests**:
+       - advertiser and admin screens;
+       - messages (no email exists today);
+       - concurrency tests (racing proposals and holds), tampering tests, DST/holiday tests, and accept/decline/expiry tests.
 
 - **Not verified against real services**: Stripe (only locally signed fixtures and mocks), Supabase hosted RLS/storage (local shim reproduces the relevant pieces), Vercel raw-body behaviour, WordPress (stubbed functions; the real theme was not available to inspect).
 - **UNMET APPROVED REQUIREMENT: Priority initial review (£150, decision within 12 elapsed hours of a ready submission).** **Not implemented** and locked off: `ads_priority_review_enabled` cannot be enabled and `priority_fee_pence` is pinned to 0. This is an approved requirement, not completed and not replaced by anything. Scope still needed:

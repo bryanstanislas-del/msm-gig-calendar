@@ -71,7 +71,7 @@ Regression: `supabase/tests/ads/10_ads_phase1_regression.sql` (booking b5 and th
 ## Review and approval
 
 - A creative version is created only when **complete** (both images verified server-side for magic bytes, exact pixel size and ≤1 MB, plus an https destination and alt text). Content columns are immutable by trigger.
-- **Earliest standard start date** (`ads_internal.earliest_standard_start`, migration `20261016090000`): the London date on which the standard review window ends if the advertiser were ready now, i.e. the day after the next UK working day. Optionally it is pushed later by `today + min_lead_days`. Enforced in `validate_booking_dates` for quote and hold; exposed to the portal by `ad_earliest_start()`. It assumes readiness at hold time and promises nothing; later readiness moves the review later, and only the remaining booked days run.
+- **Earliest standard start date** (`ads_internal.earliest_standard_start`, migration `20261016090000`): the London date on which the standard review window ends if the advertiser were ready now, i.e. the day after the next UK working day. Optionally it is pushed later by `today + min_lead_days`. Enforced in `validate_booking_dates` for quote and hold; exposed to the portal by `ad_earliest_start()`. It assumes readiness at hold time and promises nothing; later readiness moves the review later. **Current implementation:** only the remaining booked days run. That is a limitation, **not** the agreed policy (next point).
 - The **review clock** starts once per version, at the moment "booking confirmed (fully paid)" and "complete version" first coincide. Deadline: `review_due_before` = 00:00 Europe/London after the **next UK working day** (weekends and the `ad_uk_holidays` table skipped; DST-aware). The portal shows "Under review — decision due by end of Mon 19 Oct 2026 (UK time)".
 - `ad_admin_review(version, approve|reject, reason)` is admin-only and bound to one version id. It only accepts the latest submitted version of a **funded** booking (see the funding invariant). A refunded duplicate payment does not block it. A rejection needs a reason (shown to the advertiser).
 - Replacement: a new version goes back to review. The previously approved version keeps serving until the replacement is approved, then becomes `superseded`. A pending unreviewed version is superseded by a newer submission.
@@ -90,6 +90,19 @@ Regression: `supabase/tests/ads/10_ads_phase1_regression.sql` (booking b5 and th
 `ad_report(booking, from, to)` (owner or admin) clamps the range to the booked dates and returns one row per London day. `/api/ads/report` renders CSV (formula-injection safe) or a dependency-free PDF, and prints the measurement limitations.
 
 ## Later extensions (design only, not built)
+
+**RELEASE BLOCKER: agreed date revision (not implemented).** The agreed policy is that a campaign needing changes remains **on hold** and affected dates are revised **with the advertiser**. The current behaviour is that rejected campaigns aren't delivered while booked dates elapse, late approval runs only the remaining days, a rejected replacement keeps the old approved version serving, and dates never move. That is an implementation limitation, not policy. Required design:
+- an on-hold state that suspends delivery;
+- an append-only `ad_reschedule_proposals` record, with proposals from either side;
+- acceptance only by the booking owner via an owner-only RPC;
+- acceptance that atomically re-checks and re-reserves capacity under the per-unit locks and releases the old unconsumed days;
+- an immutable snapshot plus an amendment record;
+- unchanged funding-invariant and webhook rules;
+- delivery and reports that follow accepted dates;
+- UI, notifications and tests.
+
+Price, top-up and refund consequences of changed dates are **undecided**, and no refund policy is assumed. Full list in README ("Incomplete / deliberately deferred").
+
 
 **Priority initial review: UNMET APPROVED REQUIREMENT (not implemented, locked off; see README).** Add `priority_review boolean` to bookings and a priced line in the snapshot (`priority_fee_pence`, today pinned to 0 by a CHECK). The deadline is `ready_at + interval '12 hours'` (elapsed, not working hours), computed and shown **before checkout** as an exact London time. If missed, the fee is refundable via the same refund-required flag. It never guarantees publication or approval. It is gated by `ads_priority_review_enabled`, and MSM must confirm the £150 price and terms.
 
