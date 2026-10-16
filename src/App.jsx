@@ -637,7 +637,7 @@ export const DB = {
     return { total, approved, pending, rejected };
   },
 
-  async submitGig(gig, userId, bandProfileId) {
+  async submitGig(gig, userId, profile) {
     if (USE_MOCK) {
       const newGig = { ...gig, id: String(mockIdCounter++), status:"pending", submitted_by: userId };
       MOCK_GIGS.push(newGig);
@@ -648,7 +648,7 @@ export const DB = {
       genre:           gig.genre || null,
       submitted_by:    userId,
       status:          "pending",
-      band_profile_id: bandProfileId || null,
+      band_profile_id: profile?.claimed === true && profile?.user_id === userId ? profile.id : null,
     }).select();
     if (error) throw new Error(error.message);
     return data[0];
@@ -2635,7 +2635,7 @@ function SubmitGigForm({ user, profile, onSubmitted, onEditProfile }) {
     if (Object.keys(e).length) { setErrors(e); return; }
     setStatus("loading");
     try {
-      await DB.submitGig(submission, user.id, profile?.id);
+      await DB.submitGig(submission, user.id, profile);
       // Moderation notification: only reachable after the gig has actually
       // been written to gigs as `pending` above -- a failure here must never
       // roll back or block the submission itself (already committed), but
