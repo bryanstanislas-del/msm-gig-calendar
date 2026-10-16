@@ -93,6 +93,16 @@ Legend: **Done** = implemented and covered by local tests. **Partial** = core bu
 | Idempotent duplicates | Webhooks (existing), mailer notices (`idempotency_key`), processor events (`idempotency_key`), deadline creation (once per version) |
 | RLS not widened | New tables admin-only except the advertiser's own corrections (cause hidden), deadlines and confirmations |
 
+### 1.7 Review fixes on `9fc02d8` (migration `20261016180000`)
+
+| Concern | Fix | Evidence |
+|---|---|---|
+| Cross-kind ceiling/order: a cancellation balance and a service-failure assessment could together exceed the amount paid; approval did not re-validate | Every propose/decide locks the **booking row first**. Proposals keep the separate caps (fee once ≤ fee; lost time ≤ placement minus earlier lost time). A proposal facing an open/approved assessment of the other kind is recorded with its **full** computed entitlement but gated `cross_kind_allocation`; one that would take non-rejected assessments over the paid total is gated `exceeds_booking_total`. Approval refuses gates, refuses while another kind is open/approved, and re-checks booking-wide and per-kind ceilings against **approved** rows. | `30_`: both proposal orders, rejection + re-proposal, rogue rows over the ceiling/fee cap. Runner: 6 parallel proposals → 1 assessed (6 h, no double counting); 4 parallel approvals of one assessment → 1; two approvals that each fit but together exceed the payment → 1 approved, 1 `ADS_REFUND_CEILING`. **Mutation check:** without the booking lock in `ad_admin_decide_refund` that race approved both (approved > paid), and the test failed. |
+| Cancellation initiator was always `msm` while advertiser-cancellation retention applied | `ad_admin_cancel_booking(id, reason, party_type, initiated_by)` records `advertiser` or `msm` (legacy 2-arg = `undetermined`, assessment gated). Retention of delivered value + evidenced net loss applies only to an advertiser-initiated business cancellation. An MSM-initiated removal cannot retain any loss (refused) and its assessment (price − delivered value) is always gated `msm_initiated_cancellation` for a manual decision, so other lawful remedies are not pre-empted. | `30_` both initiators; `adsPresentation.test.js` wording (`removalMessage`, `cancellationGuidance`); admin must pick the initiator before removing; the loss field is hidden for MSM removals |
+| JS treated "no delivered notice" as late; SQL as timely | `correctionResponseTimely`: no notice → cannot be late (server parity); priority keeps the 3-working-hour review | `ukWorkingTime.test.js`; `20_` (response before any notice → `correction_review_priority`, due +3 wh) |
+| Standard deadlines stored as exclusive midnight but compared with `<=` | `ads_internal.deadline_met(kind, at, due)` / JS `deadlineMet`: end-of-day kinds (`initial_standard`, `correction_review_standard`, `replacement_review_provisional`) are met only **strictly before** the stored instant; exact kinds (`initial_priority`, `correction_review_priority`, `correction_response`) are inclusive. `ad_review_sla` uses it and exposes `initial_due_exclusive`. Unknown kinds throw in JS. | `20_`: standard approval exactly at the stored midnight → not met; boundary checks for every kind; JS boundary tests |
+| Stale partial-refund note "delivery suspended" | `ad_apply_stripe_event` (copied forward, only that branch changed): within approved assessments → "…delivery and approval continue", outcome `partially_refunded_within_approved`; beyond → "…suspended…", outcome `partially_refunded_flagged` | `30_` both notes; `10_` regression unchanged and passing |
+
 ## 2. Forward migrations and rollback
 
 Apply **in filename order**, only after review, **on staging only**:
@@ -100,13 +110,15 @@ Apply **in filename order**, only after review, **on staging only**:
 1. `supabase/migrations/20261016090000_ads_standard_earliest_start.sql` (earlier commit, not yet applied on staging)
 2. `supabase/migrations/20261016120000_ads_review_corrections_priority.sql`
 3. `supabase/migrations/20261016150000_ads_refund_cancellation_assessment.sql`
+4. `supabase/migrations/20261016180000_ads_refund_invariants_initiator_deadlines.sql` (review fixes on `9fc02d8`, see §1.7)
 
 Each file is a plain forward migration on top of the previous one. They are not wrapped in a transaction, so run each with `psql -v ON_ERROR_STOP=1 -1 -f <file>`, or through the Supabase SQL editor in one run. Then run `supabase/staging/03_postflight_readonly.sql`. The local proof is `npm run test:ads-staging`, which applies all four ads migrations on a bootstrapped empty platform DB and runs every suite there.
 
 **Behaviour changes on apply** (review before applying):
 
 - `ad_admin_set_setting` now allows `ads_priority_review_enabled = true` (the default stays OFF).
-- `ad_admin_cancel_booking` (2-arg) records an `undetermined` cancellation case and **no longer flags `requires_refund`**.
+- `ad_admin_cancel_booking` (2-arg) records an `undetermined` cancellation case and **no longer flags `requires_refund`**; the admin UI uses the 4-arg form with the actual initiator.
+- Standard review deadlines become exclusive of the stored midnight in `ad_review_sla`.
 - `booking_funded` treats a refund that does not exceed **approved** assessments as still funded.
 
 **Rollback:**
@@ -173,7 +185,7 @@ Each file is a plain forward migration on top of the previous one. They are not 
 5. **Consumer cancellation path** (reviewed flow, express unticked early-start consent) not built; consumer status cannot be processed.
 6. Decision gates: final-penny rounding; replacement review duration; late-bounce effect on the window; whether an account-only notice counts; earlier creative during replacement review; DST/hour rounding; pending-amendment hold expiry; defeated purpose/rejection/completed-review/tax/discount/multi-slot treatment; dual control for refund approval; advertiser-visible refund status.
 7. Terms are DRAFT (`DRAFT-NOT-APPROVED-2026-10-16`); real prices, VAT and invoices undecided; Stripe live mode not built.
-8. A known wording issue: after a partial refund of the funding payment, `ad_apply_stripe_event` sets `status_reason` to "delivery and approval suspended". This is inaccurate when the refund is within approved assessments; delivery continues correctly.
+8. (Fixed in `20261016180000`: the partial-refund status note.) Cross-kind refund allocation (service failure + cancellation on one booking) and MSM-initiated cancellation refunds are **manual gates**: they record the entitlement but cannot be approved until a policy exists.
 9. Bank holidays maintained only to 2028.
 
 ## 5. Commits (branch `claude/quirky-bohr-2dmbus`, draft PR #46)
@@ -183,4 +195,4 @@ Each file is a plain forward migration on top of the previous one. They are not 
 | `b885c09` | UK review clocks, review/correction event model, optional priority review (migration `20261016120000`) |
 | `e431873` | Refund assessment maths + manual audited refunds + business cancellation (migration `20261016150000`), SQL suite `30_` |
 | `9fc02d8` | Portal/admin UI for priority, corrections, confirmation, SLA and refunds |
-| (this commit) | This document and README updates |
+| `fd97927` | This document and README updates |

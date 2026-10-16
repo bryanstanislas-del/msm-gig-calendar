@@ -174,3 +174,33 @@ export function parseLostIntervals(text) {
 export function refundProcessingKey(assessmentId, status, providerRefundId, attempt = 0) {
   return `refund-${assessmentId}-${attempt}-${status}-${providerRefundId || "none"}`;
 }
+
+/** Admin wording for who actually initiated a cancellation (server: ad_cancellation_cases.initiated_by). */
+export const CANCELLATION_INITIATORS = Object.freeze({
+  advertiser: "The advertiser asked to cancel (keep their request as evidence)",
+  msm: "MSM is removing it (MSM decision or MSM failure)",
+});
+
+export function removalMessage(initiatedBy) {
+  if (initiatedBy === "advertiser") return "Cancelled at the advertiser's request - financial assessment is separate (no automatic refund)";
+  if (initiatedBy === "msm") return "Removed by MSM - assess the refund separately; no advertiser-cancellation losses can be retained";
+  return "Removed - record who initiated it before any assessment";
+}
+
+/**
+ * What the cancellation assessment form may offer. Advertiser-cancellation
+ * retention (delivered value + evidenced net loss) applies only to an
+ * advertiser-initiated BUSINESS cancellation; an MSM-initiated removal may
+ * retain no loss and is always a manual decision.
+ */
+export function cancellationGuidance(kase) {
+  if (!kase) return { canAssess: false, allowNetLoss: false, text: "Remove the campaign first." };
+  if (kase.initiated_by === "undetermined") return { canAssess: false, allowNetLoss: false, text: "Initiator not recorded (legacy removal): assessment is gated." };
+  if (kase.initiated_by === "msm") {
+    return { canAssess: true, allowNetLoss: false,
+      text: "MSM-initiated removal: no loss can be retained. The assessment (price minus delivered value) is gated for a manual decision; other lawful remedies may apply." };
+  }
+  if (kase.party_type !== "business") return { canAssess: false, allowNetLoss: false, text: "Business status not determined on the facts: assessment gated (consumer path not built)." };
+  return { canAssess: true, allowNetLoss: true,
+    text: "Advertiser-initiated business cancellation: retain only delivered service plus evidenced reasonable net loss after mitigation, saved costs and resale (never more than the price)." };
+}

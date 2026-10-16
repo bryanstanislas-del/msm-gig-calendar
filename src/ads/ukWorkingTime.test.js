@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   initialClockStart, standardReviewDue, priorityReviewDue, initialReviewDue, addWorkingHours, correctionResponseDue,
-  correctionReviewDue, isTimely, reviewMetDeadline, nextWholeUkHour, formatLondonWithOffset, EW_BANK_HOLIDAYS,
+  correctionReviewDue, isTimely, reviewMetDeadline, correctionResponseTimely, deadlineMet, nextWholeUkHour, formatLondonWithOffset, EW_BANK_HOLIDAYS,
 } from "./ukWorkingTime.js";
 import { isWorkingDay } from "./londonTime.js";
 
@@ -69,16 +69,42 @@ describe("correction response window", () => {
     expect(iso(correctionReviewDue({ receivedAt: "2026-10-19T10:00:01Z", responseDueAt: due, priority: true }))).toBe("2026-10-20T23:00:00.000Z");
     expect(iso(correctionReviewDue({ receivedAt: "2026-10-19T10:00:00Z", responseDueAt: due, priority: false }))).toBe("2026-10-20T23:00:00.000Z");
   });
+  it("no delivered notice -> the advertiser cannot be late (server parity): priority keeps the 3-working-hour review", () => {
+    expect(correctionResponseTimely({ receivedAt: "2026-10-19T10:00:00Z", responseDueAt: null })).toBe(true);
+    expect(iso(correctionReviewDue({ receivedAt: "2026-10-19T10:00:00Z", responseDueAt: null, priority: true }))).toBe("2026-10-19T13:00:00.000Z");
+    expect(iso(correctionReviewDue({ receivedAt: "2026-10-19T10:00:00Z", responseDueAt: null, priority: false }))).toBe("2026-10-20T23:00:00.000Z");
+  });
+});
+
+describe("deadline boundaries", () => {
+  const stdDue = "2026-10-19T23:00:00Z"; // exclusive: 00:00 BST Tue = end of Mon 23:59:59
+  it("end-of-day deadlines are exclusive of the stored midnight", () => {
+    for (const kind of ["initial_standard", "correction_review_standard", "replacement_review_provisional"]) {
+      expect(deadlineMet({ kind, at: "2026-10-19T22:59:59Z", dueAt: stdDue })).toBe(true);
+      expect(deadlineMet({ kind, at: stdDue, dueAt: stdDue })).toBe(false);
+    }
+    expect(reviewMetDeadline({ outcome: "approved", outcomeAt: stdDue, dueAt: stdDue, kind: "initial_standard" })).toBe(false);
+  });
+  it("exact-instant deadlines are inclusive", () => {
+    for (const kind of ["initial_priority", "correction_review_priority", "correction_response"]) {
+      expect(deadlineMet({ kind, at: stdDue, dueAt: stdDue })).toBe(true);
+      expect(deadlineMet({ kind, at: "2026-10-19T23:00:01Z", dueAt: stdDue })).toBe(false);
+    }
+  });
+  it("unknown kind is an error, never a guess", () => {
+    expect(() => deadlineMet({ kind: "x", at: stdDue, dueAt: stdDue })).toThrow();
+  });
 });
 
 describe("what counts as review", () => {
   const dueAt = "2026-10-17T04:00:00Z"; // 12h after Fri 16:00 UTC
   it("approval, reasoned rejection or genuine correction request by the deadline; acknowledgement never", () => {
-    expect(reviewMetDeadline({ outcome: "correction_requested", outcomeAt: "2026-10-17T03:59:00Z", dueAt })).toBe(true); // 11h59m
-    expect(reviewMetDeadline({ outcome: "approved", outcomeAt: dueAt, dueAt })).toBe(true);
-    expect(reviewMetDeadline({ outcome: "approved", outcomeAt: "2026-10-17T04:00:01Z", dueAt })).toBe(false);
-    expect(reviewMetDeadline({ outcome: "acknowledged", outcomeAt: "2026-10-16T17:00:00Z", dueAt })).toBe(false);
-    expect(reviewMetDeadline({ outcome: "correction_requested", outcomeAt: "2026-10-16T17:00:00Z", dueAt, genuine: false })).toBe(false);
+    const kind = "initial_priority";
+    expect(reviewMetDeadline({ outcome: "correction_requested", outcomeAt: "2026-10-17T03:59:00Z", dueAt, kind })).toBe(true); // 11h59m
+    expect(reviewMetDeadline({ outcome: "approved", outcomeAt: dueAt, dueAt, kind })).toBe(true);
+    expect(reviewMetDeadline({ outcome: "approved", outcomeAt: "2026-10-17T04:00:01Z", dueAt, kind })).toBe(false);
+    expect(reviewMetDeadline({ outcome: "acknowledged", outcomeAt: "2026-10-16T17:00:00Z", dueAt, kind })).toBe(false);
+    expect(reviewMetDeadline({ outcome: "correction_requested", outcomeAt: "2026-10-16T17:00:00Z", dueAt, kind, genuine: false })).toBe(false);
   });
 });
 

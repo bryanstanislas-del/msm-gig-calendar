@@ -53,6 +53,7 @@ declare
   vp uuid; vp2 uuid; vs uuid; vm uuid; vx uuid; vl uuid; vl2 uuid;
   rq uuid; rq2 uuid; rqx uuid;
   t0 timestamptz;
+  bb1 uuid; bb2 uuid; vb1 uuid; vb2 uuid; rqn uuid;     -- boundary / no-notice cases (migration 20261016180000)
 begin
   insert into auth.users (email) values ('zz-owner@example.invalid') returning id into u_owner;
   insert into auth.users (email) values ('zz-other@example.invalid') returning id into u_other;
@@ -239,6 +240,44 @@ begin
   perform zz.as_pg();
   perform zz.ok((select kind = 'replacement_review_provisional' from public.ad_review_deadlines where creative_version_id = vm), 'replacement review kind flagged provisional (gate)');
   perform zz.ok((select approved_version_id = vs from public.ad_campaigns where booking_id = bs), 'unreviewed destination change never replaces the approved version');
+
+  -- ── Deadline boundaries (20261016180000): end-of-day exclusive, exact inclusive
+  perform zz.as_pg();
+  perform zz.ok(not ads_internal.deadline_met('initial_standard', '2026-10-28 00:00+00', '2026-10-28 00:00+00')
+                and ads_internal.deadline_met('initial_standard', '2026-10-27 23:59:59+00', '2026-10-28 00:00+00'), 'standard: stored midnight is exclusive');
+  perform zz.ok(not ads_internal.deadline_met('correction_review_standard', '2026-10-28 00:00+00', '2026-10-28 00:00+00')
+                and not ads_internal.deadline_met('replacement_review_provisional', '2026-10-28 00:00+00', '2026-10-28 00:00+00'), 'other end-of-day kinds exclusive');
+  perform zz.ok(ads_internal.deadline_met('initial_priority', '2026-10-28 00:00+00', '2026-10-28 00:00+00')
+                and ads_internal.deadline_met('correction_review_priority', '2026-10-28 00:00+00', '2026-10-28 00:00+00')
+                and ads_internal.deadline_met('correction_response', '2026-10-28 00:00+00', '2026-10-28 00:00+00')
+                and not ads_internal.deadline_met('initial_priority', '2026-10-28 00:00:01+00', '2026-10-28 00:00+00'), 'exact deadlines inclusive');
+
+  perform zz.at('2026-10-26 10:00+00');
+  perform zz.as_user(u_owner);
+  bb1 := public.ad_create_hold(p_daily, e + 20, e + 20);
+  bb2 := public.ad_create_hold(p_daily, e + 21, e + 21, true);
+  perform zz.as_pg(); perform zz.pay(bb1, 'bb1'); perform zz.pay(bb2, 'bb2');
+  vb1 := zz.submit(u_owner, bb1, 'https://example.com/b1');
+  vb2 := zz.submit(u_owner, bb2, 'https://example.com/b2');
+  perform zz.as_pg();
+  perform zz.ok((select due_at from public.ad_review_deadlines where creative_version_id = vb1) = '2026-10-28 00:00+00', 'Mon (GMT) -> exclusive due 00:00 Wed');
+  perform zz.at('2026-10-28 00:00+00');                               -- exactly at the exclusive instant
+  perform zz.as_user(u_admin);
+  perform public.ad_admin_review(vb1, 'approve');
+  s := public.ad_review_sla(bb1);
+  perform zz.ok(not (s ->> 'initial_review_met')::boolean and (s ->> 'initial_due_exclusive')::boolean, 'standard approval AT the stored midnight is late (exclusive)');
+
+  -- No delivered notice: the advertiser cannot be late; priority keeps 3 working hours.
+  perform zz.as_pg(); perform zz.at('2026-10-26 11:00+00');
+  perform zz.as_user(u_admin);
+  rqn := public.ad_admin_request_correction(vb2, 'advertiser_material', array['Mobile artwork text is cut off']);
+  perform zz.ok((public.ad_review_sla(bb2) ->> 'initial_review_met')::boolean, 'genuine correction within 12 h meets priority review');
+  perform zz.as_pg(); perform zz.at('2026-10-26 11:30+00');
+  vb2 := zz.submit(u_owner, bb2, 'https://example.com/b2-fixed');
+  perform zz.as_pg();
+  perform zz.ok((select timely and response_due_at is null from public.ad_correction_requests where id = rqn), 'response before any delivered notice is timely');
+  perform zz.ok((select kind = 'correction_review_priority' and due_at = '2026-10-26 14:30+00' from public.ad_review_deadlines where creative_version_id = vb2),
+                'no notice never disadvantages the advertiser: 3 working-hour priority review');
 
   raise notice 'ads review/corrections/priority: ALL CHECKS PASSED';
 end $$;

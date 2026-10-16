@@ -13,7 +13,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import * as ads from "../../ads/adsClient.js";
-import { formatPence, friendlyAdsError, parseLostIntervals, refundProcessingKey } from "../../ads/adsPresentation.js";
+import { formatPence, friendlyAdsError, parseLostIntervals, refundProcessingKey, removalMessage, cancellationGuidance, CANCELLATION_INITIATORS } from "../../ads/adsPresentation.js";
 import { formatLondonWithOffset } from "../../ads/ukWorkingTime.js";
 import { formatDeadline, formatLondonDateTime } from "../../ads/londonTime.js";
 import {
@@ -37,7 +37,7 @@ function ReviewItem({ v, booking, onDone, setToast }) {
       .then(([d, m]) => live && setUrls({ d, m }));
     return () => { live = false; };
   }, [v.desktop_object_path, v.mobile_object_path]);
-  const overdue = v.review_due_before && new Date(v.review_due_before) < new Date();
+  const overdue = v.review_due_before && new Date(v.review_due_before) < new Date(); // display hint only; SLA view applies kind-specific boundaries
   const act = async (decision) => {
     setBusy(true);
     try {
@@ -91,7 +91,12 @@ function BookingTools({ booking, onDone, setToast }) {
   const [note, setNote] = useState("");
   const [noticeNote, setNoticeNote] = useState("");
   const [cx, setCx] = useState({ delivered: "", loss: "", evidence: "" });
-  const loadSla = useCallback(() => ads.reviewSla(booking.id).then(setSla).catch((e) => setToast({ type: "error", msg: friendlyAdsError(e) })), [booking.id, setToast]);
+  const [kase, setKase] = useState(null);
+  const loadSla = useCallback(() => {
+    ads.reviewSla(booking.id).then(setSla).catch((e) => setToast({ type: "error", msg: friendlyAdsError(e) }));
+    if (booking.status === "cancelled") ads.adminGetCancellationCase(booking.id).then(setKase).catch(() => setKase(null));
+  }, [booking.id, booking.status, setToast]);
+  const guide = cancellationGuidance(kase);
   const run = (fn, ok) => async () => {
     try { await fn(); setToast({ type: "success", msg: ok }); loadSla(); onDone(); } catch (e) { setToast({ type: "error", msg: friendlyAdsError(e) + " " + String(e.message || "").slice(0, 160) }); }
   };
@@ -123,14 +128,15 @@ function BookingTools({ booking, onDone, setToast }) {
           <SmallActionButton disabled={note.trim().length < 5} onClick={run(() => ads.adminProposeRefund(booking.id, feeLine, parseLostIntervals(lostText), note.trim()), "Refund assessment proposed")}>Propose refund assessment</SmallActionButton>
           {booking.status === "cancelled" && (
             <>
-              <strong>Business cancellation assessment</strong>
+              <strong>Cancellation assessment{kase ? ` (initiated by ${kase.initiated_by}, ${kase.party_type})` : ""}</strong>
+              <span style={{ color: TEXT_MUTED }}>{guide.text}</span>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 <TextInput accent={ACCENT} type="number" placeholder="Delivered value (pence)" value={cx.delivered} onChange={(e) => setCx({ ...cx, delivered: e.target.value })} style={{ maxWidth: 170 }} />
-                <TextInput accent={ACCENT} type="number" placeholder="Net loss after mitigation (pence)" value={cx.loss} onChange={(e) => setCx({ ...cx, loss: e.target.value })} style={{ maxWidth: 220 }} />
+                {guide.allowNetLoss && <TextInput accent={ACCENT} type="number" placeholder="Net loss after mitigation (pence)" value={cx.loss} onChange={(e) => setCx({ ...cx, loss: e.target.value })} style={{ maxWidth: 220 }} />}
               </div>
               <TextInput accent={ACCENT} placeholder="Evidence (delivery, saved costs, resale)" value={cx.evidence} onChange={(e) => setCx({ ...cx, evidence: e.target.value })} />
-              <SmallActionButton disabled={note.trim().length < 5 || cx.evidence.trim().length < 10}
-                onClick={run(() => ads.adminProposeCancellationRefund(booking.id, Number(cx.delivered || 0), Number(cx.loss || 0), cx.evidence.trim(), note.trim()), "Cancellation assessment proposed")}>Propose cancellation assessment</SmallActionButton>
+              <SmallActionButton disabled={!guide.canAssess || note.trim().length < 5 || cx.evidence.trim().length < 10}
+                onClick={run(() => ads.adminProposeCancellationRefund(booking.id, Number(cx.delivered || 0), guide.allowNetLoss ? Number(cx.loss || 0) : 0, cx.evidence.trim(), note.trim()), "Cancellation assessment proposed")}>Propose cancellation assessment</SmallActionButton>
             </>
           )}
         </div>
@@ -184,6 +190,7 @@ export default function AdminAds() {
   const [toast, setToast] = useState(null);
   const [cancelReason, setCancelReason] = useState("");
   const [partyType, setPartyType] = useState("undetermined");
+  const [initiatedBy, setInitiatedBy] = useState("");
   const [refunds, setRefunds] = useState([]);
 
   const load = useCallback(async () => {
@@ -257,6 +264,10 @@ export default function AdminAds() {
             <option value="undetermined">Business/consumer status not yet determined (assessment gated)</option>
             <option value="business">Business (determined on the facts)</option>
           </select>
+          <select value={initiatedBy} onChange={(e) => setInitiatedBy(e.target.value)} aria-label="Who initiated the cancellation" style={{ minHeight: 36 }}>
+            <option value="">Who initiated it? (required to remove)</option>
+            {Object.entries(CANCELLATION_INITIATORS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+          </select>
         </div>
         {bookings.length === 0 ? <EmptyState>No bookings yet.</EmptyState> : (
           <TableShell minWidth={900}>
@@ -278,8 +289,8 @@ export default function AdminAds() {
                         <SmallActionButton onClick={wrap(() => ads.adminSetPaused(c.id, !c.paused, cancelReason), c.paused ? "Unpaused" : "Paused")}>{c.paused ? "Unpause" : "Pause"}</SmallActionButton>
                       )}
                       {["held", "confirmed", "payment_conflict"].includes(b.status) && (
-                        <SmallActionButton tone="accent" accent={ACCENT} disabled={cancelReason.trim().length < 5}
-                          onClick={wrap(() => ads.adminCancelBooking(b.id, cancelReason.trim(), partyType), "Removed - financial assessment is separate (no automatic refund)")}>Remove</SmallActionButton>
+                        <SmallActionButton tone="accent" accent={ACCENT} disabled={cancelReason.trim().length < 5 || !initiatedBy}
+                          onClick={wrap(() => ads.adminCancelBooking(b.id, cancelReason.trim(), partyType, initiatedBy), removalMessage(initiatedBy))}>Remove</SmallActionButton>
                       )}
                       {b.status === "confirmed" && <SmallActionButton onClick={wrap(() => ads.downloadReport(b.id, null, null, "csv"), "Report downloaded")}>CSV</SmallActionButton>}
                       {b.status === "confirmed" && <SmallActionButton onClick={wrap(() => ads.downloadReport(b.id, null, null, "pdf"), "Report downloaded")}>PDF</SmallActionButton>}

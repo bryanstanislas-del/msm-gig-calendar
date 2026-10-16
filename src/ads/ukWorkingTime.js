@@ -97,19 +97,41 @@ export function isTimely(receivedAt, dueAt) {
   return Boolean(dueAt) && toDate(receivedAt) <= toDate(dueAt);
 }
 
+/**
+ * Was a correction response on time? With no delivered notice there is no
+ * response window, so the advertiser cannot be late (matches the server's
+ * ads_internal.record_correction_response: timely = due IS NULL OR at <= due).
+ */
+export function correctionResponseTimely({ receivedAt, responseDueAt }) {
+  return !responseDueAt || isTimely(receivedAt, responseDueAt);
+}
+
 export function correctionReviewDue({ receivedAt, responseDueAt, priority }, holidays = EW_BANK_HOLIDAYS) {
-  if (priority && isTimely(receivedAt, responseDueAt)) {
+  if (priority && correctionResponseTimely({ receivedAt, responseDueAt })) {
     return addWorkingHours(receivedAt, PRIORITY_CORRECTION_REVIEW_WORKING_HOURS, holidays);
   }
   return standardReviewDue(receivedAt, holidays);
 }
 
-/** A review outcome meets a deadline if it happened at or before it. Holding acknowledgements never count. */
+/**
+ * Deadline boundaries (same as ads_internal.deadline_exclusive/deadline_met):
+ * end-of-day deadlines are stored as the EXCLUSIVE next-day 00:00 instant
+ * (met only strictly before it); exact-instant deadlines are inclusive.
+ */
+export const EXCLUSIVE_DEADLINE_KINDS = Object.freeze(["initial_standard", "correction_review_standard", "replacement_review_provisional"]);
+export const INCLUSIVE_DEADLINE_KINDS = Object.freeze(["initial_priority", "correction_review_priority", "correction_response"]);
+export function deadlineMet({ kind, at, dueAt }) {
+  if (EXCLUSIVE_DEADLINE_KINDS.includes(kind)) return toDate(at) < toDate(dueAt);
+  if (INCLUSIVE_DEADLINE_KINDS.includes(kind)) return toDate(at) <= toDate(dueAt);
+  throw new Error(`unknown deadline kind: ${kind}`);
+}
+
+/** A review outcome meets its deadline per deadlineMet. Holding acknowledgements never count. */
 export const REVIEW_OUTCOMES = Object.freeze(["approved", "rejected", "correction_requested"]);
-export function reviewMetDeadline({ outcome, outcomeAt, dueAt, genuine = true }) {
+export function reviewMetDeadline({ outcome, outcomeAt, dueAt, kind, genuine = true }) {
   if (!REVIEW_OUTCOMES.includes(outcome)) return false;
   if (outcome === "correction_requested" && !genuine) return false; // MSM's own error is not a review
-  return toDate(outcomeAt) <= toDate(dueAt);
+  return deadlineMet({ kind, at: outcomeAt, dueAt });
 }
 
 /** Next whole UK hour strictly after `instant` (London offsets are whole hours). */

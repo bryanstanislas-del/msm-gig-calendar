@@ -41,6 +41,7 @@ $PSQL -d stg_a -f "$MIG" >/dev/null && pass "ads migration applied unchanged" ||
 $PSQL -d stg_a -f "$MIG2" >/dev/null && pass "forward migration (standard earliest start) applied" || bad "forward migration failed"
 $PSQL -d stg_a -f supabase/migrations/20261016120000_ads_review_corrections_priority.sql >/dev/null && pass "forward migration (review/corrections/priority) applied" || bad "review migration failed"
 $PSQL -d stg_a -f supabase/migrations/20261016150000_ads_refund_cancellation_assessment.sql >/dev/null && pass "forward migration (refund/cancellation assessment) applied" || bad "refund migration failed"
+$PSQL -d stg_a -f supabase/migrations/20261016180000_ads_refund_invariants_initiator_deadlines.sql >/dev/null && pass "forward migration (refund invariants/initiator/deadline boundaries) applied" || bad "invariants migration failed"
 post=$($PSQL -d stg_a -tA -F'|' -f supabase/staging/03_postflight_readonly.sql)
 echo "$post" | sed 's/^/     /'
 [[ "$(echo "$post" | awk -F'|' '$2!="t"' | wc -l)" == "0" ]] && pass "postflight all ok" || bad "postflight"

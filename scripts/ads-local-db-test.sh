@@ -105,6 +105,63 @@ EVENTS=$($PSQL -d "$CONC" -tA -c "select count(*) from public.ad_payment_events 
 echo "   confirmed=$CONFIRMED duplicate=$DUP stored_events=$EVENTS"
 [[ "$CONFIRMED" == "1" && "$DUP" == "7" && "$EVENTS" == "1" ]] || { echo "FAIL: webhook concurrency"; exit 1; }
 
+echo "== Concurrency: parallel refund proposals / approvals on one booking"
+fresh_db ads_phase1_rconc
+RC="$(dburl ads_phase1_rconc)"
+$PSQL -d "$RC" -f supabase/tests/ads/31_refund_concurrency_setup.sql >/dev/null
+as_admin="select set_config('request.jwt.claims', json_build_object('sub', (select admin_id from public.zz_rc), 'role', 'authenticated')::text, true); set local role authenticated;"
+race() { # $1 = label, $2 = SQL run by each of $3 parallel sessions
+  local pids=()
+  for i in $(seq 1 "$3"); do
+    ( $PSQL -d "$RC" -tA <<SQL 2>&1 | grep -Eo "RACE_OK|ADS_[A-Z_]+|already decided" | head -1 || true
+begin; $as_admin
+$2
+select pg_sleep(0.3);
+commit;
+SQL
+    ) > "${TMPDIR:-/tmp}/ads_rc_${1}_$i.out" &
+    pids+=($!)
+  done
+  wait "${pids[@]}" || true
+}
+LOST="jsonb_build_array(jsonb_build_object('from', (select run_start from public.zz_rc) + interval '1 hour', 'until', (select run_start from public.zz_rc) + interval '7 hours', 'evidence', 'Parallel outage report ZZ-RC'))"
+race prop "select 'RACE_OK:' || public.ad_admin_propose_refund((select booking_id from public.zz_rc), false, $LOST, 'Parallel proposal');" 6
+P_OK=$(cat "${TMPDIR:-/tmp}"/ads_rc_prop_*.out | grep -c RACE_OK || true)
+P_NONE=$(cat "${TMPDIR:-/tmp}"/ads_rc_prop_*.out | grep -c ADS_NOTHING_TO_REFUND || true)
+P_SECS=$($PSQL -d "$RC" -tA -c "select coalesce(sum(lost_seconds),0) from public.ad_refund_lines")
+echo "   proposals: ok=$P_OK nothing_to_refund=$P_NONE assessed_seconds=$P_SECS"
+[[ "$P_OK" == "1" && "$P_NONE" == "5" && "$P_SECS" == "21600" ]] || { echo "FAIL: parallel proposals"; exit 1; }
+AID=$($PSQL -d "$RC" -tA -c "select id from public.ad_refund_assessments limit 1")
+race dbl "select public.ad_admin_decide_refund('$AID', 'approve', 'Parallel approve'); select 'RACE_OK';" 4
+D_OK=$(cat "${TMPDIR:-/tmp}"/ads_rc_dbl_*.out | grep -c RACE_OK || true)
+D_DUP=$(cat "${TMPDIR:-/tmp}"/ads_rc_dbl_*.out | grep -c "ADS_INVALID_STATE" || true)
+echo "   same assessment approved in parallel: ok=$D_OK refused=$D_DUP"
+[[ "$D_OK" == "1" && "$D_DUP" == "3" ]] || { echo "FAIL: parallel double approval"; exit 1; }
+# Two rows that each fit but together exceed the paid amount (inserted directly, bypassing proposal checks).
+$PSQL -d "$RC" -c "insert into public.ad_refund_assessments (booking_id, kind, status, total_pence, note, proposed_at)
+  select booking_id, 'service_failure', 'proposed', (paid * 6 / 10), 'ZZ ceiling race ' || g, now() from public.zz_rc, generate_series(1, 2) g" >/dev/null
+IDS=($($PSQL -d "$RC" -tA -c "select id from public.ad_refund_assessments where note like 'ZZ ceiling race%' order by note"))
+pids=()
+for id in "${IDS[@]}"; do
+  ( $PSQL -d "$RC" -tA <<SQL 2>&1 | grep -Eo "RACE_OK|ADS_[A-Z_]+" | head -1 || true
+begin; $as_admin
+select pg_sleep(0.2);
+select public.ad_admin_decide_refund('$id', 'approve', 'Ceiling race'); select 'RACE_OK';
+select pg_sleep(0.3);
+commit;
+SQL
+  ) > "${TMPDIR:-/tmp}/ads_rc_ceil_$id.out" &
+  pids+=($!)
+done
+wait "${pids[@]}" || true
+C_OK=$(cat "${TMPDIR:-/tmp}"/ads_rc_ceil_*.out | grep -c RACE_OK || true)
+C_REF=$(cat "${TMPDIR:-/tmp}"/ads_rc_ceil_*.out | grep -c ADS_REFUND_CEILING || true)
+OVER=$($PSQL -d "$RC" -tA -c "select (select coalesce(sum(total_pence),0) from public.ad_refund_assessments where status='approved') > (select paid from public.zz_rc)")
+rm -f "${TMPDIR:-/tmp}"/ads_rc_*.out
+echo "   competing approvals: ok=$C_OK ceiling_refusals=$C_REF approved_exceeds_paid=$OVER"
+[[ "$C_OK" == "1" && "$C_REF" == "1" && "$OVER" == "f" ]] || { echo "FAIL: approval ceiling race"; exit 1; }
+$PSQL -d "$ADMIN_URL" -c "drop database ads_phase1_rconc" >/dev/null
+
 echo "== End-to-end handlers + local DB (Stripe/storage bytes mocked)"
 fresh_db ads_phase1_int
 if [[ -n "${ADS_TEST_DATABASE_URL:-}" ]]; then

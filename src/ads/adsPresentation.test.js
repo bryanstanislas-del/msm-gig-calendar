@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { describeBooking, formatPence, canStartCheckout, friendlyAdsError, clampToEarliest, earliestStartExplanation, reviewPromiseText, correctionText, confirmationText, parseLostIntervals, refundProcessingKey } from "./adsPresentation.js";
+import { describeBooking, formatPence, canStartCheckout, friendlyAdsError, clampToEarliest, earliestStartExplanation, reviewPromiseText, correctionText, confirmationText, parseLostIntervals, refundProcessingKey, removalMessage, cancellationGuidance, CANCELLATION_INITIATORS } from "./adsPresentation.js";
 
 const now = new Date("2026-10-15T12:00:00Z");
 const confirmed = { status: "confirmed", hold_expires_at: "2026-10-15T11:00:00Z" };
@@ -98,5 +98,25 @@ describe("admin refund inputs", () => {
     expect(refundProcessingKey("a1", "submitted", "re_1")).toBe(refundProcessingKey("a1", "submitted", "re_1"));
     expect(refundProcessingKey("a1", "failed")).toBe("refund-a1-0-failed-none");
     expect(refundProcessingKey("a1", "failed", null, 1)).not.toBe(refundProcessingKey("a1", "failed", null, 0));
+  });
+});
+
+describe("cancellation initiator wording", () => {
+  it("MSM removal never offers advertiser-cancellation loss retention", () => {
+    const g = cancellationGuidance({ initiated_by: "msm", party_type: "business" });
+    expect(g).toMatchObject({ canAssess: true, allowNetLoss: false });
+    expect(g.text).toMatch(/no loss can be retained/);
+    expect(g.text).toMatch(/gated/);
+    expect(removalMessage("msm")).toMatch(/no advertiser-cancellation losses/);
+  });
+  it("advertiser-initiated business cancellation may retain evidenced net loss", () => {
+    expect(cancellationGuidance({ initiated_by: "advertiser", party_type: "business" })).toMatchObject({ canAssess: true, allowNetLoss: true });
+    expect(removalMessage("advertiser")).toMatch(/advertiser's request/);
+  });
+  it("undetermined initiator or status is gated", () => {
+    expect(cancellationGuidance({ initiated_by: "undetermined", party_type: "business" }).canAssess).toBe(false);
+    expect(cancellationGuidance({ initiated_by: "advertiser", party_type: "undetermined" }).canAssess).toBe(false);
+    expect(cancellationGuidance(null).canAssess).toBe(false);
+    expect(Object.keys(CANCELLATION_INITIATORS)).toEqual(["advertiser", "msm"]);
   });
 });

@@ -48,9 +48,9 @@ grant execute on all functions in schema zz to anon, authenticated, service_role
 do $$
 declare
   u_owner uuid; u_admin uuid; adv uuid; p_daily uuid; e date; s0 date;
-  bp uuid; bs uuid; bw uuid; bc uuid; bu uuid; bh uuid;
+  bp uuid; bs uuid; bw uuid; bc uuid; bu uuid; bh uuid; bq uuid; bq2 uuid; bm uuid; vq uuid; vq2 uuid;
   vp uuid; vs uuid;
-  a1 uuid; a2 uuid; aw uuid; ac uuid;
+  a1 uuid; a2 uuid; aw uuid; ac uuid; x1 uuid; x2 uuid; x3 uuid; x4 uuid; am uuid; rogue uuid; tq timestamptz; tq2 timestamptz;
   st timestamptz; bwr tstzrange; purchased bigint; n int; r jsonb; paid int;
 begin
   insert into auth.users (email) values ('zz-owner@example.invalid') returning id into u_owner;
@@ -153,11 +153,15 @@ begin
          'payment_intent_id', 'pi_test_rp', 'amount_refunded', paid));
   perform zz.as_pg();
   perform zz.ok(ads_internal.booking_funded(bp) and (select status from public.ad_bookings where id = bp) = 'confirmed', 'approved partial refund: still funded, run continues');
+  perform zz.ok(r ->> 'outcome' = 'partially_refunded_within_approved'
+                and (select status_reason from public.ad_bookings where id = bp) like '%within approved refund assessments: delivery and approval continue', 'status note says delivery continues (not suspended)');
   perform zz.as_service();
   r := public.ad_apply_stripe_event(jsonb_build_object('id', 'evt_rp_ref2', 'type', 'charge.refunded', 'livemode', false,
          'payment_intent_id', 'pi_test_rp', 'amount_refunded', paid + 1));
   perform zz.as_pg();
   perform zz.ok(not ads_internal.booking_funded(bp), 'refund beyond approved assessments (a2 unapproved) unfunds delivery');
+  perform zz.ok(r ->> 'outcome' = 'partially_refunded_flagged'
+                and (select status_reason from public.ad_bookings where id = bp) like '%beyond approved refund assessments: delivery and approval suspended%', 'status note says suspended when beyond approved');
 
   -- ── Whole run lost = manual gate; cannot be approved ─────────────────
   perform zz.at('2026-10-20 09:00+01');
@@ -183,18 +187,20 @@ begin
   bh := public.ad_create_hold(p_daily, s0 + 32, s0 + 32);
   perform zz.as_pg(); perform zz.pay(bc, 'rc'); perform zz.pay(bu, 'ru');
   perform zz.as_user(u_owner);
-  perform zz.err(format($q$select public.ad_admin_cancel_booking(%L, 'Advertiser wants out', 'business')$q$, bc), '%ADS_FORBIDDEN%', 'advertiser cannot use admin cancellation');
+  perform zz.err(format($q$select public.ad_admin_cancel_booking(%L, 'Advertiser wants out', 'business', 'advertiser')$q$, bc), '%ADS_FORBIDDEN%', 'advertiser cannot use admin cancellation');
   perform zz.as_user(u_admin);
-  perform zz.err(format($q$select public.ad_admin_cancel_booking(%L, 'Advertiser wants out', 'consumer')$q$, bc), '%ADS_CONSUMER_CANCELLATION_PATH_DISABLED%', 'consumer path disabled');
-  perform zz.err(format($q$select public.ad_admin_cancel_booking(%L, 'Advertiser wants out', 'checkbox')$q$, bc), '%ADS_BAD_PARTY_TYPE%', 'party type validated');
+  perform zz.err(format($q$select public.ad_admin_cancel_booking(%L, 'Advertiser wants out', 'consumer', 'advertiser')$q$, bc), '%ADS_CONSUMER_CANCELLATION_PATH_DISABLED%', 'consumer path disabled');
+  perform zz.err(format($q$select public.ad_admin_cancel_booking(%L, 'Advertiser wants out', 'checkbox', 'advertiser')$q$, bc), '%ADS_BAD_PARTY_TYPE%', 'party type validated');
+  perform zz.err(format($q$select public.ad_admin_cancel_booking(%L, 'Advertiser wants out', 'business', 'someone')$q$, bc), '%ADS_BAD_INITIATOR%', 'initiator validated');
   perform zz.err(format($q$select public.ad_admin_propose_cancellation_refund(%L, 0, 0, 'Booking schedule evidence', 'Before removal')$q$, bc), '%remove the campaign first%', 'assessment needs removal first');
-  perform public.ad_admin_cancel_booking(bc, 'Business advertiser cancelled by email', 'business');
+  perform public.ad_admin_cancel_booking(bc, 'Business advertiser cancelled by email', 'business', 'advertiser');
   perform zz.as_pg();
   perform zz.ok((select status from public.ad_bookings where id = bc) = 'cancelled' and not ads_internal.booking_funded(bc), 'removed: no longer served');
   perform zz.ok(not exists (select 1 from public.ad_payments where booking_id = bc and requires_refund), 'removal is not an automatic refund');
-  perform zz.ok((select party_type = 'business' and initiated_by = 'msm' from public.ad_cancellation_cases where booking_id = bc), 'cancellation case recorded');
+  perform zz.ok((select party_type = 'business' and initiated_by = 'advertiser' from public.ad_cancellation_cases where booking_id = bc)
+                and (select status_reason from public.ad_bookings where id = bc) like 'Cancelled at the advertiser''s request%', 'actual initiator recorded (advertiser)');
   perform zz.as_user(u_admin);
-  perform zz.err(format($q$select public.ad_admin_cancel_booking(%L, 'Again please', 'business')$q$, bc), '%ADS_INVALID_STATE%', 'cannot remove twice');
+  perform zz.err(format($q$select public.ad_admin_cancel_booking(%L, 'Again please', 'business', 'advertiser')$q$, bc), '%ADS_INVALID_STATE%', 'cannot remove twice');
   perform zz.err(format($q$select public.ad_admin_propose_cancellation_refund(%L, 1500, 600, 'Delivered nothing; resale failed', 'Too much retained')$q$, bc), '%cannot exceed the booking price%', 'retained capped at the price');
   perform zz.err(format($q$select public.ad_admin_propose_cancellation_refund(%L, 0, 500, 'short', 'No evidence')$q$, bc), '%ADS_EVIDENCE_REQUIRED%', 'loss needs evidence');
   perform zz.err(format($q$select public.ad_admin_propose_cancellation_refund(%L, -1, 0, 'Delivered nothing at all', 'Negative')$q$, bc), '%ADS_BAD_AMOUNT%', 'no negative amounts');
@@ -210,14 +216,102 @@ begin
   perform zz.as_pg();
   perform zz.ok((select party_type from public.ad_cancellation_cases where booking_id = bu) = 'undetermined', 'legacy cancel records undetermined status');
   perform zz.as_user(u_admin);
-  perform zz.err(format($q$select public.ad_admin_propose_cancellation_refund(%L, 0, 0, 'Nothing delivered yet', 'Assess')$q$, bu), '%ADS_MANUAL_GATE%', 'undetermined status gated');
+  perform zz.err(format($q$select public.ad_admin_propose_cancellation_refund(%L, 0, 0, 'Nothing delivered yet', 'Assess')$q$, bu), '%record who initiated%', 'legacy removal: undetermined initiator gated');
   -- Unpaid hold can still be removed.
-  perform public.ad_admin_cancel_booking(bh, 'Removing an unpaid hold', 'business');
+  perform public.ad_admin_cancel_booking(bh, 'Removing an unpaid hold', 'business', 'msm');
   perform zz.as_pg();
   perform zz.ok((select status from public.ad_bookings where id = bh) = 'cancelled', 'unpaid hold removed');
   perform zz.err('update public.ad_cancellation_cases set party_type = ''business''', '%ADS_IMMUTABLE%', 'cancellation cases immutable');
   perform zz.as_user(u_owner);
   perform zz.ok((select count(*) from public.ad_cancellation_cases) = 0 and (select count(*) from public.ad_refund_lines) = 0, 'advertiser sees no internal assessment rows');
+
+
+  -- ── MSM-initiated removal: no advertiser-cancellation loss rules ───────
+  perform zz.as_pg(); perform zz.at('2026-10-20 09:00+01');
+  perform zz.as_user(u_owner);
+  bm := public.ad_create_hold(p_daily, s0 + 33, s0 + 34);
+  perform zz.as_pg(); perform zz.pay(bm, 'rm');
+  perform zz.as_user(u_admin);
+  perform public.ad_admin_cancel_booking(bm, 'MSM homepage redesign removes the slot', 'business', 'msm');
+  perform zz.as_pg();
+  perform zz.ok((select initiated_by from public.ad_cancellation_cases where booking_id = bm) = 'msm'
+                and (select status_reason from public.ad_bookings where id = bm) like 'Removed by MSM%', 'MSM initiator recorded');
+  perform zz.as_user(u_admin);
+  perform zz.err(format($q$select public.ad_admin_propose_cancellation_refund(%L, 0, 100, 'Claimed lost resale value', 'MSM removal')$q$, bm),
+                 '%MSM-initiated removal cannot retain%', 'MSM removal cannot retain net loss');
+  am := public.ad_admin_propose_cancellation_refund(bm, 200, 0, 'One hour delivered before removal (log ZZ-9)', 'MSM removal assessment');
+  perform zz.as_pg();
+  perform zz.ok((select status = 'manual_gate' and 'msm_initiated_cancellation' = any(gates) and total_pence = 2000 - 200 from public.ad_refund_assessments where id = am),
+                'MSM removal: price minus delivered value, gated for manual decision (other remedies)');
+  perform zz.as_user(u_admin);
+  perform zz.err(format($q$select public.ad_admin_decide_refund(%L, 'approve', 'Approve it')$q$, am), '%ADS_MANUAL_GATE%', 'MSM removal assessment not auto-approvable');
+
+  -- ── Cross-kind order 1: cancellation first, then service failure ──────
+  perform zz.as_pg(); perform zz.at('2026-10-20 09:00+01');
+  perform zz.as_user(u_owner);
+  bq := public.ad_create_hold(p_daily, s0 + 35, s0 + 36, true);     -- 2000 placement + 15000 fee = 17000
+  perform zz.as_pg(); perform zz.pay(bq, 'rq');
+  vq := zz.submit(u_owner, bq, 'https://example.com/q');
+  perform zz.as_pg(); perform zz.at('2026-10-20 21:30+01');
+  perform zz.as_user(u_admin);
+  perform public.ad_admin_review(vq, 'approve');
+  perform public.ad_admin_cancel_booking(bq, 'Advertiser emailed to cancel ref ZZ-Q', 'business', 'advertiser');
+  x1 := public.ad_admin_propose_cancellation_refund(bq, 0, 500, 'Slot left unsold, quotes ZZ-Q2', 'Advertiser cancellation');
+  perform zz.as_pg(); tq := lower(ads_internal.booked_range(bq));
+  perform zz.ok((select status = 'proposed' and total_pence = 16500 from public.ad_refund_assessments where id = x1), 'cancellation balance 17000 - 500');
+  perform zz.as_user(u_admin);
+  x2 := public.ad_admin_propose_refund(bq, true,
+    jsonb_build_array(jsonb_build_object('from', tq, 'until', tq + interval '6 hours', 'evidence', 'Serving outage, incident ZZ-Q3')), 'Priority missed + outage');
+  perform zz.as_pg();
+  perform zz.ok((select status = 'manual_gate' and gates @> array['cross_kind_allocation', 'exceeds_booking_total'] and total_pence = 15000 + 250
+                 from public.ad_refund_assessments where id = x2), 'later service failure gated, full entitlement recorded (not erased)');
+  perform zz.ok((select sum(total_pence) from public.ad_refund_assessments where booking_id = bq and status = 'approved') is null, 'nothing over-refunded');
+  perform zz.as_user(u_admin);
+  perform zz.err(format($q$select public.ad_admin_decide_refund(%L, 'approve', 'Approve fee')$q$, x2), '%ADS_MANUAL_GATE%', 'gated service failure not approvable');
+  perform zz.err(format($q$select public.ad_admin_decide_refund(%L, 'approve', 'Approve balance')$q$, x1), '%cross_kind_allocation%', 'approval re-validates: open other-kind assessment blocks');
+  perform public.ad_admin_decide_refund(x2, 'reject', 'Allocation resolved offline; re-propose after cancellation decision');
+  perform public.ad_admin_decide_refund(x1, 'approve', 'Cancellation balance confirmed');
+  -- re-proposal after rejection: still gated by the approved cancellation; amounts never erased
+  x3 := public.ad_admin_propose_refund(bq, true,
+    jsonb_build_array(jsonb_build_object('from', tq, 'until', tq + interval '6 hours', 'evidence', 'Serving outage, incident ZZ-Q3')), 'Re-proposed after rejection');
+  perform zz.as_pg();
+  perform zz.ok((select status = 'manual_gate' and 'cross_kind_allocation' = any(gates) and total_pence = 15250 from public.ad_refund_assessments where id = x3),
+                'rejected time/fee become claimable again, still gated against the approved cancellation');
+
+  -- ── Cross-kind order 2: service failure first, then cancellation ──────
+  perform zz.at('2026-10-20 09:00+01');
+  perform zz.as_user(u_owner);
+  bq2 := public.ad_create_hold(p_daily, s0 + 37, s0 + 38, true);
+  perform zz.as_pg(); perform zz.pay(bq2, 'rq2');
+  vq2 := zz.submit(u_owner, bq2, 'https://example.com/q2');
+  perform zz.as_pg(); perform zz.at('2026-10-20 21:30+01');
+  perform zz.as_user(u_admin);
+  perform public.ad_admin_review(vq2, 'approve');
+  x4 := public.ad_admin_propose_refund(bq2, true, '[]', 'Priority deadline missed');
+  perform public.ad_admin_cancel_booking(bq2, 'Advertiser cancelled by phone, call log ZZ-R', 'business', 'advertiser');
+  ac := public.ad_admin_propose_cancellation_refund(bq2, 0, 0, 'Nothing delivered; slot resold', 'Advertiser cancellation');
+  perform zz.as_pg();
+  perform zz.ok((select status = 'manual_gate' and gates = array['cross_kind_allocation'] and total_pence = 17000 - 15000 from public.ad_refund_assessments where id = ac)
+                and (select (details ->> 'previously_assessed_pence')::int = 15000 from public.ad_refund_lines where assessment_id = ac),
+                'later cancellation gated; earlier fee assessment deducted, never double recovered');
+  perform zz.as_user(u_admin);
+  perform zz.err(format($q$select public.ad_admin_decide_refund(%L, 'approve', 'Approve fee')$q$, x4), '%cross_kind_allocation%', 'fee approval blocked while cancellation open');
+  perform public.ad_admin_decide_refund(ac, 'reject', 'Assess after the fee decision');
+  perform public.ad_admin_decide_refund(x4, 'approve', 'Fee refund confirmed');
+  perform zz.as_pg();
+  perform zz.ok((select sum(total_pence) from public.ad_refund_assessments where booking_id = bq2 and status = 'approved') <= 17000, 'approved total within paid');
+
+  -- ── Approval re-validates ceilings even against inconsistent rows ────
+  insert into public.ad_refund_assessments (booking_id, kind, status, total_pence, note, proposed_at)
+  values (bq2, 'service_failure', 'proposed', 2001, 'ZZ rogue row bypassing proposal checks', now()) returning id into rogue;
+  perform zz.as_user(u_admin);
+  perform zz.err(format($q$select public.ad_admin_decide_refund(%L, 'approve', 'Rogue approve')$q$, rogue), '%ADS_REFUND_CEILING%', 'booking-wide ceiling at approval');
+  perform zz.as_pg();
+  insert into public.ad_refund_assessments (booking_id, kind, status, total_pence, note, proposed_at)
+  values (bq2, 'service_failure', 'proposed', 1, 'ZZ rogue fee line', now()) returning id into rogue;
+  insert into public.ad_refund_lines (assessment_id, kind, pence) values (rogue, 'priority_fee', 1);
+  perform zz.as_user(u_admin);
+  perform zz.err(format($q$select public.ad_admin_decide_refund(%L, 'approve', 'Rogue fee')$q$, rogue), '%exceed the fee%', 'separate fee cap at approval');
 
   raise notice 'ads refunds/cancellation: ALL CHECKS PASSED';
 end $$;

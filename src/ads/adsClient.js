@@ -150,9 +150,14 @@ export async function adminListSettings() {
 export const adminSetSetting = (key, bool, int) => rpc("ad_admin_set_setting", { p_key: key, p_bool: bool ?? null, p_int: int ?? null });
 export const adminReview = (versionId, decision, reason) => rpc("ad_admin_review", { p_version_id: versionId, p_decision: decision, p_reason: reason || null });
 export const adminSetPaused = (campaignId, paused, reason) => rpc("ad_admin_set_paused", { p_campaign_id: campaignId, p_paused: paused, p_reason: reason || null });
-/** Removal only (no automatic refund). partyType: business | undetermined (consumer path disabled server-side). */
-export const adminCancelBooking = (bookingId, reason, partyType = "undetermined") =>
-  rpc("ad_admin_cancel_booking", { p_booking_id: bookingId, p_reason: reason, p_party_type: partyType });
+/** Removal only (no automatic refund). partyType: business | undetermined (consumer disabled server-side); initiatedBy: advertiser | msm. */
+export const adminCancelBooking = (bookingId, reason, partyType, initiatedBy) =>
+  rpc("ad_admin_cancel_booking", { p_booking_id: bookingId, p_reason: reason, p_party_type: partyType, p_initiated_by: initiatedBy });
+export async function adminGetCancellationCase(bookingId) {
+  const { data, error } = await supabase.from("ad_cancellation_cases").select("initiated_by, party_type, removed_at, reason").eq("booking_id", bookingId).maybeSingle();
+  if (error) throw new Error(error.message);
+  return data;
+}
 export const adminRequestCorrection = (versionId, cause, reasons) =>
   rpc("ad_admin_request_correction", { p_version_id: versionId, p_cause: cause, p_reasons: reasons });
 /** Admin fallback when the mailer cannot report delivery (e.g. phoned/confirmed in account). */
