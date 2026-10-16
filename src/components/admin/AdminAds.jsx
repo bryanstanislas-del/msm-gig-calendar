@@ -126,6 +126,10 @@ function BookingTools({ booking, onDone, setToast }) {
           <Textarea accent={ACCENT} rows={2} placeholder="MSM-fault lost time, one per line: 2026-11-02T10:00Z | 2026-11-02T16:00Z | evidence" value={lostText} onChange={(e) => setLostText(e.target.value)} />
           <TextInput accent={ACCENT} placeholder="Assessment note" value={note} onChange={(e) => setNote(e.target.value)} />
           <SmallActionButton disabled={note.trim().length < 5} onClick={run(() => ads.adminProposeRefund(booking.id, feeLine, parseLostIntervals(lostText), note.trim()), "Refund assessment proposed")}>Propose refund assessment</SmallActionButton>
+          {booking.status === "confirmed" && <>
+            <strong>Correction-delay amendment (advertiser must accept; gated: ads_amendments_enabled + amendment_offer_minutes)</strong>
+            <SmallActionButton disabled={note.trim().length < 5} onClick={run(() => ads.adminProposeAmendment(booking.id, note.trim()), "Amendment proposed - waiting for the advertiser")}>Propose next-whole-hour amendment</SmallActionButton>
+          </>}
           {booking.status === "cancelled" && (
             <>
               <strong>Cancellation assessment{kase ? ` (initiated by ${kase.initiated_by}, ${kase.party_type})` : ""}</strong>
@@ -282,7 +286,7 @@ export default function AdminAds() {
                 return (
                   <Tr key={b.id}>
                     <Td>{names[b.advertiser_id] || "-"}{b.is_test ? " (TEST)" : ""}<div style={{ color: TEXT_MUTED, fontSize: 11 }}>{b.id}</div></Td>
-                    <Td>{b.start_date} to {b.end_date}</Td>
+                    <Td>{b.start_date} to {b.end_date}{b.serve_from && <div style={{ color: TEXT_MUTED, fontSize: 11 }}>runs {at(b.serve_from)} - {at(b.serve_until)}</div>}</Td>
                     <Td>{b.status}{b.status === "held" ? ` until ${formatLondonDateTime(b.hold_expires_at)}` : ""}<div style={{ color: TEXT_MUTED, fontSize: 11 }}>{b.status_reason}</div></Td>
                     <Td>{c?.review_status}{c?.paused ? " (paused)" : ""}</Td>
                     <Td>{(b.ad_payments || []).map((p, i) => <div key={i}>{p.status} {formatPence(p.amount_pence, p.currency)}</div>)}

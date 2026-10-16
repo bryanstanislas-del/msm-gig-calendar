@@ -48,6 +48,8 @@ echo "== Refunds / cancellation suite"
 $PSQL -d "$(dburl ads_phase1_rls)" -f supabase/tests/ads/30_refunds_cancellation.sql 2>&1 | grep -E "NOTICE|ERROR|FAIL"
 echo "== Notification outbox suite"
 $PSQL -d "$(dburl ads_phase1_rls)" -f supabase/tests/ads/40_notification_outbox.sql 2>&1 | grep -E "NOTICE|ERROR|FAIL"
+echo "== Booking amendments suite"
+$PSQL -d "$(dburl ads_phase1_rls)" -f supabase/tests/ads/50_booking_amendments.sql 2>&1 | grep -E "NOTICE|ERROR|FAIL"
 
 echo "== Concurrency: parallel holds on a capacity-1 unit"
 fresh_db ads_phase1_conc
@@ -163,6 +165,45 @@ rm -f "${TMPDIR:-/tmp}"/ads_rc_*.out
 echo "   competing approvals: ok=$C_OK ceiling_refusals=$C_REF approved_exceeds_paid=$OVER"
 [[ "$C_OK" == "1" && "$C_REF" == "1" && "$OVER" == "f" ]] || { echo "FAIL: approval ceiling race"; exit 1; }
 $PSQL -d "$ADMIN_URL" -c "drop database ads_phase1_rconc" >/dev/null
+
+echo "== Concurrency: amendment acceptance vs a competing hold for the freed hours"
+fresh_db ads_phase1_amr
+AMR="$(dburl ads_phase1_amr)"
+$PSQL -d "$AMR" -f supabase/tests/ads/51_amendment_race_setup.sql >/dev/null
+for round in 1 2; do
+  AM=$($PSQL -d "$AMR" -tA -c "select amendment_id from public.zz_amr where round=$round")
+  OWNER=$($PSQL -d "$AMR" -tA -c "select owner_id from public.zz_amr where round=$round")
+  OTHER=$($PSQL -d "$AMR" -tA -c "select other_id from public.zz_amr where round=$round")
+  PROD=$($PSQL -d "$AMR" -tA -c "select product_id from public.zz_amr where round=$round")
+  DAY=$($PSQL -d "$AMR" -tA -c "select next_day from public.zz_amr where round=$round")
+  # round 1: accept starts first; round 2: hold starts first
+  if [[ $round == 1 ]]; then DA=0; DH=0.1; else DA=0.1; DH=0; fi
+  ( $PSQL -d "$AMR" -tA <<SQL 2>&1 | grep -Eo "RACE_OK|ADS_[A-Z_]+" | head -1 || true
+begin; select pg_sleep($DA);
+select set_config('request.jwt.claims', json_build_object('sub', '$OWNER', 'role', 'authenticated')::text, true); set local role authenticated;
+select 'RACE_OK:' || public.ad_respond_amendment('$AM', 'accept');
+select pg_sleep(0.4); commit;
+SQL
+  ) > "${TMPDIR:-/tmp}/ads_amr_a.out" &
+  pa=$!
+  ( $PSQL -d "$AMR" -tA <<SQL 2>&1 | grep -Eo "RACE_OK|ADS_[A-Z_]+" | head -1 || true
+begin; select pg_sleep($DH);
+select set_config('request.jwt.claims', json_build_object('sub', '$OTHER', 'role', 'authenticated')::text, true); set local role authenticated;
+select 'RACE_OK:' || public.ad_create_hold('$PROD', '$DAY', '$DAY');
+select pg_sleep(0.4); commit;
+SQL
+  ) > "${TMPDIR:-/tmp}/ads_amr_h.out" &
+  ph=$!
+  wait $pa $ph || true
+  A=$(cat "${TMPDIR:-/tmp}/ads_amr_a.out"); H=$(cat "${TMPDIR:-/tmp}/ads_amr_h.out")
+  OVER=$($PSQL -d "$AMR" -tA -c "select count(*) from (select d.unit_id, d.day from public.ad_booking_inventory_days d join public.ad_bookings b on b.id = d.booking_id
+    where b.status = 'confirmed' or (b.status = 'held' and b.hold_expires_at > now()) group by 1, 2 having count(*) > 1) x")
+  echo "   round $round: accept=$A hold=$H days_over_capacity=$OVER"
+  WINS=$(( $( [[ $A == RACE_OK ]] && echo 1 || echo 0 ) + $( [[ $H == RACE_OK ]] && echo 1 || echo 0 ) ))
+  [[ "$WINS" == "1" && "$OVER" == "0" && ( "$A" == RACE_OK || "$A" == ADS_CAPACITY_UNAVAILABLE ) && ( "$H" == RACE_OK || "$H" == ADS_CAPACITY_UNAVAILABLE ) ]] || { echo "FAIL: amendment race round $round"; exit 1; }
+done
+rm -f "${TMPDIR:-/tmp}"/ads_amr_*.out
+$PSQL -d "$ADMIN_URL" -c "drop database ads_phase1_amr" >/dev/null
 
 echo "== End-to-end handlers + local DB (Stripe/storage bytes mocked)"
 fresh_db ads_phase1_int

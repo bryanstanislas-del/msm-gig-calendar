@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { describeBooking, formatPence, canStartCheckout, friendlyAdsError, clampToEarliest, earliestStartExplanation, reviewPromiseText, correctionText, confirmationText, parseLostIntervals, refundProcessingKey, removalMessage, cancellationGuidance, CANCELLATION_INITIATORS, notificationStatusText } from "./adsPresentation.js";
+import { describeBooking, formatPence, canStartCheckout, friendlyAdsError, clampToEarliest, earliestStartExplanation, reviewPromiseText, correctionText, confirmationText, parseLostIntervals, refundProcessingKey, removalMessage, cancellationGuidance, CANCELLATION_INITIATORS, notificationStatusText, amendmentText, servingIntervalText } from "./adsPresentation.js";
 
 const now = new Date("2026-10-15T12:00:00Z");
 const confirmed = { status: "confirmed", hold_expires_at: "2026-10-15T11:00:00Z" };
@@ -126,5 +126,29 @@ describe("notification status wording", () => {
     expect(notificationStatusText({ status: "accepted" })).toMatch(/not yet reported delivered/);
     expect(notificationStatusText({ status: "delivered" })).toMatch(/not proof it was read/);
     expect(notificationStatusText({ status: "pending" })).toMatch(/off unless both switches are on/);
+  });
+});
+
+describe("booking amendment wording", () => {
+  const base = { status: "proposed", original_from: "2026-11-02T00:00:00Z", original_until: "2026-11-04T00:00:00Z",
+    proposed_from: "2026-11-02T11:00:00Z", proposed_until: "2026-11-04T00:00:00Z", purchased_seconds: 172800,
+    preserves_duration: false, shortened_seconds: 39600, expires_at: "2026-11-03T11:00:00Z" };
+  it("shows both exact intervals with offsets, the shortfall, and that nothing changes without acceptance", () => {
+    const t = amendmentText(base, new Date("2026-11-02T12:00:00Z"));
+    expect(t).toContain("run Mon 2 Nov 2026 11:00 GMT (UTC+00:00) until Wed 4 Nov 2026 00:00 GMT (UTC+00:00) (end not included), 37 h");
+    expect(t).toContain("instead of Mon 2 Nov 2026 00:00 GMT (UTC+00:00) until Wed 4 Nov 2026 00:00 GMT (UTC+00:00)");
+    expect(t).toMatch(/11 h shorter than your purchased 48 h/);
+    expect(t).toMatch(/does not waive any refund/);
+    expect(t).toMatch(/Nothing changes unless you accept/);
+  });
+  it("expired and decided states", () => {
+    expect(amendmentText(base, new Date("2026-11-03T11:00:00Z"))).toMatch(/offer has expired/);
+    expect(amendmentText({ ...base, status: "accepted" })).toMatch(/Status: accepted/);
+    expect(amendmentText({ ...base, preserves_duration: true, shortened_seconds: 0 }, new Date("2026-11-02T12:00:00Z"))).toMatch(/purchased 48 h are kept/);
+  });
+  it("serving interval prefers the accepted amendment", () => {
+    expect(servingIntervalText({ start_date: "2026-11-02", end_date: "2026-11-03" })).toBe("2026-11-02 to 2026-11-03 (UK dates, inclusive)");
+    expect(servingIntervalText({ start_date: "2026-11-02", end_date: "2026-11-03", serve_from: "2026-11-02T11:00:00Z", serve_until: "2026-11-04T00:00:00Z" }))
+      .toMatch(/^Mon 2 Nov 2026 11:00 GMT \(UTC\+00:00\) until Wed 4 Nov 2026 00:00 GMT/);
   });
 });

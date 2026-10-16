@@ -3,6 +3,7 @@
 // enforces owner/admin access and contains no billing/contact data.
 
 import { REPORT_LIMITATIONS } from "../../src/ads/reportLimitations.js";
+import { formatLondonWithOffset } from "../../src/ads/ukWorkingTime.js";
 
 export { REPORT_LIMITATIONS };
 
@@ -114,6 +115,10 @@ export function buildReportPdf(report) {
   L.push({ text: `Package: ${report.product_name}` });
   L.push({ text: `Placement: ${(report.placements || []).join(", ")}` });
   L.push({ text: `Booked dates (UK, inclusive): ${report.booked_start} to ${report.booked_end}` });
+  if (report.amended) {
+    L.push({ text: `Original interval: ${formatLondonWithOffset(report.original_from)} until ${formatLondonWithOffset(report.original_until)} (end not included)` });
+    L.push({ text: `Served interval (accepted amendment): ${formatLondonWithOffset(report.served_from)} until ${formatLondonWithOffset(report.served_until)} (end not included), ${Number(report.served_seconds) / 3600} h` });
+  }
   L.push({ text: `Report range (UK, inclusive): ${report.from} to ${report.to}` });
   L.push({ text: `Booking status: ${report.status}` });
   L.push({ text: `Generated: ${report.generated_at}` });

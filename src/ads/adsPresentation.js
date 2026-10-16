@@ -220,3 +220,25 @@ export function notificationStatusText(n) {
   };
   return T[n?.status] || String(n?.status || "");
 }
+
+/** Effective serving interval: accepted amendment if any, else the calendar dates (London midnights). */
+export function servingIntervalText(booking) {
+  if (booking?.serve_from && booking?.serve_until) {
+    return `${formatLondonWithOffset(booking.serve_from)} until ${formatLondonWithOffset(booking.serve_until)} (end not included; changed by agreement)`;
+  }
+  return `${booking?.start_date} to ${booking?.end_date} (UK dates, inclusive)`;
+}
+
+/** Advertiser-facing amendment proposal: exact old/new intervals with offsets; nothing changes without acceptance. */
+export function amendmentText(a, now = new Date()) {
+  if (!a) return "";
+  const hours = (s) => Math.round(Number(s) / 360) / 10;
+  const newDur = (new Date(a.proposed_until) - new Date(a.proposed_from)) / 1000;
+  const head = `Proposed change after the correction delay: run ${formatLondonWithOffset(a.proposed_from)} until ${formatLondonWithOffset(a.proposed_until)} (end not included), ` +
+    `${hours(newDur)} h, instead of ${formatLondonWithOffset(a.original_from)} until ${formatLondonWithOffset(a.original_until)}.`;
+  const dur = a.preserves_duration ? ` Your purchased ${hours(a.purchased_seconds)} h are kept.`
+    : ` This is ${hours(a.shortened_seconds)} h shorter than your purchased ${hours(a.purchased_seconds)} h because another booking follows; accepting does not waive any refund you may be owed.`;
+  if (a.status !== "proposed") return `${head} Status: ${a.status}.`;
+  if (new Date(a.expires_at) <= now) return `${head} This offer has expired.`;
+  return `${head}${dur} Nothing changes unless you accept, by ${formatLondonWithOffset(a.expires_at)}. Acceptance re-checks availability.`;
+}

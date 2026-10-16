@@ -16,7 +16,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import * as ads from "../../ads/adsClient.js";
-import { describeBooking, formatPence, holdMinutesLeft, canStartCheckout, friendlyAdsError, clampToEarliest, earliestStartExplanation, reviewPromiseText, correctionText, confirmationText } from "../../ads/adsPresentation.js";
+import { describeBooking, formatPence, holdMinutesLeft, canStartCheckout, friendlyAdsError, clampToEarliest, earliestStartExplanation, reviewPromiseText, correctionText, confirmationText, amendmentText, servingIntervalText } from "../../ads/adsPresentation.js";
 import { destinationUrlProblem, altTextProblem, creativeFileProblem } from "../../ads/validation.js";
 import { addDays, formatDeadline, londonDayStart } from "../../ads/londonTime.js";
 import { REPORT_LIMITATIONS } from "../../ads/reportLimitations.js";
@@ -218,7 +218,7 @@ function ReportBox({ booking }) {
   );
 }
 
-function BookingCard({ booking, advertiserId, flags, specByCode, sla, confirmation, onChange }) {
+function BookingCard({ booking, advertiserId, flags, specByCode, sla, confirmation, amendments, onChange }) {
   const snap = booking.ad_purchase_snapshots;
   const campaign = Array.isArray(booking.ad_campaigns) ? booking.ad_campaigns[0] : booking.ad_campaigns;
   const versions = (campaign?.ad_creative_versions || []).slice().sort((a, b) => b.version_no - a.version_no);
@@ -227,7 +227,7 @@ function BookingCard({ booking, advertiserId, flags, specByCode, sla, confirmati
   const { busy, error, run } = useAsync();
   const isHeld = booking.status === "held" && holdMinutesLeft(booking) > 0;
   const open = isHeld || booking.status === "confirmed";
-  const ended = new Date() >= londonDayStart(addDays(booking.end_date, 1));
+  const ended = new Date() >= (booking.serve_until ? new Date(booking.serve_until) : londonDayStart(addDays(booking.end_date, 1)));
   const spec = specByCode[snap?.unit_codes?.[0]];
 
   return (
@@ -236,7 +236,8 @@ function BookingCard({ booking, advertiserId, flags, specByCode, sla, confirmati
       {booking.is_test && <p className="msm-adp__help"><strong>TEST booking</strong> - not a real advert purchase.</p>}
       <p style={{ color: TONE[status.tone], fontWeight: 700 }} aria-live="polite">{status.label}</p>
       <dl>
-        <dt>Dates (UK)</dt><dd>{booking.start_date} to {booking.end_date} (inclusive)</dd>
+        <dt>Booked (UK)</dt><dd>{booking.start_date} to {booking.end_date} (inclusive)</dd>
+        {booking.serve_from && <><dt>Runs</dt><dd>{servingIntervalText(booking)}</dd></>}
         <dt>Total</dt><dd>{snap ? formatPence(snap.total_pence, snap.currency) : "-"}</dd>
         <dt>Reference</dt><dd style={{ wordBreak: "break-all" }}>{booking.id}</dd>
         {isHeld && <><dt>Hold</dt><dd>{holdMinutesLeft(booking)} minutes left</dd></>}
@@ -252,6 +253,17 @@ function BookingCard({ booking, advertiserId, flags, specByCode, sla, confirmati
         </>
       )}
       {confirmation && <p className="msm-adp__help" role="note">{confirmationText(confirmation)}</p>}
+      {(amendments || []).slice(0, 3).map((a) => (
+        <div key={a.id} className="msm-adp__help" role={a.status === "proposed" ? "alert" : undefined}>
+          <p>{amendmentText(a)}</p>
+          {a.status === "proposed" && new Date(a.expires_at) > new Date() && (
+            <>
+              <button className="primary" disabled={busy} onClick={() => run(async () => { await ads.respondAmendment(a.id, "accept"); onChange(); })}>Accept this change</button>
+              <button disabled={busy} onClick={() => run(async () => { await ads.respondAmendment(a.id, "reject"); onChange(); })}>Keep my original booking</button>
+            </>
+          )}
+        </div>
+      ))}
       {(sla?.corrections || []).filter((c) => c.status !== "withdrawn").map((c) => (
         <p key={c.id} className={c.status === "responded" ? "msm-adp__help" : "msm-adp__err"} role={c.status === "responded" ? undefined : "alert"}>{correctionText(c)}</p>
       ))}
@@ -277,6 +289,7 @@ export default function AdvertiserPortal({ user, logo }) {
   const [bookings, setBookings] = useState([]);
   const [slaById, setSlaById] = useState({});
   const [confirmations, setConfirmations] = useState({});
+  const [amendmentsById, setAmendmentsById] = useState({});
   const [loadError, setLoadError] = useState("");
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   const returned = params.get("checkout") === "returned";
@@ -294,6 +307,7 @@ export default function AdvertiserPortal({ user, logo }) {
         setBookings(list);
         const paid = list.filter((b) => b.status === "confirmed").map((b) => b.id);
         setConfirmations(await ads.listConfirmations(paid));
+        setAmendmentsById(await ads.listAmendments(paid).catch(() => ({})));
         const slas = await Promise.all(paid.map((id) => ads.reviewSla(id).catch(() => null)));
         setSlaById(Object.fromEntries(paid.map((id, i) => [id, slas[i]])));
       }
@@ -337,7 +351,7 @@ export default function AdvertiserPortal({ user, logo }) {
             {advertiser && products.length === 0 && <p className="msm-adp__help">No positions are on sale right now.</p>}
             {advertiser && bookings.map((b) => (
               <BookingCard key={b.id} booking={b} advertiserId={advertiser.id} flags={flags} specByCode={specByCode}
-                sla={slaById[b.id]} confirmation={confirmations[b.id]} onChange={refresh} />
+                sla={slaById[b.id]} confirmation={confirmations[b.id]} amendments={amendmentsById[b.id]} onChange={refresh} />
             ))}
             <p className="msm-adp__help">Every advert is reviewed by MSM before it appears. Standard review: by the end of the next UK working day after payment has cleared and complete artwork/link are received (optional priority review, when offered: within 12 elapsed hours). Approval is not guaranteed.</p>
           </>

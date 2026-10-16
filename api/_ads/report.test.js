@@ -47,3 +47,15 @@ describe("report PDF", () => {
     expect(Number(/\/Count (\d+)/.exec(text)[1])).toBeGreaterThan(1);
   });
 });
+
+describe("amended bookings in reports", () => {
+  it("PDF states the original and the accepted served interval with offsets and exact duration", () => {
+    const text = buildReportPdf({ ...report, amended: true, original_from: "2026-11-02T00:00:00Z", original_until: "2026-11-04T00:00:00Z",
+      served_from: "2026-11-02T11:00:00Z", served_until: "2026-11-04T00:00:00Z", served_seconds: 133200 }).toString("latin1").replace(/\\([()])/g, "$1"); // PDF escapes parentheses
+    expect(text).toContain("Original interval: Mon 2 Nov 2026 00:00 GMT (UTC+00:00) until Wed 4 Nov 2026 00:00 GMT (UTC+00:00)");
+    expect(text).toContain("Served interval (accepted amendment): Mon 2 Nov 2026 11:00 GMT (UTC+00:00) until Wed 4 Nov 2026 00:00 GMT (UTC+00:00) (end not included), 37 h");
+  });
+  it("legacy bookings print no amendment lines", () => {
+    expect(buildReportPdf(report).toString("latin1")).not.toContain("Served interval");
+  });
+});

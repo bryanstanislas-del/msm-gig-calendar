@@ -43,6 +43,7 @@ $PSQL -d stg_a -f supabase/migrations/20261016120000_ads_review_corrections_prio
 $PSQL -d stg_a -f supabase/migrations/20261016150000_ads_refund_cancellation_assessment.sql >/dev/null && pass "forward migration (refund/cancellation assessment) applied" || bad "refund migration failed"
 $PSQL -d stg_a -f supabase/migrations/20261016180000_ads_refund_invariants_initiator_deadlines.sql >/dev/null && pass "forward migration (refund invariants/initiator/deadline boundaries) applied" || bad "invariants migration failed"
 $PSQL -d stg_a -f supabase/migrations/20261016210000_ads_notification_outbox.sql >/dev/null && pass "forward migration (notification outbox) applied" || bad "outbox migration failed"
+$PSQL -d stg_a -f supabase/migrations/20261016230000_ads_booking_amendments.sql >/dev/null && pass "forward migration (booking amendments/intervals) applied" || bad "amendments migration failed"
 post=$($PSQL -d stg_a -tA -F'|' -f supabase/staging/03_postflight_readonly.sql)
 echo "$post" | sed 's/^/     /'
 [[ "$(echo "$post" | awk -F'|' '$2!="t"' | wc -l)" == "0" ]] && pass "postflight all ok" || bad "postflight"
@@ -51,6 +52,7 @@ out=$($PSQL -d stg_a -f supabase/tests/ads/10_ads_phase1_regression.sql 2>&1) &&
 out=$($PSQL -d stg_a -f supabase/tests/ads/20_review_corrections_priority.sql 2>&1) && grep -q "ALL CHECKS PASSED" <<<"$out" && pass "review/corrections/priority suite on bootstrapped DB" || { bad "review suite"; echo "$out" | grep -E "ERROR|FAIL"; }
 out=$($PSQL -d stg_a -f supabase/tests/ads/30_refunds_cancellation.sql 2>&1) && grep -q "ALL CHECKS PASSED" <<<"$out" && pass "refunds/cancellation suite on bootstrapped DB" || { bad "refund suite"; echo "$out" | grep -E "ERROR|FAIL"; }
 out=$($PSQL -d stg_a -f supabase/tests/ads/40_notification_outbox.sql 2>&1) && grep -q "ALL CHECKS PASSED" <<<"$out" && pass "notification outbox suite on bootstrapped DB" || { bad "outbox suite"; echo "$out" | grep -E "ERROR|FAIL"; }
+out=$($PSQL -d stg_a -f supabase/tests/ads/50_booking_amendments.sql 2>&1) && grep -q "ALL CHECKS PASSED" <<<"$out" && pass "booking amendments suite on bootstrapped DB" || { bad "amendments suite"; echo "$out" | grep -E "ERROR|FAIL"; }
 echo "   client grants on profiles/user_roles:"
 q stg_a "select '     ' || table_name || ' ' || grantee || ' ' || string_agg(privilege_type, ',' order by privilege_type) from information_schema.role_table_grants where table_schema='public' and table_name in ('profiles','user_roles') and grantee in ('anon','authenticated','PUBLIC') group by table_name, grantee order by 1"
 

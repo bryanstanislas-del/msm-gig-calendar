@@ -75,7 +75,7 @@ export async function listConfirmations(bookingIds) {
 }
 export const cancelHold = (bookingId) => rpc("ad_cancel_hold", { p_booking_id: bookingId });
 
-const BOOKING_SELECT = `id, advertiser_id, start_date, end_date, status, status_reason, hold_expires_at, is_test, created_at, confirmed_at,
+const BOOKING_SELECT = `id, advertiser_id, start_date, end_date, serve_from, serve_until, amended_at, status, status_reason, hold_expires_at, is_test, created_at, confirmed_at,
   ad_purchase_snapshots(product_name, unit_codes, billable_days, price_per_day_pence, total_pence, currency, is_test),
   ad_payments(status, amount_pence, currency, requires_refund, created_at, paid_at),
   ad_campaigns(id, review_status, current_version_id, approved_version_id, paused,
@@ -209,3 +209,18 @@ export async function adminListNotifications() {
 }
 export const adminRetryNotification = (id, note) => rpc("ad_admin_retry_notification", { p_id: id, p_note: note });
 export const adminCancelNotification = (id, note) => rpc("ad_admin_cancel_notification", { p_id: id, p_note: note });
+
+// ── Booking amendments (owner accepts/rejects; admin proposes/withdraws) ──
+export async function listAmendments(bookingIds) {
+  if (!bookingIds.length) return {};
+  const { data, error } = await supabase.from("ad_booking_amendments")
+    .select("id, booking_id, reason, status, approved_at, original_from, original_until, proposed_from, proposed_until, purchased_seconds, preserves_duration, shortened_seconds, proposed_at, expires_at, decided_at")
+    .in("booking_id", bookingIds).order("proposed_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  const out = {};
+  for (const a of data || []) (out[a.booking_id] ||= []).push(a);
+  return out;
+}
+export const respondAmendment = (amendmentId, decision) => rpc("ad_respond_amendment", { p_amendment_id: amendmentId, p_decision: decision });
+export const adminProposeAmendment = (bookingId, note) => rpc("ad_admin_propose_amendment", { p_booking_id: bookingId, p_note: note });
+export const adminWithdrawAmendment = (amendmentId, note) => rpc("ad_admin_withdraw_amendment", { p_amendment_id: amendmentId, p_note: note });

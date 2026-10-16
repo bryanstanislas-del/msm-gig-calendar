@@ -44,11 +44,11 @@ Legend: **Done** = implemented and covered by local tests. **Partial** = core bu
 
 | Agreed term | Status | Where |
 |---|---|---|
-| Precise UTC `[start, end)` intervals, displayed in Europe/London with explicit offsets | Partial | Bookings are still whole UK calendar days, stored as dates and converted with `ads_internal.london_day_start`. Confirmations store `booked_from`/`booked_until` instants. The UI shows offsets (`formatLondonWithOffset`). |
-| 24-hour packages (30 days = 720 elapsed hours) | **Gated** | `elapsedPackageInterval` (JS, DST-tested) only. Not sold until Bryan confirms they replace inclusive calendar dates. |
+| Precise UTC `[start, end)` intervals, displayed in Europe/London with explicit offsets | Done (amendments); new orders still calendar dates | `ad_bookings.serve_from/serve_until` (null = legacy dates) + `ads_internal.effective_range`; delivery, `serve_until`, impressions/clicks, reports and refund clipping use it; UI/PDF show offsets. Original dates, snapshot and confirmation are never rewritten. |
+| 24-hour packages (30 days = 720 elapsed hours) | **Gated** | `ad_quote_elapsed` (behind `ads_hourly_packages_enabled`, OFF): exact elapsed interval, touched days, interval-level availability, **price withheld**. `ad_create_hold_elapsed` always refuses (`ADS_POLICY_GATE`) until Bryan confirms they replace calendar dates and pricing is agreed. |
 | Never publish before an accepted booking, payment, an approved served version and the start; enforce the end in the serving path even if a job is delayed | Done (phase 1) | `ad_public_delivery` + WordPress `serve_until`; funding invariant |
-| Correction-delay amendment: next whole UK hour, preserve duration where capacity permits, shorten at a confirmed following booking, keep the original interval and history, recorded advertiser agreement plus an atomic capacity recheck/reservation, no silent move | Partial | Proposal maths only: `proposeCorrectionAmendment` (JS, tested). **No amendment table, agreement RPC or hourly capacity in the DB yet.** Bookings never move silently today. |
-| No negative or already-expired runs | Done (proposal maths) | `viable: false` |
+| Correction-delay amendment: next whole UK hour, preserve duration where capacity permits, shorten at a confirmed following booking, keep the original interval and history, recorded advertiser agreement plus an atomic capacity recheck/reservation, no silent move | Done, **gated OFF** (§1.9) | `ad_admin_propose_amendment` → `ad_respond_amendment` (owner only) with `ad_booking_amendments` + append-only `ad_booking_interval_history`; acceptance re-checks interval capacity under unit locks |
+| No negative or already-expired runs | Done | Refused at proposal (`ADS_NO_CAPACITY`) and acceptance (`ADS_STALE_AMENDMENT … already ended`) |
 | Multi-placement capacity atomic | Done (day granularity) | `ads_internal.lock_units`; concurrency test |
 | Gates: exact-hour rounding, DST repeated/skipped hour, pending-amendment hold expiry, earlier approved creative during replacement review | **Gated** | Current behaviour: the earlier approved creative keeps serving. The replacement review duration is marked `replacement_review_provisional`. |
 
@@ -117,6 +117,19 @@ Legend: **Done** = implemented and covered by local tests. **Partial** = core bu
 | Admin | "Email notifications" section: status in plain words, attempts, times, last error, retry/cancel. Outbox and events are admin-only (RLS); workers use the service role only. |
 | Gates / not done | Whether provider *acceptance* (rather than delivery) should start a window is a policy gate; the conservative choice (delivery) is implemented. No sender domain, DNS, Resend webhook endpoint, env var or cron was created, and **no email was sent**. All provider calls in tests are mocks. |
 
+### 1.9 Booking amendments + exact intervals (migration `20261016230000`, increment B)
+
+| Piece | What it does |
+|---|---|
+| Model | `ad_bookings.serve_from/serve_until/amended_at` (both null = legacy calendar dates); `ad_booking_amendments` (immutable intervals; one open per booking; status proposed/accepted/rejected/expired/withdrawn/superseded); `ad_booking_interval_history` (append-only: `original` then each `amended`). Start date, end date, purchase snapshot and order confirmation keep the original order. |
+| Propose (admin) | Needs `ads_amendments_enabled` (OFF) **and** `amendment_offer_minutes` (unset → `ADS_POLICY_GATE`, expiry undecided). Paid, funded, approved after the run started (else `ADS_NO_AMENDMENT_NEEDED`). Start = next whole UK hour strictly after the approval instant. Duration = original purchased elapsed seconds (DST-correct). The run is shortened at the start of any other active booking (confirmed or unexpired hold), never displacing it; zero/negative/already-ended runs refused. A proposal holds **no** capacity; a new proposal supersedes the open one. `basis` records the provisional rules. |
+| Accept / reject (owner only) | Owner of the booking only; admins get `ADS_NOT_FOUND` (cannot agree for the advertiser). Expired offers return `expired`. Acceptance locks the booking, then the unit rows, refuses stale proposals (booking changed, no longer confirmed/funded, run already ended) and re-checks **interval-level** capacity against every active booking's effective interval. It then writes history, sets the interval and moves inventory day rows to the London days touched (conservative for day-based holds). |
+| Serving path | `eligible_creatives` checks `now() <@ effective_range` (start inclusive, end exclusive), so the end holds even if no job runs; `serve_until` (WordPress hard expiry) is the exact end; impressions/clicks after the end are `not_eligible`. Reports return original + served interval, exact served seconds and the touched days; the PDF prints both. |
+| Refunds | Lost time is clipped to the served interval; the denominator stays the **original purchased** elapsed hours. |
+| Gates (support built, defaults unchanged) | `replacement_pauses_previous_creative` (OFF = earlier approved creative keeps running during a replacement review); exact-hour rounding and DST handling recorded as PROVISIONAL in each proposal; pending-offer expiry undecided (setting required); 24 h packages quote-only and gated. |
+| Tests | `50_booking_amendments.sql`: gates, shortened at a following booking, preserved duration, later holds refused, report and refund denominator, ownership (other advertiser, admin), immutability, supersede after a refused acceptance, expiry exactly at `expires_at`, run ended exactly at the proposed end, no capacity, approved before start, cancelled booking, DST (47 elapsed hours, 11:00 GMT Sat → 11:00 BST Mon), 24 h gates, delivery boundaries (start inclusive, end exclusive, never before start), metrics after the end, replacement gate. Runner: acceptance vs a competing hold for the freed hours, in both orders → exactly one wins, no day over capacity. **Mutation check:** without the unit lock in `ad_respond_amendment` the hold-first order double-booked a day and the test failed. |
+| Not done | No amendment email (could reuse the outbox later); the portal accept/reject UI is build-checked only; new bookings are still sold as calendar dates. |
+
 ## 2. Forward migrations and rollback
 
 Apply **in filename order**, only after review, **on staging only**:
@@ -126,6 +139,7 @@ Apply **in filename order**, only after review, **on staging only**:
 3. `supabase/migrations/20261016150000_ads_refund_cancellation_assessment.sql`
 4. `supabase/migrations/20261016180000_ads_refund_invariants_initiator_deadlines.sql` (review fixes on `9fc02d8`, see §1.7)
 5. `supabase/migrations/20261016210000_ads_notification_outbox.sql` (§1.8)
+6. `supabase/migrations/20261016230000_ads_booking_amendments.sql` (§1.9)
 
 Each file is a plain forward migration on top of the previous one. They are not wrapped in a transaction, so run each with `psql -v ON_ERROR_STOP=1 -1 -f <file>`, or through the Supabase SQL editor in one run. Then run `supabase/staging/03_postflight_readonly.sql`. The local proof is `npm run test:ads-staging`, which applies all four ads migrations on a bootstrapped empty platform DB and runs every suite there.
 
@@ -195,7 +209,7 @@ Each file is a plain forward migration on top of the previous one. They are not 
 
 1. Hosted verification never performed: preview routing/raw body, Stripe Checkout + webhooks, staging RLS/storage, WordPress plugin.
 2. **Email built but never run against Resend**: needs a verified sender domain, `ADS_EMAIL_FROM`, `ADS_WORKER_SECRET`, `ADS_ADMIN_ALERT_EMAIL`, a Resend webhook endpoint + `ADS_RESEND_WEBHOOK_SECRET`, a scheduler for the worker, then a staging send to a synthetic mailbox. Until then the response window still depends on the admin fallback.
-3. **Booking amendments** after correction delay (agreement + atomic hourly capacity) not built. The earlier "date revision with the advertiser" requirement is therefore still unmet.
+3. **Booking amendments** are built but gated OFF and unverified on hosted services. The offer-expiry period, exact-hour rounding and DST policy must be confirmed before enabling. Sales are still calendar dates: timestamp rescheduling exists only through amendments.
 4. **24-hour packages** gated pending Bryan; bookings are still calendar days.
 5. **Consumer cancellation path** (reviewed flow, express unticked early-start consent) not built; consumer status cannot be processed.
 6. Decision gates: final-penny rounding; replacement review duration; late-bounce effect on the window; whether an account-only notice counts; earlier creative during replacement review; DST/hour rounding; pending-amendment hold expiry; defeated purpose/rejection/completed-review/tax/discount/multi-slot treatment; dual control for refund approval; advertiser-visible refund status.
@@ -211,3 +225,6 @@ Each file is a plain forward migration on top of the previous one. They are not 
 | `e431873` | Refund assessment maths + manual audited refunds + business cancellation (migration `20261016150000`), SQL suite `30_` |
 | `9fc02d8` | Portal/admin UI for priority, corrections, confirmation, SLA and refunds |
 | `fd97927` | This document and README updates |
+| `97ed361` | Review fixes on `9fc02d8`: cross-kind refund invariant, cancellation initiator, deadline boundaries, partial-refund note (migration `20261016180000`) |
+| `c65d4e2` | Increment A: notification outbox, worker, templates, Resend adapter, signed delivery events (migration `20261016210000`) |
+| (this commit) | Increment B: booking amendments + exact intervals (migration `20261016230000`) |
