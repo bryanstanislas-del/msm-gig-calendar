@@ -47,6 +47,19 @@ create function zz_test.ok(p boolean, p_label text) returns void language plpgsq
 begin
   if p is not true then raise exception 'FAIL [%]', p_label; end if;
 end $$;
+-- LOCAL TEST HELPER ONLY: moves a booking's dates (and its per-day
+-- inventory rows) so delivery can be exercised "today" even though the
+-- standard rule never allows booking today. Call as postgres.
+create function zz_test.shift_booking(p_booking uuid, p_new_start date) returns void language plpgsql as $$
+declare d integer;
+begin
+  select p_new_start - start_date into d from public.ad_bookings where id = p_booking;
+  create temp table zz_days on commit drop as select booking_id, unit_id, day + d as day from public.ad_booking_inventory_days where booking_id = p_booking;
+  delete from public.ad_booking_inventory_days where booking_id = p_booking;
+  insert into public.ad_booking_inventory_days select * from zz_days;
+  drop table zz_days;
+  update public.ad_bookings set start_date = start_date + d, end_date = end_date + d where id = p_booking;
+end $$;
 grant execute on all functions in schema zz_test to anon, authenticated, service_role;
 
 do $$
@@ -61,6 +74,7 @@ declare
   ck1 text := repeat('a', 64); ck2 text := repeat('b', 64);
   dsk jsonb; mob jsonb;
   b5 uuid; c5 uuid; v5 uuid; v6 uuid;
+  e date; -- server-computed earliest STANDARD start date (review window)
 begin
   -- ── Fixtures ────────────────────────────────────────────────────────
   insert into auth.users (email) values ('zztest-owner@example.invalid') returning id into u_owner;
@@ -99,6 +113,10 @@ begin
   perform zz_test.expect_error($q$select public.ad_admin_set_setting('stripe_livemode', true)$q$, '%ADS_NOT_AVAILABLE_IN_PHASE_1%', 'live mode cannot be enabled');
   perform zz_test.expect_error($q$select public.ad_admin_set_setting('ads_venue_gig_targeting_enabled', true)$q$, '%ADS_NOT_AVAILABLE_IN_PHASE_1%', 'venue/gig ads stay off');
   update public.ad_inventory_units set active = true where code = 'wordpress-home-top';
+  perform zz_test.as_postgres();
+  e := ads_internal.earliest_standard_start(now());
+  perform zz_test.ok(e >= today + 2 and e <= today + 7, 'earliest standard start is 2..7 days ahead (review window), got ' || e);
+  perform zz_test.as_user(u_admin);
   update public.ad_products set active = true where code in ('TEST-wp-home-top-daily', 'TEST-wp-home-top-weekly');
 
   -- ── Anonymous access ────────────────────────────────────────────────
@@ -128,14 +146,19 @@ begin
   -- ── Dates / validation ─────────────────────────────────────────────
   perform zz_test.as_user(u_owner);
   perform zz_test.expect_error(format('select public.ad_create_hold(%L, %L, %L)', p_daily, today + 3, today + 2), '%ADS_INVALID_DATES%', 'end before start rejected');
-  perform zz_test.expect_error(format('select public.ad_create_hold(%L, %L, %L)', p_weekly, today + 1, today + 3), '%between 7 and 28%', 'weekly package min days enforced');
+  perform zz_test.expect_error(format('select public.ad_create_hold(%L, %L, %L)', p_weekly, e + 1, e + 3), '%between 7 and 28%', 'weekly package min days enforced');
   perform zz_test.expect_error(format('select public.ad_create_hold(%L, %L, %L)', p_daily, today - 1, today), '%too soon%', 'past start rejected');
   perform zz_test.expect_error(format('select public.ad_create_hold(%L, %L, %L)', p_daily, today + 400, today + 401), '%too far ahead%', 'far future rejected');
+  -- Tampered/early dates are refused server-side whatever the UI sent.
+  perform zz_test.expect_error(format('select public.ad_create_hold(%L, %L, %L)', p_daily, e - 1, e - 1), '%earliest standard UK start date is ' || e || '%', 'day before earliest standard start rejected (hold)');
+  perform zz_test.expect_error(format('select public.ad_quote(%L, %L, %L)', p_daily, e - 1, e + 1), '%too soon%', 'day before earliest standard start rejected (quote)');
+  perform zz_test.expect_error(format('select public.ad_create_hold(%L, %L, %L)', p_daily, today + 1, today + 1), '%too soon%', 'tomorrow rejected');
+  perform zz_test.ok((public.ad_earliest_start() ->> 'earliest_start')::date = e, 'portal helper returns the same earliest date');
 
   -- ── Hold + server-side price snapshot ──────────────────────────────
-  q := public.ad_quote(p_daily, today, today + 2);
+  q := public.ad_quote(p_daily, e, e + 2);
   perform zz_test.ok((q ->> 'total_pence')::int = 3000 and (q ->> 'available')::boolean and (q ->> 'is_test')::boolean, 'quote computed server-side');
-  b1 := public.ad_create_hold(p_daily, today, today + 2);
+  b1 := public.ad_create_hold(p_daily, e, e + 2);  -- earliest standard date accepted
   perform zz_test.ok((select total_pence from public.ad_purchase_snapshots where booking_id = b1) = 3000, 'snapshot total = 3 x 1000');
   perform zz_test.ok((select status from public.ad_bookings where id = b1) = 'held', 'booking held');
   select id into c1 from public.ad_campaigns where booking_id = b1;
@@ -160,9 +183,13 @@ begin
   perform zz_test.expect_error(format('select public.ad_report(%L, null, null)', b1), '%ADS_NOT_FOUND%', 'other user cannot report');
 
   -- ── Shared physical inventory across packages ──────────────────────
-  perform zz_test.expect_error(format('select public.ad_create_hold(%L, %L, %L)', p_weekly, today + 2, today + 8), '%ADS_CAPACITY_UNAVAILABLE%', 'weekly package cannot oversell day held by daily package');
-  b2 := public.ad_create_hold(p_weekly, today + 3, today + 9);
+  perform zz_test.expect_error(format('select public.ad_create_hold(%L, %L, %L)', p_weekly, e + 2, e + 8), '%ADS_CAPACITY_UNAVAILABLE%', 'weekly package cannot oversell day held by daily package');
+  b2 := public.ad_create_hold(p_weekly, e + 3, e + 9);
   perform zz_test.ok(b2 is not null, 'non-overlapping weekly hold ok');
+  -- Test-only: move b1 to today..today+2 so the delivery/report tests below
+  -- can run now (the snapshot keeps its original booked dates).
+  perform zz_test.as_postgres();
+  perform zz_test.shift_booking(b1, today);
 
   -- ── Checkout amount is server-owned ────────────────────────────────
   perform zz_test.as_user(u_owner);
@@ -369,7 +396,7 @@ begin
   perform zz_test.as_postgres();
   update public.ad_bookings set hold_expires_at = now() - interval '1 minute' where id = b2;  -- time passes
   perform zz_test.as_user(u_third);
-  b3 := public.ad_create_hold(p_daily, today + 5, today + 6);
+  b3 := public.ad_create_hold(p_daily, e + 5, e + 6);
   perform zz_test.as_postgres();
   perform zz_test.ok((select status from public.ad_bookings where id = b2) = 'expired', 'lapsed hold expired on next reservation');
   perform zz_test.as_service();
@@ -410,7 +437,7 @@ begin
 
   -- Late payment where capacity is still free -> confirmed_late.
   perform zz_test.as_user(u_other);
-  b4 := public.ad_create_hold(p_daily, today + 20, today + 20);
+  b4 := public.ad_create_hold(p_daily, e + 20, e + 20);
   select id into c4 from public.ad_campaigns where booking_id = b4;
   perform zz_test.as_postgres();
   update public.ad_bookings set hold_expires_at = now() - interval '5 minutes' where id = b4;
@@ -452,7 +479,7 @@ begin
 
   -- Original (first) approval also succeeds after a refunded duplicate.
   perform zz_test.as_user(u_owner);
-  b5 := public.ad_create_hold(p_daily, today + 25, today + 25);
+  b5 := public.ad_create_hold(p_daily, e + 25, e + 25);
   select id into c5 from public.ad_campaigns where booking_id = b5;
   perform zz_test.as_service();
   perform public.ad_record_checkout_session(b5, 'cs_test_b5a', 1000, 'gbp', false, now() + interval '40 minutes');
@@ -522,8 +549,27 @@ begin
   perform zz_test.ok(ads_internal.review_due_before('2026-10-24 12:00:00+01') = '2026-10-27 00:00:00+00', 'Sat -> end of Mon across DST change (GMT)');
   perform zz_test.ok(ads_internal.review_due_before('2026-04-02 10:00:00+01') = '2026-04-07 23:00:00+00', 'Easter: Good Friday + Easter Monday skipped');
   perform zz_test.ok(ads_internal.review_due_before('2026-12-24 10:00:00+00') = '2026-12-30 00:00:00+00', 'Christmas + substitute Boxing Day skipped');
+  -- STANDARD earliest start = day after the end of the next UK working day.
+  perform zz_test.ok(ads_internal.earliest_standard_start('2026-10-16 17:00:00+01') = '2026-10-20', 'Fri 17:00 ready -> Tue earliest');
+  perform zz_test.ok(ads_internal.earliest_standard_start('2026-10-17 12:00:00+01') = '2026-10-20', 'Sat ready -> Tue earliest');
+  perform zz_test.ok(ads_internal.earliest_standard_start('2026-10-18 12:00:00+01') = '2026-10-20', 'Sun ready -> Tue earliest');
+  perform zz_test.ok(ads_internal.earliest_standard_start('2026-10-19 09:00:00+01') = '2026-10-21', 'Mon ready -> Wed earliest');
+  perform zz_test.ok(ads_internal.earliest_standard_start('2026-10-15 09:00:00+01') = '2026-10-17', 'Thu ready -> Sat earliest (adverts may start at weekends)');
+  perform zz_test.ok(ads_internal.earliest_standard_start('2026-10-15 22:59:59+00') = '2026-10-17', '23:59:59 BST Thu is still Thursday');
+  perform zz_test.ok(ads_internal.earliest_standard_start('2026-10-15 23:00:00+00') = '2026-10-20', '00:00 BST Fri (23:00 UTC Thu) is Friday -> Tue');
+  perform zz_test.ok(ads_internal.earliest_standard_start('2026-12-03 23:59:59+00') = '2026-12-05', 'GMT: last second of Thu -> Sat');
+  perform zz_test.ok(ads_internal.earliest_standard_start('2026-12-04 00:00:00+00') = '2026-12-08', 'GMT: first second of Fri -> Tue');
+  perform zz_test.ok(ads_internal.earliest_standard_start('2026-10-23 17:00:00+01') = '2026-10-27', 'Fri before autumn clock change -> Tue');
+  perform zz_test.ok(ads_internal.earliest_standard_start('2026-03-27 17:00:00+00') = '2026-03-31', 'Fri before spring clock change -> Tue');
+  perform zz_test.ok(ads_internal.earliest_standard_start('2026-04-02 10:00:00+01') = '2026-04-08', 'Thu before Easter: Good Fri + Easter Mon skipped -> Wed');
+  perform zz_test.ok(ads_internal.earliest_standard_start('2026-08-28 17:00:00+01') = '2026-09-02', 'Fri before summer bank holiday -> Wed');
+  perform zz_test.ok(ads_internal.earliest_standard_start('2026-12-24 10:00:00+00') = '2026-12-30', 'Christmas Eve: 25th + substitute 28th skipped -> Wed 30th');
+  update public.ad_settings set int_value = 10 where key = 'min_lead_days';
+  perform zz_test.ok(ads_internal.earliest_standard_start('2026-10-16 17:00:00+01') = '2026-10-26', 'optional min_lead_days floor applies when later');
+  update public.ad_settings set int_value = 0 where key = 'min_lead_days';
   insert into public.ad_uk_holidays values ('2026-10-16', 'ZZTEST configurable holiday');
   perform zz_test.ok(ads_internal.review_due_before('2026-10-15 09:00:00+01') = '2026-10-19 23:00:00+00', 'admin-configured holiday respected');
+  perform zz_test.ok(ads_internal.earliest_standard_start('2026-10-15 09:00:00+01') = '2026-10-20', 'configured holiday also moves earliest start (Thu -> Tue)');
 
   raise notice 'ads phase1 regression: ALL CHECKS PASSED';
 end $$;

@@ -98,7 +98,13 @@ run("ads vertical slice against local Postgres (Stripe + storage bytes MOCKED)",
 
   it("hold -> checkout -> verified webhook -> creative -> review -> delivery -> click/impression -> report -> refund", async () => {
     const today = (await pool.query("select (now() at time zone 'Europe/London')::date::text d")).rows[0].d;
-    ids.booking = await supabase.rpcAsUser(ids.owner, "ad_create_hold", { p_product_id: ids.daily, p_start: today, p_end: today });
+    // Standard rule: today is never bookable; the earliest date comes from the server.
+    await expect(supabase.rpcAsUser(ids.owner, "ad_create_hold", { p_product_id: ids.daily, p_start: today, p_end: today })).rejects.toThrow(/too soon/);
+    const earliest = (await supabase.rpcAsUser(ids.owner, "ad_earliest_start", {})).earliest_start;
+    ids.booking = await supabase.rpcAsUser(ids.owner, "ad_create_hold", { p_product_id: ids.daily, p_start: earliest, p_end: earliest });
+    // LOCAL TEST ONLY: move the booking to today so delivery can be exercised now.
+    await pool.query("update public.ad_booking_inventory_days set day = $2 where booking_id = $1", [ids.booking, today]);
+    await pool.query("update public.ad_bookings set start_date = $2, end_date = $2 where id = $1", [ids.booking, today]);
 
     // Checkout: amount comes from the DB snapshot (1000), not the client.
     const MOCK_stripe = { createCheckoutSession: vi.fn(async (quote) => ({

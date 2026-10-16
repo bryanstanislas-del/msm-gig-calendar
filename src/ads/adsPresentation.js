@@ -48,6 +48,25 @@ export function describeBooking(booking, campaign, currentVersion, now = new Dat
   return { label: BOOKING_LABELS.confirmed, tone: "neutral" };
 }
 
+/** Picker floor/default: the server's earliest standard start, never earlier. */
+export function clampToEarliest(isoDate, earliest) {
+  if (!earliest) return isoDate;
+  return !isoDate || isoDate < earliest ? earliest : isoDate;
+}
+
+/**
+ * Honest explanation of the earliest standard start. It assumes payment AND
+ * complete artwork/link happen now, and says what happens if they come later.
+ * It never promises approval.
+ */
+export function earliestStartExplanation(info) {
+  if (!info?.earliest_start) return "";
+  const due = info.review_due_before_if_ready_now ? formatDeadline(info.review_due_before_if_ready_now) : "the end of the next UK working day";
+  return `Earliest standard start: ${info.earliest_start}. This assumes you pay and submit complete artwork and link now: MSM's standard review is by ${due}. ` +
+    "If payment or artwork arrive later, the review finishes later. If that is after your first booked day, the advert only runs on the remaining booked days " +
+    "(dates are not moved or refunded automatically). Approval is not guaranteed. Priority review is not available.";
+}
+
 export function holdMinutesLeft(booking, now = new Date()) {
   if (!booking || booking.status !== "held") return 0;
   return Math.max(0, Math.floor((new Date(booking.hold_expires_at) - now) / 60000));

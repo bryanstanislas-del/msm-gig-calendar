@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { describeBooking, formatPence, canStartCheckout, friendlyAdsError } from "./adsPresentation.js";
+import { describeBooking, formatPence, canStartCheckout, friendlyAdsError, clampToEarliest, earliestStartExplanation } from "./adsPresentation.js";
 
 const now = new Date("2026-10-15T12:00:00Z");
 const confirmed = { status: "confirmed", hold_expires_at: "2026-10-15T11:00:00Z" };
@@ -27,5 +27,23 @@ describe("advertiser status wording", () => {
     expect(formatPence(3000)).toBe("£30.00");
     expect(friendlyAdsError(new Error("ADS_CAPACITY_UNAVAILABLE"))).toMatch(/already booked/);
     expect(friendlyAdsError(new Error("permission denied for table x"))).toBe("Something went wrong. Please try again.");
+  });
+});
+
+describe("earliest standard start (server-derived) in the portal", () => {
+  it("never lets the picker default/value go before the server's earliest date", () => {
+    expect(clampToEarliest("", "2026-10-20")).toBe("2026-10-20");
+    expect(clampToEarliest("2026-10-19", "2026-10-20")).toBe("2026-10-20"); // tampered/old value
+    expect(clampToEarliest("2026-10-25", "2026-10-20")).toBe("2026-10-25");
+  });
+  it("explains the assumption and delayed readiness without promising approval", () => {
+    const t = earliestStartExplanation({ earliest_start: "2026-10-20", review_due_before_if_ready_now: "2026-10-19T23:00:00Z" });
+    expect(t).toMatch(/Earliest standard start: 2026-10-20/);
+    expect(t).toMatch(/end of Mon 19 Oct 2026 \(UK time\)/);
+    expect(t).toMatch(/assumes you pay and submit complete artwork and link now/);
+    expect(t).toMatch(/remaining booked days/);
+    expect(t).toMatch(/Approval is not guaranteed/);
+    expect(t).not.toMatch(/guaranteed to (run|appear)|will be approved/i);
+    expect(earliestStartExplanation(null)).toBe("");
   });
 });

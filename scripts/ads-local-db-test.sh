@@ -29,6 +29,7 @@ fi
 case "${ADMIN_URL}${PGHOST:-}" in *supabase.co*|*pooler*) echo "Refusing: remote Supabase host" >&2; exit 2;; esac
 
 MIG=supabase/migrations/20261015120000_ads_platform_phase1.sql
+MIG2=supabase/migrations/20261016090000_ads_standard_earliest_start.sql
 SHIM=supabase/tests/ads/00_local_supabase_shim.sql
 PSQL="psql -X -q -v ON_ERROR_STOP=1"
 
@@ -36,6 +37,7 @@ fresh_db() {
   $PSQL -d "$ADMIN_URL" -c "drop database if exists $1" -c "create database $1" >/dev/null
   $PSQL -d "$(dburl "$1")" -f "$SHIM" >/dev/null
   $PSQL -d "$(dburl "$1")" -f "$MIG" >/dev/null
+  $PSQL -d "$(dburl "$1")" -f "$MIG2" >/dev/null
 }
 
 echo "== RLS / state machine / dates suite"

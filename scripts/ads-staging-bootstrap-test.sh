@@ -11,6 +11,7 @@ PLATFORM=supabase/tests/staging/00_local_platform_only_shim.sql
 FULLSHIM=supabase/tests/ads/00_local_supabase_shim.sql
 BOOT=supabase/staging/01_ads_staging_bootstrap.sql
 MIG=supabase/migrations/20261015120000_ads_platform_phase1.sql
+MIG2=supabase/migrations/20261016090000_ads_standard_earliest_start.sql
 GRANT=supabase/staging/04_grant_synthetic_admin.sql
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -37,6 +38,7 @@ expect_reject stg_a "$BOOT" "opt-in phrase not set" "no opt-in -> rejected"
 echo "== 2. Bootstrap (opted in) + UNCHANGED ads migration on an empty platform DB"
 $PSQL -d stg_a -f "$TMP/boot_confirmed.sql" >/dev/null && pass "bootstrap applied" || bad "bootstrap failed"
 $PSQL -d stg_a -f "$MIG" >/dev/null && pass "ads migration applied unchanged" || bad "ads migration failed"
+$PSQL -d stg_a -f "$MIG2" >/dev/null && pass "forward migration (standard earliest start) applied" || bad "forward migration failed"
 post=$($PSQL -d stg_a -tA -F'|' -f supabase/staging/03_postflight_readonly.sql)
 echo "$post" | sed 's/^/     /'
 [[ "$(echo "$post" | awk -F'|' '$2!="t"' | wc -l)" == "0" ]] && pass "postflight all ok" || bad "postflight"

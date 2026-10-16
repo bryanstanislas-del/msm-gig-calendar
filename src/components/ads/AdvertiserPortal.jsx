@@ -16,9 +16,9 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import * as ads from "../../ads/adsClient.js";
-import { describeBooking, formatPence, holdMinutesLeft, canStartCheckout, friendlyAdsError } from "../../ads/adsPresentation.js";
+import { describeBooking, formatPence, holdMinutesLeft, canStartCheckout, friendlyAdsError, clampToEarliest, earliestStartExplanation } from "../../ads/adsPresentation.js";
 import { destinationUrlProblem, altTextProblem, creativeFileProblem } from "../../ads/validation.js";
-import { londonDate, addDays, formatDeadline, londonDayStart } from "../../ads/londonTime.js";
+import { addDays, formatDeadline, londonDayStart } from "../../ads/londonTime.js";
 import { REPORT_LIMITATIONS } from "../../ads/reportLimitations.js";
 
 const K = { bg: "#0d0d0d", panel: "#151515", field: "#0a0a0a", text: "#ffffff", muted: "#a6a6a6", line: "rgba(255,255,255,0.14)", red: "#e8203a" };
@@ -77,14 +77,26 @@ function ProfileForm({ onCreated }) {
 }
 
 function NewBooking({ products, onHeld }) {
-  const today = londonDate();
   const [productId, setProductId] = useState(products[0]?.id || "");
-  const [start, setStart] = useState(addDays(today, 3));
-  const [end, setEnd] = useState(addDays(today, 3));
+  // Earliest STANDARD start comes from the server (review window: end of the
+  // next UK working day after payment + complete artwork/link). The DB
+  // re-checks it on quote and hold, so this is only the picker floor/default.
+  const [earliest, setEarliest] = useState(null);
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
   const [q, setQ] = useState(null);
   const { busy, error, run } = useAsync();
   const product = products.find((p) => p.id === productId);
   useEffect(() => { setQ(null); }, [productId, start, end]);
+  useEffect(() => {
+    run(async () => {
+      const info = await ads.getEarliestStart();
+      setEarliest(info);
+      setStart((s) => clampToEarliest(s, info.earliest_start));
+      setEnd((x) => clampToEarliest(x, info.earliest_start));
+    });
+  }, [run]);
+  const minStart = earliest?.earliest_start || "";
 
   return (
     <section className="msm-adp__card" aria-labelledby="adp-new">
@@ -97,15 +109,17 @@ function NewBooking({ products, onHeld }) {
       <div className="msm-adp__row">
         <div>
           <label htmlFor="adp-start">First day (UK date)</label>
-          <input id="adp-start" type="date" value={start} min={today} onChange={(e) => setStart(e.target.value)} />
+          <input id="adp-start" type="date" value={start} min={minStart} disabled={!minStart}
+            onChange={(e) => { const v = clampToEarliest(e.target.value, minStart); setStart(v); if (end < v) setEnd(v); }} />
         </div>
         <div>
           <label htmlFor="adp-end">Last day (UK date, included)</label>
-          <input id="adp-end" type="date" value={end} min={start} onChange={(e) => setEnd(e.target.value)} />
+          <input id="adp-end" type="date" value={end} min={start || minStart} disabled={!minStart} onChange={(e) => setEnd(e.target.value)} />
         </div>
       </div>
+      {earliest && <p className="msm-adp__help">{earliestStartExplanation(earliest)}</p>}
       <p className="msm-adp__help">Your advert can run from 00:00 UK time on the first day until the end of the last day (UK time), once MSM has approved it. Payment does not approve or publish an advert.</p>
-      <button disabled={busy || !productId} onClick={() => run(async () => setQ(await ads.quote(productId, start, end)))}>Check availability & price</button>
+      <button disabled={busy || !productId || !start || !end} onClick={() => run(async () => setQ(await ads.quote(productId, start, end)))}>Check availability & price</button>
       {q && (
         <div aria-live="polite">
           <dl>

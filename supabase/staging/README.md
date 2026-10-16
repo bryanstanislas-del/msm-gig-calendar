@@ -5,11 +5,13 @@ Target: Supabase project **msm-ads-staging**, ref **`oyakrgdmplmxmlhjfqcd`** (Lo
 
 These scripts create only what the unchanged ads migration and the existing App's auth/admin path need: minimal `profiles` and `user_roles`, plus `has_role()`, `is_admin_or_above()` and `update_updated_at()` with bodies identical to production. There are no Calendar tables, no real customer rows, no admin accounts, and every ads toggle stays OFF.
 
-## Status (reported by MSM, 2026-10-15)
+## Status (as REPORTED BY CODEX, 2026-10-16)
 
-- Steps 0–4 below are **done on `oyakrgdmplmxmlhjfqcd` only**: preflight EMPTY → bootstrap → ads migration unchanged → postflight, with **all 8 checks passed**. All ads switches OFF.
-- Steps 5–6 and the admin grant are **not done**: no synthetic users and no admin exist yet.
-- Production `fmlaaiolqwknowhtdeue`: **nothing applied**.
+- Done on `oyakrgdmplmxmlhjfqcd` only: preflight EMPTY → bootstrap → `20261015120000_ads_platform_phase1.sql` unchanged → postflight.
+- Synthetic `admin+msm-staging@example.invalid` and `advertiser+msm-staging@example.invalid` created via the dashboard and confirmed. The admin grant (`04`) was separately authorised and both roles verified; the advertiser has no privileged role.
+- Eight postflight checks (adjusted for the granted admin) pass. Switches OFF; TEST inventory/products inactive; storage private; no bookings or payments.
+- **Not yet applied:** `supabase/migrations/20261016090000_ads_standard_earliest_start.sql`. Apply it the same way (paste unchanged, run once) after review. It replaces only ads-owned functions, adds `ad_earliest_start()`, and resets `min_lead_days` from the seed value 3 to 0. It changes no toggles.
+- Production `fmlaaiolqwknowhtdeue`: nothing ads-related applied.
 
 See "Current status" in `docs/ads/README.md` for Vercel and Stripe.
 
@@ -31,6 +33,7 @@ Any failure raises before changes; any later error rolls the whole script back. 
    `v_confirm constant text := 'I AM APPLYING THIS TO msm-ads-staging oyakrgdmplmxmlhjfqcd ONLY';`
    Then run the whole file once. Expect success. If you see a `STAGING GUARD` error, nothing was changed.
 3. Run **`supabase/migrations/20261015120000_ads_platform_phase1.sql` unchanged**: paste the whole file and run it once. A multi-statement run is one implicit transaction.
+   Then, after review, run **`supabase/migrations/20261016090000_ads_standard_earliest_start.sql` unchanged**, the same way.
 4. Run **`03_postflight_readonly.sql`** (read-only). Every row should show `ok = true`.
 5. Recommended: in Authentication → Sign In / Providers, turn off **Allow new users to sign up** for staging, so only accounts you create exist.
 6. Create **synthetic** test accounts only through **Authentication → Users → Add user** (auto-confirm). Never insert into `auth.users` with SQL. Use addresses tagged `+msm-staging` that you control, e.g. `you+msm-staging-admin@…` and `you+msm-staging-advertiser@…`.

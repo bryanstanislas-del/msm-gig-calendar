@@ -2,24 +2,18 @@
 
 **Status: built and tested locally. Applied ONLY to the staging Supabase project (see below). NOT applied to production, NOT deployed to production, NOT installed in WordPress, NOT connected to Stripe with any key.** Everything ships disabled by default.
 
-## Current status (reported by MSM, 2026-10-15; not re-verified from this sandbox)
+## Current status (as REPORTED BY CODEX, 2026-10-16; not re-verified from this sandbox; no secret values recorded here)
 
 | Area | State |
 |---|---|
-| **Production** Supabase `fmlaaiolqwknowhtdeue` | **Nothing applied.** No ads migration, no bootstrap, no writes. |
-| **Staging** Supabase msm-ads-staging `oyakrgdmplmxmlhjfqcd` | Staging bootstrap **and** the ads migration applied (by MSM via the SQL Editor), to this project only. All 8 read-only postflight checks passed. All ads switches OFF. **No synthetic users and no admin yet.** |
-| Vercel | Branch-only (this PR's branch) Preview env vars point at the staging Supabase URL, anon key and service key. Preview of `b283488` is **Ready** (deployment `EbehPxa4R17cD2nRXShJP859sYSD`). Nothing in Production env; **production not deployed**. |
-| `ADS_API_ENABLED` | **Off** (not set). The ads API therefore reports disabled / delivery empty. |
-| Deployed API | **Unverified.** Browser security policy blocked direct checks of the preview's `/api/ads/*`, so the routing fix and JSON responses have not been observed live. |
-| Stripe | Browser signed in to the **sandbox** `acct_1UQvPbRhBFkeZB2o` (ROV Media Ltd., livemode=false). **No Stripe keys configured anywhere and no webhook endpoints.** Checkout and webhooks are untested against Stripe. |
+| **Production** Supabase `fmlaaiolqwknowhtdeue` | **Nothing ads-related applied.** No ads migration, no bootstrap. A separate production **gig-submission fix** was merged and deployed by Bryan on 2026-10-16 ([#47](https://github.com/bryanstanislas-del/msm-gig-calendar/pull/47)); that is **not** an ads deployment. |
+| **Staging** Supabase msm-ads-staging `oyakrgdmplmxmlhjfqcd` | Staging bootstrap + `20261015120000_ads_platform_phase1.sql` applied, to this project only. **`20261016090000_ads_standard_earliest_start.sql` (this change) is NOT applied yet.** Eight postflight checks (adjusted for the granted admin) pass. Switches OFF; TEST inventory/products inactive; storage private; no bookings or payments. |
+| Staging users | Synthetic `admin+msm-staging@example.invalid` and `advertiser+msm-staging@example.invalid` created and confirmed. Admin grant separately authorised and both roles verified (`user_roles` + `profiles`). The advertiser has no privileged role. |
+| Vercel | Preview env, **this branch only**: staging Supabase vars, a restricted Stripe **sandbox** key, the webhook signing secret, the tracking secret and the public base URL are saved. Preview of `12feb50` redeployed **Ready**, ID `21gAEyrkfaBW4dbGMDJcFP4VaLPP` (2026-10-16 08:46 BST). Nothing in Production env; **ads not deployed to production**. |
+| `ADS_API_ENABLED` | **Unset / off.** The ads API reports disabled and delivery is empty. |
+| Deployed API | **Unverified.** Browser security policy blocks direct checks of the preview's `/api/ads/*`, so the routing fix, JSON responses and webhook raw-body handling have not been observed live. |
+| Stripe | Sandbox `acct_1UQvPbRhBFkeZB2o` (livemode=false). A webhook endpoint exists for the five documented events, pinned to `2026-09-30.endive`. **Zero test deliveries** observed at setup. **Checkout and webhooks are untested.** |
 | WordPress | Plugin **not installed** anywhere. |
-
-
-Phase 1 is one vertical slice for **one position, the WordPress homepage top** (`#msm-wp-home-top`, placement `wordpress-home-top`):
-
-placement and dates → atomic availability check and expiring hold → desktop/mobile artwork and destination → server-priced Stripe **TEST** Checkout → signature-verified webhook marks the booking paid and **Under Review** → MSM approves or rejects manually → approved creative delivered only within the booked UK dates → expiry → CSV/PDF date-range reports for the advertiser and admin.
-
-Payment never approves or publishes anything. See [phase1-architecture.md](phase1-architecture.md) for the design and state machines.
 
 ## What is in this PR
 
@@ -45,7 +39,9 @@ Existing Calendar behaviour is unchanged: `promo_slots` / `PromoSlot.jsx` / `Adm
 | `ads_priority_review_enabled` | Priority review | **locked off** (phase 2) |
 | `ads_venue_gig_targeting_enabled` | Venue/gig advertising | **locked off** |
 | `stripe_livemode` | Expected Stripe mode | **locked false** |
-| `hold_minutes` (60), `min_lead_days` (3), `max_advance_days` (365), `max_active_holds_per_advertiser` (3) | tunables | TEST values |
+| `hold_minutes` (60), `min_lead_days` (0 after `20261016090000`; optional extra floor), `max_advance_days` (365), `max_active_holds_per_advertiser` (3) | tunables | TEST values |
+
+**Earliest bookable start (standard).** This is derived server-side from the agreed review window: review by the **end of the next UK working day** after payment **and** complete artwork/link. So the earliest start is the day after that working day, computed as if the advertiser were ready **now**. For example, ready Friday 17:00 → review by end of Monday → earliest start **Tuesday**. Weekends and `ad_uk_holidays` are skipped, and the calculation is Europe/London and DST-aware. `ad_quote`/`ad_create_hold` reject earlier dates whatever the client sends, and the portal's date picker uses `ad_earliest_start()` for its min/default. **Delayed readiness:** if payment or artwork arrives later, the review deadline moves later. If approval lands after the first booked day, the advert runs only on the remaining booked days; dates are not moved and nothing is refunded automatically (policy undecided). Approval is never promised. `min_lead_days`, if raised, only adds a later floor (today + N).
 
 There is also a server kill switch, `ADS_API_ENABLED`. Seeded inventory (`wordpress-home-top/-middle/-bottom`) and the two TEST packages (`TEST-wp-home-top-daily`, `TEST-wp-home-top-weekly`, which share the same physical unit) are all `active = false`, `is_test = true`, and use placeholder prices.
 
@@ -59,13 +55,13 @@ Server-only (Vercel project env, **never** `VITE_*`, never in WordPress or the b
 | `SUPABASE_URL` | Supabase project URL | Preview (this branch only): **staging** URL configured, per MSM. Production: not set for ads |
 | `SUPABASE_ANON_KEY` | public anon key (user-scoped RPCs) | Preview (this branch only): **staging** anon key configured, per MSM. Production: not set for ads |
 | `SUPABASE_SERVICE_ROLE_KEY` | narrow service RPCs + private storage reads | Preview (this branch only): **staging** service key configured, per MSM. Production: **not set** |
-| `STRIPE_SECRET_KEY` | Stripe **test** key; prefer a **restricted** `rk_test_…` key (see "Stripe integration"); any non-test key is refused | **not configured anywhere** |
-| `STRIPE_WEBHOOK_SECRET` | `whsec_…` for the test webhook endpoint | **not configured** (no webhook endpoint exists yet) |
-| `ADS_TRACKING_SECRET` | ≥32 random chars; signs serve tokens and keys visitor hashes | **missing** |
-| `ADS_PUBLIC_BASE_URL` | defaults to `https://calendar.musicscenemagazine.co.uk` | optional |
+| `STRIPE_SECRET_KEY` | Stripe **test** key; prefer a **restricted** `rk_test_…` key (see "Stripe integration"); any non-test key is refused | Preview (this branch only): restricted **sandbox** key saved, per Codex. Production: not set |
+| `STRIPE_WEBHOOK_SECRET` | `whsec_…` for the test webhook endpoint | Preview (this branch only): sandbox endpoint signing secret saved, per Codex. Production: not set |
+| `ADS_TRACKING_SECRET` | ≥32 random chars; signs serve tokens and keys visitor hashes | Preview (this branch only): saved, per Codex. Production: not set |
+| `ADS_PUBLIC_BASE_URL` | defaults to `https://calendar.musicscenemagazine.co.uk` | Preview (this branch only): saved, per Codex |
 | `ADS_CLICK_FALLBACK_URL` | where invalid clicks go (default `https://musicscenemagazine.co.uk/`) | optional |
 
-Claude created, changed and used no credentials; the staging values above were configured by MSM. When something is missing, the endpoints answer `503 ADS_NOT_CONFIGURED` and list the missing variable **names** (never values). Delivery quietly returns no adverts, so the house advert stays.
+Claude created, changed and used no credentials; the preview values above were configured by MSM/Codex. When something is missing, the endpoints answer `503 ADS_NOT_CONFIGURED` and list the missing variable **names** (never values). Delivery quietly returns no adverts, so the house advert stays.
 
 WordPress (`wp-config.php`): `MSM_ADS_ENABLED` (default false), `MSM_ADS_API_BASE`, `MSM_ADS_MODE` (`js` default / `server`). None of these are secrets.
 
@@ -104,7 +100,7 @@ See the PR description for the latest exact test counts.
 
 The existing Ready preview is **not** a staging verification. With no overrides it reads the production database (where no ads tables exist), so the ADVERTISE tab simply stays hidden. Everything below happens **before merge**, on isolated resources:
 
-1. **Isolated database.** Use the separate staging project **msm-ads-staging (`oyakrgdmplmxmlhjfqcd`)**, never production. A fresh project lacks the Calendar's `profiles`/`user_roles`/role helpers, so first follow **`supabase/staging/README.md`**: read-only preflight → guarded bootstrap → this migration **unchanged** → read-only postflight → synthetic accounts via the dashboard → separately authorised admin grant.
+1. **Isolated database.** Use the separate staging project **msm-ads-staging (`oyakrgdmplmxmlhjfqcd`)**, never production. A fresh project lacks the Calendar's `profiles`/`user_roles`/role helpers, so first follow **`supabase/staging/README.md`**: read-only preflight → guarded bootstrap → the ads migrations **unchanged, in filename order** (`20261015120000_…`, then `20261016090000_ads_standard_earliest_start.sql`) → read-only postflight → synthetic accounts via the dashboard → separately authorised admin grant.
 2. **Preview-scoped env vars only.** In Vercel, add variables scoped to **Preview** and, where possible, to this git branch only (branch-specific preview variables), **never Production**:
    - `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY`: the **staging** project (build-time; makes the preview browser use staging instead of production).
    - `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`: staging.
@@ -156,13 +152,20 @@ Hidden tabs do not poll. A CDN in front of WordPress must not cache `/wp-json/ms
 - Refund/cancellation policy, including what happens if approval lands after the start date (currently the advert simply runs for the remaining booked days with no automatic partial refund).
 - Advertiser terms, creative/content policy, and whether advertisers need manual vetting (anyone signed in can create an advertiser profile and up to 3 holds of 60 minutes each).
 - Final WordPress artwork sizes (seeded 1200×250 desktop / 600×250 mobile, matching the Calendar promo convention) and the "Advertisement" label wording.
-- Priority review (£150, 12 elapsed hours) commercial terms, see below.
+- Priority review (£150, 12 elapsed hours): final terms, and confirmation of the refund-if-missed rule (see the unmet requirement below).
+- **Review duration for replacement artwork** on an already-approved/running campaign: **undecided**. A replacement is reviewed like any submission and its clock starts at submission on a paid booking; no separate duration is promised or implemented.
 - Retention period for financial/audit records.
 
 ## Incomplete / deliberately deferred
 
 - **Not verified against real services**: Stripe (only locally signed fixtures and mocks), Supabase hosted RLS/storage (local shim reproduces the relevant pieces), Vercel raw-body behaviour, WordPress (stubbed functions; the real theme was not available to inspect).
-- **Priority initial review (phase 2)**: toggle exists but is locked off; `priority_fee_pence` is pinned to 0. The planned design is in the architecture doc.
+- **UNMET APPROVED REQUIREMENT: Priority initial review (£150, decision within 12 elapsed hours of a ready submission).** **Not implemented** and locked off: `ads_priority_review_enabled` cannot be enabled and `priority_fee_pence` is pinned to 0. This is an approved requirement, not completed and not replaced by anything. Scope still needed:
+  1. a migration adding `priority_review` to bookings, the fee in the immutable snapshot, and a CHECK replacing the `= 0` pin;
+  2. quote/hold/checkout pricing for the fee, with the exact pre-checkout deadline (ready instant + 12 h, Europe/London) shown before payment;
+  3. a review-clock variant (12 elapsed hours, not working days) for the initial review only;
+  4. a missed-deadline detector that flags a fee refund, plus admin UI and copy that states it is not a publication/approval guarantee;
+  5. an admin toggle plus tests (DST, midnight, tampering, late payment, partial refund of the fee only versus the funding invariant).
+  The earliest standard start is unaffected and remains the standard window.
 - Middle/bottom homepage positions are mapped in the adapter but not sold. Article positions keep the existing `msm_article_ad_delivery` contract untouched (the plugin does not hook it).
 - Series-level targeting, bundles and venue/gig advertising: design only (architecture doc).
 - No emails/notifications are sent to advertisers or MSM (review due, approval, rejection, refund-required). The admin queue shows due/overdue state.

@@ -59,6 +59,8 @@ export async function listProducts() {
 }
 
 export const quote = (productId, start, end) => rpc("ad_quote", { p_product_id: productId, p_start: start, p_end: end });
+/** Server-derived earliest STANDARD start date (review window); see ads_internal.earliest_standard_start. */
+export const getEarliestStart = () => rpc("ad_earliest_start");
 export const createHold = (productId, start, end) => rpc("ad_create_hold", { p_product_id: productId, p_start: start, p_end: end });
 export const cancelHold = (bookingId) => rpc("ad_cancel_hold", { p_booking_id: bookingId });
 
