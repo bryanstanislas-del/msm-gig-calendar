@@ -36,7 +36,8 @@ held ──(verified payment, hold valid)─────────────
  │  └─(verified payment after lapse, resold)───────▶ payment_conflict (refund required) ──(refund)──▶ refunded
  ├─(time passes; lazy sweep / ad_expire_stale_holds)▶ expired ─(late payment)─▶ confirmed | payment_conflict
  ├─(advertiser cancels; not during open checkout)───▶ cancelled
- └─(admin cancels)──────────────────────────────────▶ cancelled (paid → payment flagged requires_refund)
+ └─(admin removes)──────────────────────────────────▶ cancelled (after 20261016150000: cancellation case recorded,
+                                                        NO automatic refund flag; financial assessment separate)
 ```
 
 Stripe Checkout sessions expire at `hold_expires_at`, and checkout may only start with ≥31 minutes left (Stripe's minimum session life is 30), so late payments are rare but handled.
@@ -60,10 +61,10 @@ The return URL is never treated as evidence. The portal only re-reads the bookin
 
 `ad_bookings.funding_payment_id` is set exactly once: to the payment whose verified event confirmed the booking. Duplicate, late-conflicting or post-cancellation payments are flagged `requires_refund` and never become the funding payment.
 
-`ads_internal.booking_funded(booking)` is true iff the booking is `confirmed` **and** its funding payment is `paid`, has `amount_refunded_pence = 0`, and matches the snapshot amount and currency. The **same function** gates public delivery (`eligible_creatives`) and approval (`ad_admin_review`). So:
+`ads_internal.booking_funded(booking)` is true iff the booking is `confirmed` **and** its funding payment is `paid` (or `partially_refunded`), matches the snapshot amount and currency, and has refunded **no more than the total of APPROVED refund assessments** (and less than the full amount). Before `20261016150000` the condition was `amount_refunded_pence = 0`. The **same function** gates public delivery (`eligible_creatives`) and approval (`ad_admin_review`). So:
 
 - refunding duplicate payment B leaves A funding the booking, and original or replacement approval still succeeds;
-- any refund of A (partial or full) immediately stops delivery and blocks approval;
+- any refund of A beyond approved assessments (partial or full) immediately stops delivery and blocks approval; an approved partial refund (e.g. a missed priority fee) does not;
 - no code path can deliver or approve an unfunded booking.
 
 Regression: `supabase/tests/ads/10_ads_phase1_regression.sql` (booking b5 and the b1 replacement/partial-refund sequence).
@@ -104,7 +105,7 @@ Regression: `supabase/tests/ads/10_ads_phase1_regression.sql` (booking b5 and th
 Price, top-up and refund consequences of changed dates are **undecided**, and no refund policy is assumed. Full list in README ("Incomplete / deliberately deferred").
 
 
-**Priority initial review: UNMET APPROVED REQUIREMENT (not implemented, locked off; see README).** Add `priority_review boolean` to bookings and a priced line in the snapshot (`priority_fee_pence`, today pinned to 0 by a CHECK). The deadline is `ready_at + interval '12 hours'` (elapsed, not working hours), computed and shown **before checkout** as an exact London time. If missed, the fee is refundable via the same refund-required flag. It never guarantees publication or approval. It is gated by `ads_priority_review_enabled`, and MSM must confirm the £150 price and terms.
+**Priority initial review, corrections, refunds and cancellation (agreed 2026-10-16)**: implemented in `20261016120000` and `20261016150000` (not applied anywhere). Model: `ad_review_deadlines` (immutable, one row per clock), `ad_review_events` (append-only), `ad_correction_requests` + `ad_correction_notices` (mailer/fallback delivery, idempotent), `ad_booking_confirmations` (written once), `ad_refund_assessments` → `ad_refund_lines` → `ad_refund_processing_events`, `ad_cancellation_cases`. Time: `ads_internal.clock_now()` (test clock only outside API sessions), `ads_internal.add_uk_working_hours`. Status per agreed term: `agreed-terms-implementation.md`.
 
 **Series-level targeting** (e.g. `start-a-band` episodes, existing and future). Add `ad_targeting_rules(id, product_id, kind, value)` with `kind in ('placement','series','format')`. A series product maps to logical units such as `wordpress-article-series-start-a-band-top`, and the WordPress article filter already passes `series_id`, `format`, `position` and `placement`. Delivery would resolve the article context to the series unit **at request time**, so newly published qualifying episodes are covered automatically. Capacity stays on the physical unit, so series packages and run-of-site packages that share a slot still cannot oversell it. The plugin's `msm_ads_article_placement()` already produces the canonical codes. The `msm_article_ad_delivery` semantics (false hides, '' = house fallback) must stay.
 

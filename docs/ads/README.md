@@ -7,7 +7,7 @@
 | Area | State |
 |---|---|
 | **Production** Supabase `fmlaaiolqwknowhtdeue` | **Nothing ads-related applied.** No ads migration, no bootstrap. A separate production **gig-submission fix** was merged and deployed by Bryan on 2026-10-16 ([#47](https://github.com/bryanstanislas-del/msm-gig-calendar/pull/47)); that is **not** an ads deployment. |
-| **Staging** Supabase msm-ads-staging `oyakrgdmplmxmlhjfqcd` | Staging bootstrap + `20261015120000_ads_platform_phase1.sql` applied, to this project only. **`20261016090000_ads_standard_earliest_start.sql` (this change) is NOT applied yet.** Eight postflight checks (adjusted for the granted admin) pass. Switches OFF; TEST inventory/products inactive; storage private; no bookings or payments. |
+| **Staging** Supabase msm-ads-staging `oyakrgdmplmxmlhjfqcd` | Staging bootstrap + `20261015120000_ads_platform_phase1.sql` applied, to this project only. **`20261016090000_ads_standard_earliest_start.sql`, `20261016120000_ads_review_corrections_priority.sql` and `20261016150000_ads_refund_cancellation_assessment.sql` are NOT applied yet.** Eight postflight checks (adjusted for the granted admin) pass. Switches OFF; TEST inventory/products inactive; storage private; no bookings or payments. |
 | Staging users | Synthetic `admin+msm-staging@example.invalid` and `advertiser+msm-staging@example.invalid` created and confirmed. Admin grant separately authorised and both roles verified (`user_roles` + `profiles`). The advertiser has no privileged role. |
 | Vercel | Preview env, **this branch only**: staging Supabase vars, a restricted Stripe **sandbox** key, the webhook signing secret, the tracking secret and the public base URL are saved. Preview of `12feb50` redeployed **Ready**, ID `21gAEyrkfaBW4dbGMDJcFP4VaLPP` (2026-10-16 08:46 BST). Nothing in Production env; **ads not deployed to production**. |
 | `ADS_API_ENABLED` | **Unset / off.** The ads API reports disabled and delivery is empty. |
@@ -15,11 +15,14 @@
 | Stripe | Sandbox `acct_1UQvPbRhBFkeZB2o` (livemode=false). A webhook endpoint exists for the five documented events, pinned to `2026-09-30.endive`. **Zero test deliveries** observed at setup. **Checkout and webhooks are untested.** |
 | WordPress | Plugin **not installed** anywhere. |
 
+> **Agreed terms of 2026-10-16** (review, corrections, priority, intervals, refunds, cancellation): see **[`agreed-terms-implementation.md`](agreed-terms-implementation.md)** for the gap matrix, migration order, the staging manual test script and the release blockers. Where this README and that document differ, that document is current.
+
 ## What is in this PR
 
 | Area | Files |
 |---|---|
-| Additive migration (not applied) | `supabase/migrations/20261015120000_ads_platform_phase1.sql` |
+| Additive migration (applied on staging only) | `supabase/migrations/20261015120000_ads_platform_phase1.sql` |
+| Forward migrations (not applied anywhere) | `20261016090000_ads_standard_earliest_start.sql`, `20261016120000_ads_review_corrections_priority.sql`, `20261016150000_ads_refund_cancellation_assessment.sql` |
 | Manual, guarded rollback | `supabase/rollbacks/20261015120000_ads_platform_phase1_down.sql` |
 | DB tests (local only) | `supabase/tests/ads/*.sql`, `scripts/ads-local-db-test.sh` |
 | Server API (one Vercel function) | `api/ads.js` (reached via the `/api/ads/:action` rewrite in `vercel.json`), `api/_ads/*.js` |
@@ -36,9 +39,10 @@ Existing Calendar behaviour is unchanged: `promo_slots` / `PromoSlot.jsx` / `Adm
 | `ads_portal_enabled` | Advertiser portal, quotes, holds, uploads | can be enabled |
 | `ads_checkout_enabled` | Stripe Checkout may start | can be enabled (TEST only) |
 | `ads_delivery_enabled` | Public delivery kill switch | can be enabled |
-| `ads_priority_review_enabled` | Priority review | **locked off** (phase 2) |
+| `ads_priority_review_enabled` | Optional £150 priority review (12 elapsed hours) | default OFF; admin may enable **only when MSM can cover it** (after `20261016120000`) |
 | `ads_venue_gig_targeting_enabled` | Venue/gig advertising | **locked off** |
 | `stripe_livemode` | Expected Stripe mode | **locked false** |
+| `priority_fee_pence` (15000), `order_terms_version` (text, `DRAFT-NOT-APPROVED-2026-10-16`) | priority fee / terms version stored in snapshots | after `20261016120000` |
 | `hold_minutes` (60), `min_lead_days` (0 after `20261016090000`; optional extra floor), `max_advance_days` (365), `max_active_holds_per_advertiser` (3) | tunables | TEST values |
 
 **Earliest bookable start (standard).** This is derived server-side from the agreed review window: review by the **end of the next UK working day** after payment **and** complete artwork/link. So the earliest start is the day after that working day, computed as if the advertiser were ready **now**. For example, ready Friday 17:00 → review by end of Monday → earliest start **Tuesday**. Weekends and `ad_uk_holidays` are skipped, and the calculation is Europe/London and DST-aware. `ad_quote`/`ad_create_hold` reject earlier dates whatever the client sends, and the portal's date picker uses `ad_earliest_start()` for its min/default. **Delayed readiness (current implementation, NOT agreed policy):** if payment or artwork arrives later, the review deadline moves later. If approval lands after the first booked day, the advert runs only on the remaining booked days; dates are not moved and nothing is refunded automatically. This is an **implementation limitation**. The agreed policy is different and unbuilt: see **RELEASE BLOCKER: agreed date revision** below. Approval is never promised. `min_lead_days`, if raised, only adds a later floor (today + N).
@@ -83,6 +87,7 @@ PGHOST=/path/to/socket-or-localhost PGPORT=5432 PGUSER=postgres npm run test:ads
 - **RLS/state machine suite** (175+ checks, including the funding invariant): owner, other user, anon, admin (role- and profile-based) permissions; self-pay/approve/price/date tampering; shared inventory; webhook duplicates, mode mismatch, tampered amounts, out-of-order expiry/refund, late payment with and without capacity, double payment, partial/full refunds; payment-vs-approval separation; creative immutability and replacement review; draft/rejected never served or redirected; pause/kill switch; booked-date window; metrics dedupe, eligibility, rate limit; report clamping; DST and UK holiday deadlines.
 - **Concurrency**: 12 parallel sessions race for one capacity-1 day across both packages (exactly 1 succeeds), and 8 parallel deliveries of the same webhook (exactly 1 applies).
 - **End-to-end**: real API handlers + real DB functions (only Stripe session creation and storage bytes are mocked).
+- **Review/corrections/priority suite** (`20_`) and **refunds/cancellation suite** (`30_`), driven by the test-only clock `ads.test_now` (ignored for API sessions).
 - **Rollback**: guard refuses with files present, then removes every ads object and nothing else.
 
 See the PR description for the latest exact test counts.
@@ -100,7 +105,7 @@ See the PR description for the latest exact test counts.
 
 The existing Ready preview is **not** a staging verification. With no overrides it reads the production database (where no ads tables exist), so the ADVERTISE tab simply stays hidden. Everything below happens **before merge**, on isolated resources:
 
-1. **Isolated database.** Use the separate staging project **msm-ads-staging (`oyakrgdmplmxmlhjfqcd`)**, never production. A fresh project lacks the Calendar's `profiles`/`user_roles`/role helpers, so first follow **`supabase/staging/README.md`**: read-only preflight → guarded bootstrap → the ads migrations **unchanged, in filename order** (`20261015120000_…`, then `20261016090000_ads_standard_earliest_start.sql`) → read-only postflight → synthetic accounts via the dashboard → separately authorised admin grant.
+1. **Isolated database.** Use the separate staging project **msm-ads-staging (`oyakrgdmplmxmlhjfqcd`)**, never production. A fresh project lacks the Calendar's `profiles`/`user_roles`/role helpers, so first follow **`supabase/staging/README.md`**: read-only preflight → guarded bootstrap → the ads migrations **unchanged, in filename order** (`20261015120000_…`, `20261016090000_…`, `20261016120000_…`, `20261016150000_…`) → read-only postflight → synthetic accounts via the dashboard → separately authorised admin grant.
 2. **Preview-scoped env vars only.** In Vercel, add variables scoped to **Preview** and, where possible, to this git branch only (branch-specific preview variables), **never Production**:
    - `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY`: the **staging** project (build-time; makes the preview browser use staging instead of production).
    - `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`: staging.
@@ -149,16 +154,16 @@ Hidden tabs do not poll. A CDN in front of WordPress must not cache `/wp-json/ms
 
 - Real prices, packages, minimum/maximum lengths, lead time and rotation capacity per position. Everything seeded is TEST.
 - VAT treatment and invoices/receipts (snapshot stores `vat_treatment = 'undetermined-test'`; no invoice is produced).
-- Refund/cancellation policy: **no refund policy has been agreed or implemented**, and none is assumed here. The agreed handling of late or changed campaigns is **date revision with the advertiser** (see the release blocker below). The current "remaining booked days only" behaviour is not policy.
+- Refund/cancellation: the agreed 2026-10-16 terms are implemented as **manual, audited assessments** (see `agreed-terms-implementation.md`); open gates there (rounding, consumer path, whole-run loss etc.) remain decisions. Booking amendments after correction delay are not built.
 - Advertiser terms, creative/content policy, and whether advertisers need manual vetting (anyone signed in can create an advertiser profile and up to 3 holds of 60 minutes each).
 - Final WordPress artwork sizes (seeded 1200×250 desktop / 600×250 mobile, matching the Calendar promo convention) and the "Advertisement" label wording.
-- Priority review (£150, 12 elapsed hours): final terms, and confirmation of the refund-if-missed rule (see the unmet requirement below).
-- **Review duration for replacement artwork** on an already-approved/running campaign: **undecided**. A replacement is reviewed like any submission and its clock starts at submission on a paid booking; no separate duration is promised or implemented.
+- Priority review: built per the agreed terms (default off); the final-penny rounding rule and cover rota are still MSM decisions.
+- **Review duration for replacement artwork** on an already-approved/running campaign: **undecided**. A replacement gets a deadline marked `replacement_review_provisional` (standard rule); the approved version keeps serving meanwhile.
 - Retention period for financial/audit records.
 
 ## Incomplete / deliberately deferred
 
-- **RELEASE BLOCKER / UNMET AGREED REQUIREMENT: campaigns needing changes stay on hold, and affected dates are revised WITH the advertiser.**
+- **RELEASE BLOCKER / UNMET AGREED REQUIREMENT: campaigns needing changes stay on hold, and affected dates are revised WITH the advertiser.** (2026-10-16 update: the correction state `correction_requested` and the amendment proposal maths now exist; the amendment record, advertiser agreement and atomic hourly capacity re-check described below are still not built. See `agreed-terms-implementation.md`.)
   - **Agreed by Bryan:** a campaign that needs changes remains on hold, and any booked dates affected (e.g. review or approval landing on or after the first booked day, or changes requested) are revised together with the advertiser.
   - **Implemented today, a limitation only:** a rejected or changes-needed campaign simply isn't delivered while its booked dates keep elapsing. A late approval runs only the remaining booked days. A rejected replacement leaves the previously approved version serving. Dates are never moved, and there is no hold state, rescheduling or agreement flow. No refund policy exists or is implied.
   - **Implementation still needed** (design only; not built in this PR):
@@ -175,17 +180,11 @@ Hidden tabs do not poll. A CDN in front of WordPress must not cache `/wp-json/ms
        - concurrency tests (racing proposals and holds), tampering tests, DST/holiday tests, and accept/decline/expiry tests.
 
 - **Not verified against real services**: Stripe (only locally signed fixtures and mocks), Supabase hosted RLS/storage (local shim reproduces the relevant pieces), Vercel raw-body behaviour, WordPress (stubbed functions; the real theme was not available to inspect).
-- **UNMET APPROVED REQUIREMENT: Priority initial review (£150, decision within 12 elapsed hours of a ready submission).** **Not implemented** and locked off: `ads_priority_review_enabled` cannot be enabled and `priority_fee_pence` is pinned to 0. This is an approved requirement, not completed and not replaced by anything. Scope still needed:
-  1. a migration adding `priority_review` to bookings, the fee in the immutable snapshot, and a CHECK replacing the `= 0` pin;
-  2. quote/hold/checkout pricing for the fee, with the exact pre-checkout deadline (ready instant + 12 h, Europe/London) shown before payment;
-  3. a review-clock variant (12 elapsed hours, not working days) for the initial review only;
-  4. a missed-deadline detector that flags a fee refund, plus admin UI and copy that states it is not a publication/approval guarantee;
-  5. an admin toggle plus tests (DST, midnight, tampering, late payment, partial refund of the fee only versus the funding invariant).
-  The earliest standard start is unaffected and remains the standard window.
+- **Priority initial review**: now implemented in `20261016120000` (not applied anywhere): optional fee in the immutable snapshot, two Checkout line items, 12-elapsed-hour clock, missed-deadline detection feeding the refund assessment, admin toggle (default off). Not hosted-verified.
 - Middle/bottom homepage positions are mapped in the adapter but not sold. Article positions keep the existing `msm_article_ad_delivery` contract untouched (the plugin does not hook it).
 - Series-level targeting, bundles and venue/gig advertising: design only (architecture doc).
-- No emails/notifications are sent to advertisers or MSM (review due, approval, rejection, refund-required). The admin queue shows due/overdue state.
-- No automated refunds: the admin sees **REFUND REQUIRED** and refunds in the Stripe dashboard, and `charge.refunded` then updates the records.
+- No emails/notifications are sent to advertisers or MSM (review due, approval, rejection, correction requests, refund-required). A correction's response window only starts once a delivery is recorded (mailer hook `ad_record_correction_notice`, or the admin fallback). The admin queue shows due/overdue state.
+- No automated refunds: assessments are proposed/approved in the admin, MSM refunds manually in the Stripe dashboard and records the outcome; **REFUND REQUIRED** still flags payment conflicts/duplicates; `charge.refunded` updates the payment records.
 - No scheduled jobs are configured (see deploy step 8).
 - The UI is minimal and not render-tested (the repo has no jsdom). Decision logic is unit-tested and the build passes. No light theme exists in the app today, so the portal follows the existing dark tokens with MSM black/white/red and the existing logo.
 - Admin tab visibility follows the existing UI convention (`profiles.role === 'admin'`). Database checks use `is_admin_or_above()`, which also accepts `user_roles` admins and super admins.
