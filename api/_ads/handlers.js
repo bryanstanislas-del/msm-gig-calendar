@@ -15,6 +15,10 @@ import { signServeToken, verifyServeToken, clientKey, requestIp, isLikelyBot } f
 import { probeImage, sha256Hex } from "./imageProbe.js";
 import { buildReportCsv, buildReportPdf } from "./report.js";
 import { missingConfig } from "./config.js";
+import { renderNotification } from "./emailTemplates.js";
+import { sendViaResend } from "./resendClient.js";
+import { verifySvix, SvixSignatureError } from "./svixSignature.js";
+import crypto from "node:crypto";
 import { isKnownPlacement, isSafeDestinationUrl, destinationUrlProblem, altTextProblem, UUID_RE, MAX_CREATIVE_BYTES } from "../../src/ads/validation.js";
 import { londonDate } from "../../src/ads/londonTime.js";
 
@@ -382,6 +386,86 @@ export async function handleReport(req, res, { cfg, supabase }) {
   return res.status(200).send(buildReportPdf(report));
 }
 
+// ── POST|GET /api/ads/notify-worker  (Authorization: Bearer ADS_WORKER_SECRET)
+// Claims due outbox rows (nothing while the DB switch is off), renders them
+// from persisted payloads, sends via Resend with a per-row Idempotency-Key and
+// records the provider result. Never callable by browsers/advertisers.
+function workerAuthorised(req, secret) {
+  const h = req.headers?.authorization || "";
+  const m = /^Bearer\s+(\S{32,512})$/.exec(Array.isArray(h) ? "" : h);
+  if (!m || !secret) return false;
+  const a = crypto.createHash("sha256").update(m[1]).digest();
+  const b = crypto.createHash("sha256").update(secret).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
+export async function handleNotifyWorker(req, res, { cfg, supabase, fetchImpl = globalThis.fetch }) {
+  if (req.method !== "POST" && req.method !== "GET") return send(res, 405, { error: "METHOD_NOT_ALLOWED" });
+  if (!cfg.apiEnabled) return send(res, 503, { error: "ADS_DISABLED" });
+  const missingWorker = missingConfig(cfg, ["worker"]);
+  if (missingWorker.length) return notConfigured(res, missingWorker);
+  if (!workerAuthorised(req, cfg.workerSecret)) return send(res, 401, { error: "AUTH_REQUIRED" });
+  if (!cfg.emailEnabled) return send(res, 503, { error: "ADS_EMAIL_DISABLED" });
+  const missing = missingConfig(cfg, ["service", "email"]);
+  if (missing.length) return notConfigured(res, missing);
+  const rows = (await supabase.rpcAsService("ad_notify_claim", { p_limit: 20, p_lease_seconds: 300 })) || [];
+  const summary = { claimed: rows.length, accepted: 0, retry: 0, failed: 0, stale: 0 };
+  for (const row of rows) {
+    let outcome, id = null, error = null;
+    const to = row.recipient_role === "admin" ? cfg.adminAlertEmail : row.recipient_email;
+    if (!to) {
+      outcome = "permanent_error";
+      error = row.recipient_role === "admin" ? "ADS_ADMIN_ALERT_EMAIL not configured" : "no recipient";
+    } else {
+      let msg;
+      try { msg = renderNotification(row, cfg.baseUrl); } catch (e) { msg = null; error = String(e?.message || e).slice(0, 200); }
+      if (!msg) outcome = "permanent_error";
+      else {
+        const r = await sendViaResend({ apiKey: cfg.resendApiKey, from: cfg.emailFrom, to, ...msg, idempotencyKey: row.idempotency_key }, fetchImpl);
+        ({ outcome } = r); id = r.id || null; error = r.error || null;
+      }
+    }
+    const result = await supabase.rpcAsService("ad_notify_result", { p_id: row.id, p_attempt: row.attempt, p_outcome: outcome, p_provider_message_id: id, p_error: error });
+    if (result === "stale") summary.stale += 1;
+    else if (outcome === "accepted") summary.accepted += 1;
+    else if (result === "retry_scheduled") summary.retry += 1;
+    else summary.failed += 1;
+  }
+  return send(res, 200, summary);
+}
+
+// ── POST /api/ads/email-events  (Resend webhook, Svix-signed raw body) ─
+export async function handleEmailEvents(req, res, { cfg, supabase, now }) {
+  if (req.method !== "POST") return send(res, 405, { error: "METHOD_NOT_ALLOWED" });
+  if (!cfg.apiEnabled) return send(res, 503, { error: "ADS_DISABLED" });
+  const missing = missingConfig(cfg, ["service", "emailEvents"]);
+  if (missing.length) return notConfigured(res, missing);
+  let raw;
+  try { raw = await readRawBody(req, 256 * 1024); } catch { return send(res, 413, { error: "TOO_LARGE" }); }
+  if (raw === null) return send(res, 400, { error: "RAW_BODY_UNAVAILABLE" });
+  let verified;
+  try {
+    verified = verifySvix(raw, req.headers, cfg.resendWebhookSecret, { nowSeconds: Math.floor(now().getTime() / 1000) });
+  } catch (err) {
+    if (err instanceof SvixSignatureError) return send(res, 400, { error: "INVALID_SIGNATURE" });
+    throw err;
+  }
+  const ev = verified.event || {};
+  const messageId = ev?.data?.email_id;
+  if (typeof ev.type !== "string" || typeof messageId !== "string") return send(res, 400, { error: "BAD_EVENT" });
+  try {
+    const outcome = await supabase.rpcAsService("ad_notify_provider_event", {
+      p_provider_event_id: verified.id, p_type: ev.type, p_message_id: messageId,
+      p_occurred_at: typeof ev.created_at === "string" ? ev.created_at : null,
+      p_details: { provider: "resend" },
+    });
+    return send(res, 200, { received: true, outcome });
+  } catch (err) {
+    if (/ADS_RETRY_LATER/.test(String(err?.message))) return send(res, 503, { error: "RETRY_LATER" });
+    return send(res, 500, { error: "SERVER_ERROR" });
+  }
+}
+
 export const handlers = {
   checkout: handleCheckout,
   webhook: handleWebhook,
@@ -391,4 +475,6 @@ export const handlers = {
   impression: handleImpression,
   "submit-creative": handleSubmitCreative,
   report: handleReport,
+  "notify-worker": handleNotifyWorker,
+  "email-events": handleEmailEvents,
 };

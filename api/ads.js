@@ -17,6 +17,8 @@
 //   POST /api/ads/impression       public: viewable-impression beacon
 //   POST /api/ads/submit-creative  advertiser: register uploaded creative
 //   GET  /api/ads/report           advertiser/admin: CSV/PDF report
+//   POST /api/ads/notify-worker    server worker (Bearer ADS_WORKER_SECRET): send due outbox emails
+//   POST /api/ads/email-events     Resend delivery webhook (Svix-signed raw body)
 import { loadAdsConfig } from "./_ads/config.js";
 import { createSupabaseRest } from "./_ads/supabaseRest.js";
 import { createStripeClient } from "./_ads/stripeClient.js";
@@ -47,6 +49,7 @@ export default async function handler(req, res) {
     supabase: createSupabaseRest(cfg, fetch),
     stripe: createStripeClient(cfg),
     now: () => new Date(),
+    fetchImpl: fetch,
   };
   try {
     return await h(req, res, deps);

@@ -64,6 +64,12 @@ Server-only (Vercel project env, **never** `VITE_*`, never in WordPress or the b
 | `ADS_TRACKING_SECRET` | ≥32 random chars; signs serve tokens and keys visitor hashes | Preview (this branch only): saved, per Codex. Production: not set |
 | `ADS_PUBLIC_BASE_URL` | defaults to `https://calendar.musicscenemagazine.co.uk` | Preview (this branch only): saved, per Codex |
 | `ADS_CLICK_FALLBACK_URL` | where invalid clicks go (default `https://musicscenemagazine.co.uk/`) | optional |
+| `ADS_EMAIL_ENABLED` | `true` lets the outbox worker send (DB switch `ads_email_enabled` must also be on) | **not set** anywhere |
+| `ADS_WORKER_SECRET` | ≥32 chars; bearer secret for `/api/ads/notify-worker` | not set |
+| `RESEND_API_KEY` | existing provider key name (shared with `api/notify.js`) | not changed |
+| `ADS_EMAIL_FROM` | ads sender (no default; must be a verified Resend domain) | not set |
+| `ADS_ADMIN_ALERT_EMAIL` | recipient of priority review alerts | not set |
+| `ADS_RESEND_WEBHOOK_SECRET` | `whsec_…` for `/api/ads/email-events` | not set |
 
 Claude created, changed and used no credentials; the preview values above were configured by MSM/Codex. When something is missing, the endpoints answer `503 ADS_NOT_CONFIGURED` and list the missing variable **names** (never values). Delivery quietly returns no adverts, so the house advert stays.
 

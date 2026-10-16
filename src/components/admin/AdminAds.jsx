@@ -13,7 +13,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import * as ads from "../../ads/adsClient.js";
-import { formatPence, friendlyAdsError, parseLostIntervals, refundProcessingKey, removalMessage, cancellationGuidance, CANCELLATION_INITIATORS } from "../../ads/adsPresentation.js";
+import { formatPence, friendlyAdsError, parseLostIntervals, refundProcessingKey, removalMessage, cancellationGuidance, CANCELLATION_INITIATORS, notificationStatusText } from "../../ads/adsPresentation.js";
 import { formatLondonWithOffset } from "../../ads/ukWorkingTime.js";
 import { formatDeadline, formatLondonDateTime } from "../../ads/londonTime.js";
 import {
@@ -192,12 +192,15 @@ export default function AdminAds() {
   const [partyType, setPartyType] = useState("undetermined");
   const [initiatedBy, setInitiatedBy] = useState("");
   const [refunds, setRefunds] = useState([]);
+  const [notes, setNotes] = useState([]);
+  const [noteText, setNoteText] = useState("");
 
   const load = useCallback(async () => {
     try {
       const [s, i, b, n] = await Promise.all([ads.adminListSettings(), ads.adminListInventory(), ads.listBookings(), ads.adminAdvertiserNames()]);
       setSettings(s); setInv(i); setBookings(b); setNames(n);
       setRefunds(await ads.adminListRefunds().catch(() => []));
+      setNotes(await ads.adminListNotifications().catch(() => []));
     } catch (e) {
       setToast({ type: "error", msg: friendlyAdsError(e) });
     }
@@ -299,6 +302,29 @@ export default function AdminAds() {
                   </Tr>
                 );
               })}
+            </tbody>
+          </TableShell>
+        )}
+      </FormSection>
+
+      <FormSection title={`Email notifications (${notes.length})`}>
+        <p style={{ color: TEXT_MUTED, fontSize: 12 }}>Sent only by the server worker when ads_email_enabled AND the server's ADS_EMAIL_ENABLED are on. Correction response windows start only on provider-reported delivery or a recorded fallback contact.</p>
+        <TextInput accent={ACCENT} placeholder="Note for retry/cancel" value={noteText} onChange={(e) => setNoteText(e.target.value)} style={{ maxWidth: 360 }} />
+        {notes.length === 0 ? <EmptyState>No notifications queued.</EmptyState> : (
+          <TableShell minWidth={800}>
+            <thead><tr><Th>Kind</Th><Th>Status</Th><Th>Attempts</Th><Th>Times</Th><Th>Last error</Th><Th>Actions</Th></tr></thead>
+            <tbody>{notes.map((n) => (
+              <Tr key={n.id}>
+                <Td>{n.kind}<div style={{ color: TEXT_MUTED, fontSize: 11 }}>{n.recipient_role} - booking {n.booking_id || "-"}</div></Td>
+                <Td>{notificationStatusText(n)}</Td>
+                <Td>{n.attempts}</Td>
+                <Td style={{ fontSize: 11 }}>queued {at(n.created_at)}{n.accepted_at ? ` - accepted ${at(n.accepted_at)}` : ""}{n.delivered_at ? ` - delivered ${at(n.delivered_at)}` : ""}{n.status === "pending" ? ` - next ${at(n.next_attempt_at)}` : ""}</Td>
+                <Td style={{ fontSize: 11 }}>{n.last_error || "-"}</Td>
+                <Td>
+                  {["dead", "failed"].includes(n.status) && <SmallActionButton disabled={noteText.trim().length < 5} onClick={wrap(() => ads.adminRetryNotification(n.id, noteText.trim()), "Queued for retry")}>Retry</SmallActionButton>}
+                  {["pending", "dead", "failed"].includes(n.status) && <SmallActionButton disabled={noteText.trim().length < 5} onClick={wrap(() => ads.adminCancelNotification(n.id, noteText.trim()), "Cancelled")}>Cancel</SmallActionButton>}
+                </Td>
+              </Tr>))}
             </tbody>
           </TableShell>
         )}

@@ -198,3 +198,14 @@ export async function adminAdvertiserNames() {
   const { data } = await supabase.from("ad_advertisers").select("id, display_name");
   return Object.fromEntries((data || []).map((a) => [a.id, a.display_name]));
 }
+
+// ── Notification outbox (admin visibility; sending happens only in the server worker) ──
+export async function adminListNotifications() {
+  const { data, error } = await supabase.from("ad_notification_outbox")
+    .select("id, kind, status, attempts, recipient_role, booking_id, created_at, accepted_at, delivered_at, failed_at, next_attempt_at, last_error")
+    .order("created_at", { ascending: false }).limit(100);
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+export const adminRetryNotification = (id, note) => rpc("ad_admin_retry_notification", { p_id: id, p_note: note });
+export const adminCancelNotification = (id, note) => rpc("ad_admin_cancel_notification", { p_id: id, p_note: note });

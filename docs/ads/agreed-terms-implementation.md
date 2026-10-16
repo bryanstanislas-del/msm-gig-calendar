@@ -21,7 +21,7 @@ Legend: **Done** = implemented and covered by local tests. **Partial** = core bu
 | Earliest-start rule kept | Done | `20261016090000` (unchanged) |
 | Priority: optional £150, actively selected, only when MSM enables cover; 12 **elapsed** hours including nights and weekends | Done | `ads_priority_review_enabled` (admin can enable; default OFF); `priority_fee_pence` = 15000; `ad_quote/ad_create_hold(..., p_priority)`; overnight test |
 | Exact deadline and price shown before payment | Done | `ad_quote` → `review_due_if_ready_now`, `priority_fee_pence`, `terms_version`; portal `reviewPromiseText` (explicit UTC offset) |
-| Durable confirmation | Partial | `ad_booking_confirmations` is written once on verified payment and shown in the portal. **No confirmation email** (no mailer exists). |
+| Durable confirmation | Done (email disabled) | `ad_booking_confirmations` written once on verified payment, shown in the portal, and enqueued as a `booking_confirmation` email (outbox, §1.8) |
 | A review is an approval, a reasoned rejection or a necessary correction request; a holding acknowledgement does not count | Done | `ad_review_sla.initial_review_met` counts only approve/reject/`advertiser_material` correction events |
 | No priority fee for corrections | Done | One snapshot and one payment per booking (test asserted) |
 | Creative versions immutable; a destination change needs review | Done | Immutability triggers; a new version is reviewed and never replaces the approved version until approved |
@@ -31,7 +31,7 @@ Legend: **Done** = implemented and covered by local tests. **Partial** = core bu
 | Agreed term | Status | Where |
 |---|---|---|
 | Necessary reasons, the exact version and the response deadline, in the account | Done | `ad_correction_requests` (advertiser sees reasons/version/deadline; internal `cause` hidden by column grant); portal `correctionText` |
-| …and by email | **Not built** | No mailer. `ad_record_correction_notice` (service_role) is the hook a mailer must call. Admin fallback: `ad_admin_record_correction_notice`. |
+| …and by email | Built, **disabled**, not hosted-verified | Outbox `correction_request` + `correction_deadline` (exact persisted deadline once delivery is recorded); provider delivery events feed `apply_correction_notice` (§1.8). Admin fallback unchanged. |
 | Three working hours (09:00–17:00 UK, Mon–Fri, excl. E&W holidays); Friday 16:00 → Monday 11:00 | Done | `ads_internal.add_uk_working_hours` + JS parity |
 | A known failed email starts no window; retry, fallback and late-bounce exceptions audited | Done | `ad_correction_notices` (append-only, idempotent key); late bounce → `notice_exception` (window unchanged pending MSM decision: **gate**) |
 | Timely complete priority correction → new 3-working-hour review | Done | `correction_review_priority` deadline; at-deadline vs 1 s late tests |
@@ -103,6 +103,20 @@ Legend: **Done** = implemented and covered by local tests. **Partial** = core bu
 | Standard deadlines stored as exclusive midnight but compared with `<=` | `ads_internal.deadline_met(kind, at, due)` / JS `deadlineMet`: end-of-day kinds (`initial_standard`, `correction_review_standard`, `replacement_review_provisional`) are met only **strictly before** the stored instant; exact kinds (`initial_priority`, `correction_review_priority`, `correction_response`) are inclusive. `ad_review_sla` uses it and exposes `initial_due_exclusive`. Unknown kinds throw in JS. | `20_`: standard approval exactly at the stored midnight → not met; boundary checks for every kind; JS boundary tests |
 | Stale partial-refund note "delivery suspended" | `ad_apply_stripe_event` (copied forward, only that branch changed): within approved assessments → "…delivery and approval continue", outcome `partially_refunded_within_approved`; beyond → "…suspended…", outcome `partially_refunded_flagged` | `30_` both notes; `10_` regression unchanged and passing |
 
+### 1.8 Advertising email outbox (migration `20261016210000`, increment A)
+
+| Piece | What it does |
+|---|---|
+| Enqueue | AFTER INSERT triggers on persisted facts only: `ad_review_deadlines` (`initial_priority` → admin alert with the exact due instant and version; `correction_response` → advertiser deadline email), `ad_correction_requests` (reasons + exact version), `ad_review_events` (approved/rejected + reason), `ad_booking_confirmations`. One row per fact (`dedupe_key` unique). Rows are enqueued even while sending is off. |
+| Disabled by default | DB switch `ads_email_enabled` = OFF (claim returns nothing) **and** server `ADS_EMAIL_ENABLED` unset (worker answers 503). Neither was changed. |
+| Worker | `POST /api/ads/notify-worker`, `Authorization: Bearer ADS_WORKER_SECRET` (≥32 chars, constant-time compare); service-role `ad_notify_claim` (row lease, `skip locked`, expired leases reclaimed) → render → Resend with `Idempotency-Key = msm-ads-notify-<row id>` → `ad_notify_result` (attempt-checked: a crashed/duplicate worker's late result is `stale`). Backoff 5 min × 2ⁿ (cap 6 h), `dead` after 6 attempts, `failed` on permanent errors; admin retry/cancel (audited). No cron is configured. |
+| Templates | `api/_ads/emailTemplates.js`: every value HTML-escaped, subjects stripped of control characters, links only from the configured base URL, instants with explicit UTC offset, draft terms labelled. |
+| Provider adapter | `api/_ads/resendClient.js`: same endpoint and `RESEND_API_KEY` name as `api/notify.js`, but **not** its public unauthenticated route, its `onboarding@resend.dev` default sender or its recipient. `ADS_EMAIL_FROM` has no default. |
+| Delivery events | `POST /api/ads/email-events`: Svix-signed raw body (`ADS_RESEND_WEBHOOK_SECRET`, 5-minute tolerance), idempotent on `svix-id`; unknown message → 503 so the provider retries. |
+| Semantics | **accepted** = provider accepted (not delivered, not read). **delivered** = provider-reported delivery to the recipient's mail server (not proof of reading); for a correction request this, or the admin fallback, starts the 3-working-hour window at the reported time. **bounced/failed/suppressed** before delivery = known failure, no window; after delivery = `notice_exception` (late-bounce gate, MSM decides). An email failure after a fallback-started window is history only. Opens and clicks are ignored. |
+| Admin | "Email notifications" section: status in plain words, attempts, times, last error, retry/cancel. Outbox and events are admin-only (RLS); workers use the service role only. |
+| Gates / not done | Whether provider *acceptance* (rather than delivery) should start a window is a policy gate; the conservative choice (delivery) is implemented. No sender domain, DNS, Resend webhook endpoint, env var or cron was created, and **no email was sent**. All provider calls in tests are mocks. |
+
 ## 2. Forward migrations and rollback
 
 Apply **in filename order**, only after review, **on staging only**:
@@ -111,6 +125,7 @@ Apply **in filename order**, only after review, **on staging only**:
 2. `supabase/migrations/20261016120000_ads_review_corrections_priority.sql`
 3. `supabase/migrations/20261016150000_ads_refund_cancellation_assessment.sql`
 4. `supabase/migrations/20261016180000_ads_refund_invariants_initiator_deadlines.sql` (review fixes on `9fc02d8`, see §1.7)
+5. `supabase/migrations/20261016210000_ads_notification_outbox.sql` (§1.8)
 
 Each file is a plain forward migration on top of the previous one. They are not wrapped in a transaction, so run each with `psql -v ON_ERROR_STOP=1 -1 -f <file>`, or through the Supabase SQL editor in one run. Then run `supabase/staging/03_postflight_readonly.sql`. The local proof is `npm run test:ads-staging`, which applies all four ads migrations on a bootstrapped empty platform DB and runs every suite there.
 
@@ -179,7 +194,7 @@ Each file is a plain forward migration on top of the previous one. They are not 
 ## 4. Release blockers (paid bookings must not launch until resolved)
 
 1. Hosted verification never performed: preview routing/raw body, Stripe Checkout + webhooks, staging RLS/storage, WordPress plugin.
-2. **No email**: correction notices, confirmations, review outcomes. The response window depends on a recorded delivery.
+2. **Email built but never run against Resend**: needs a verified sender domain, `ADS_EMAIL_FROM`, `ADS_WORKER_SECRET`, `ADS_ADMIN_ALERT_EMAIL`, a Resend webhook endpoint + `ADS_RESEND_WEBHOOK_SECRET`, a scheduler for the worker, then a staging send to a synthetic mailbox. Until then the response window still depends on the admin fallback.
 3. **Booking amendments** after correction delay (agreement + atomic hourly capacity) not built. The earlier "date revision with the advertiser" requirement is therefore still unmet.
 4. **24-hour packages** gated pending Bryan; bookings are still calendar days.
 5. **Consumer cancellation path** (reviewed flow, express unticked early-start consent) not built; consumer status cannot be processed.

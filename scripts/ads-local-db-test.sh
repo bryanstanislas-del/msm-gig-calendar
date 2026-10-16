@@ -46,6 +46,8 @@ echo "== Review / corrections / priority suite"
 $PSQL -d "$(dburl ads_phase1_rls)" -f supabase/tests/ads/20_review_corrections_priority.sql 2>&1 | grep -E "NOTICE|ERROR|FAIL"
 echo "== Refunds / cancellation suite"
 $PSQL -d "$(dburl ads_phase1_rls)" -f supabase/tests/ads/30_refunds_cancellation.sql 2>&1 | grep -E "NOTICE|ERROR|FAIL"
+echo "== Notification outbox suite"
+$PSQL -d "$(dburl ads_phase1_rls)" -f supabase/tests/ads/40_notification_outbox.sql 2>&1 | grep -E "NOTICE|ERROR|FAIL"
 
 echo "== Concurrency: parallel holds on a capacity-1 unit"
 fresh_db ads_phase1_conc

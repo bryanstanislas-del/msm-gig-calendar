@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { describeBooking, formatPence, canStartCheckout, friendlyAdsError, clampToEarliest, earliestStartExplanation, reviewPromiseText, correctionText, confirmationText, parseLostIntervals, refundProcessingKey, removalMessage, cancellationGuidance, CANCELLATION_INITIATORS } from "./adsPresentation.js";
+import { describeBooking, formatPence, canStartCheckout, friendlyAdsError, clampToEarliest, earliestStartExplanation, reviewPromiseText, correctionText, confirmationText, parseLostIntervals, refundProcessingKey, removalMessage, cancellationGuidance, CANCELLATION_INITIATORS, notificationStatusText } from "./adsPresentation.js";
 
 const now = new Date("2026-10-15T12:00:00Z");
 const confirmed = { status: "confirmed", hold_expires_at: "2026-10-15T11:00:00Z" };
@@ -118,5 +118,13 @@ describe("cancellation initiator wording", () => {
     expect(cancellationGuidance({ initiated_by: "advertiser", party_type: "undetermined" }).canAssess).toBe(false);
     expect(cancellationGuidance(null).canAssess).toBe(false);
     expect(Object.keys(CANCELLATION_INITIATORS)).toEqual(["advertiser", "msm"]);
+  });
+});
+
+describe("notification status wording", () => {
+  it("never presents acceptance or delivery as reading", () => {
+    expect(notificationStatusText({ status: "accepted" })).toMatch(/not yet reported delivered/);
+    expect(notificationStatusText({ status: "delivered" })).toMatch(/not proof it was read/);
+    expect(notificationStatusText({ status: "pending" })).toMatch(/off unless both switches are on/);
   });
 });

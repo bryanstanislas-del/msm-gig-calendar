@@ -204,3 +204,19 @@ export function cancellationGuidance(kase) {
   return { canAssess: true, allowNetLoss: true,
     text: "Advertiser-initiated business cancellation: retain only delivered service plus evidenced reasonable net loss after mitigation, saved costs and resale (never more than the price)." };
 }
+
+/** Honest outbox status wording: provider acceptance is not delivery; delivery is not reading. */
+export function notificationStatusText(n) {
+  const T = {
+    pending: "Waiting to send (email is off unless both switches are on)",
+    sending: "Being sent",
+    accepted: "Accepted by the email provider - not yet reported delivered",
+    delivered: "Provider reported delivery to the recipient's mail server (not proof it was read)",
+    bounced: "Bounced",
+    complained: "Recipient marked it as spam",
+    failed: "Failed - not sent",
+    dead: "Gave up after repeated errors",
+    cancelled: "Cancelled by MSM",
+  };
+  return T[n?.status] || String(n?.status || "");
+}
