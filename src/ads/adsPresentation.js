@@ -243,3 +243,25 @@ export function amendmentText(a, now = new Date()) {
   if (new Date(a.expires_at) <= now) return `${head} This offer has expired.`;
   return `${head}${dur} Nothing changes unless you accept, by ${formatLondonWithOffset(a.expires_at)}. Acceptance re-checks availability.`;
 }
+
+/**
+ * Persistent, diagnosable load-failure text: friendly wording + the
+ * PostgREST/Postgres code (e.g. PGRST201) + a short server message. Anything
+ * token-like is redacted; request headers are never part of these errors.
+ */
+export function loadErrorText(label, err) {
+  const code = err?.code ? ` [${String(err.code).slice(0, 20)}]` : "";
+  const raw = String(err?.message || err || "")
+    .replace(/eyJ[\w-]+\.[\w-]+\.[\w-]+/g, "[redacted]")
+    .replace(/(bearer|apikey|token|secret|key)[=:\s]+\S+/gi, "$1 [redacted]")
+    .slice(0, 160);
+  const friendly = friendlyAdsError(err);
+  return `Could not load ${label}: ${friendly}${code}${raw && !/^ADS_/.test(raw) ? ` (${raw})` : ""}`;
+}
+
+/** Loading text that turns into an explicit "may be stuck" warning instead of silently looking empty. */
+export function loadingText(label, elapsedSeconds) {
+  return elapsedSeconds >= 10
+    ? `Still loading ${label} after ${elapsedSeconds} s - the request may be stuck. Check the browser network tab, then Retry.`
+    : `Loading ${label}...`;
+}

@@ -16,7 +16,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import * as ads from "../../ads/adsClient.js";
-import { describeBooking, formatPence, holdMinutesLeft, canStartCheckout, friendlyAdsError, clampToEarliest, earliestStartExplanation, reviewPromiseText, correctionText, confirmationText, amendmentText, servingIntervalText } from "../../ads/adsPresentation.js";
+import { describeBooking, formatPence, holdMinutesLeft, canStartCheckout, friendlyAdsError, clampToEarliest, earliestStartExplanation, reviewPromiseText, correctionText, confirmationText, amendmentText, servingIntervalText, loadErrorText } from "../../ads/adsPresentation.js";
 import { destinationUrlProblem, altTextProblem, creativeFileProblem } from "../../ads/validation.js";
 import { addDays, formatDeadline, londonDayStart } from "../../ads/londonTime.js";
 import { REPORT_LIMITATIONS } from "../../ads/reportLimitations.js";
@@ -297,6 +297,7 @@ export default function AdvertiserPortal({ user, logo }) {
 
   const refresh = useCallback(async () => {
     try {
+      setLoadError("");
       const f = await ads.getFlags();
       setFlags(f);
       if (!f.portal || !user?.id) return;
@@ -308,12 +309,12 @@ export default function AdvertiserPortal({ user, logo }) {
         setBookings(list);
         const paid = list.filter((b) => b.status === "confirmed").map((b) => b.id);
         setConfirmations(await ads.listConfirmations(paid));
-        setAmendmentsById(await ads.listAmendments(paid).catch(() => ({})));
+        setAmendmentsById(await ads.listAmendments(paid).catch((e) => { setLoadError(loadErrorText("booking change offers", e)); return {}; }));
         const slas = await Promise.all(paid.map((id) => ads.reviewSla(id).catch(() => null)));
         setSlaById(Object.fromEntries(paid.map((id, i) => [id, slas[i]])));
       }
     } catch (e) {
-      setLoadError(friendlyAdsError(e));
+      setLoadError(loadErrorText("your advertising account", e));    // persistent, with the error code
     }
   }, [user?.id]);
 

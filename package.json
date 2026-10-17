@@ -9,7 +9,8 @@
     "test:wp": "php wordpress/msm-ads/tests/run-tests.php",
     "test:ads-db": "bash scripts/ads-local-db-test.sh",
     "test:ads-staging": "bash scripts/ads-staging-bootstrap-test.sh",
-    "test:browser": "node scripts/ads-browser-test.mjs"
+    "test:browser": "node scripts/ads-browser-test.mjs",
+    "test:ads-postgrest": "bash scripts/ads-postgrest-test.sh"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",

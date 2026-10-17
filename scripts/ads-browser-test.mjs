@@ -220,10 +220,80 @@ async function screens(browser) {
   await new Promise((r) => server.httpServer.close(r));
 }
 
+// C. REAL app build, authenticated synthetic admin session, ADS tab. Supabase
+// is answered locally; an unhinted ad_payments embed is rejected exactly as
+// PostgREST does (PGRST201), so the old client fails here as it did hosted.
+async function adminAdsTab(browser) {
+  console.log("== C. Real app: authenticated admin session -> ADS tab (Supabase answered locally)");
+  const dir = path.join(OUT, "app-admin");
+  await buildApp(dir, { VITE_SUPABASE_URL: STAGING, VITE_SUPABASE_ANON_KEY: "LOCAL-FAKE-anon-key" });
+  const server = await serve(dir, 4820);
+  const ref = new URL(STAGING).hostname.split(".")[0];
+  const user = { id: "u-admin", aud: "authenticated", role: "authenticated", email: "admin@example.invalid" };
+  const json = (route, status, body, extra = {}) => route.fulfill({ status, contentType: "application/json",
+    headers: { "access-control-allow-origin": "*", "access-control-expose-headers": "content-range", "content-range": "*/0", ...extra }, body: JSON.stringify(body) });
+  const run = async (variant) => {
+    const ctx = await browser.newContext({ serviceWorkers: "block", viewport: VIEWPORTS.desktop });
+    await ctx.addInitScript(([key, value]) => { localStorage.setItem(key, value); }, [`sb-${ref}-auth-token`, JSON.stringify({
+      access_token: "LOCAL.FAKE.token", refresh_token: "LOCAL-FAKE-refresh", token_type: "bearer", expires_in: 3600,
+      expires_at: Math.floor(Date.now() / 1000) + 3600, user })]);
+    const seen = [];
+    await ctx.route("**/*", (route) => {
+      const req = route.request();
+      const u = new URL(req.url());
+      if (u.hostname === "127.0.0.1") return route.continue();
+      if (!u.hostname.endsWith(".supabase.co")) { seen.push(`blocked ${u.hostname}`); return route.abort(); }
+      if (u.hostname !== new URL(STAGING).hostname) { seen.push(`foreign ${u.hostname}`); return route.abort(); }
+      if (req.method() === "OPTIONS") return route.fulfill({ status: 200, headers: { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "access-control-allow-methods": "*" } });
+      const p = u.pathname, sel = u.searchParams.get("select") || "";
+      seen.push(p);
+      if (p === "/rest/v1/ad_bookings") seen.push(/ad_payments!ad_payments_booking_id_fkey\(/.test(sel) ? "bookings:hinted" : "bookings:unhinted");
+      if (p === "/auth/v1/user") return json(route, 200, user);
+      if (p === "/rest/v1/rpc/ad_public_flags") return json(route, 200, { portal: true, checkout: false, delivery: false });
+      if (p === "/rest/v1/profiles" && u.searchParams.get("user_id") === "eq.u-admin") return json(route, 200, [{ id: "p-admin", user_id: "u-admin", role: "admin", band_name: "ZZ Admin", profile_type: null, disabled: false }]);
+      if (p === "/rest/v1/ad_settings") return variant === "settings-fail"
+        ? json(route, 500, { code: "XX000", message: "synthetic settings failure", details: null, hint: null })
+        : json(route, 200, [{ key: "ads_portal_enabled", bool_value: false, int_value: null, description: "Portal" }, { key: "hold_minutes", bool_value: null, int_value: 60, description: "Hold length" }]);
+      if (p === "/rest/v1/ad_inventory_units") return json(route, 200, [{ id: "u1", code: "wordpress-home-top", name: "Homepage top", rotation_capacity: 1, active: false, is_test: true }]);
+      if (p === "/rest/v1/ad_products") return json(route, 200, [{ id: "p1", code: "TEST-wp-home-top-daily", name: "TEST homepage top (daily)", price_per_day_pence: 1000, min_days: 1, max_days: 28, active: false, is_test: true }]);
+      if (p === "/rest/v1/ad_bookings" && /(^|,)ad_payments\(/.test(sel)) {
+        return json(route, 300, { code: "PGRST201", message: "Could not embed because more than one relationship was found for 'ad_bookings' and 'ad_payments'", details: [], hint: null });
+      }
+      return json(route, 200, []);
+    });
+    const page = await ctx.newPage();
+    const errors = [];
+    page.on("pageerror", (e) => errors.push(String(e.message || e)));
+    await page.goto("http://127.0.0.1:4820/");
+    await page.getByRole("button", { name: "ADS", exact: true }).first().click({ timeout: 15000 });
+    await page.waitForTimeout(6000);                         // past the 4 s toast: what remains on screen is what an admin sees
+    const t = await page.locator("body").innerText();
+    await ctx.close();
+    return { t, seen, errors };
+  };
+
+  const ok = await run("ok");
+  check(ok.seen.includes("/rest/v1/profiles") && ok.seen.includes("/rest/v1/ad_settings"), "session restored, admin profile loaded, ADS tab requested settings");
+  check(/ads_portal_enabled/.test(ok.t) && /hold_minutes/.test(ok.t), "settings rendered");
+  check(/TEST homepage top \(daily\)/.test(ok.t), "inventory/packages rendered");
+  check(ok.seen.includes("bookings:hinted") && !ok.seen.includes("bookings:unhinted"), "bookings request names the payment-history foreign key");
+  check(/No bookings yet\./.test(ok.t) && !/Could not load/.test(ok.t), "bookings loaded (embed accepted), no load error");
+  const blocked = [...new Set(ok.seen.filter((x) => x.startsWith("blocked")).map((x) => x.slice(8)))];
+  const foreign = ok.seen.filter((x) => x.startsWith("foreign"));
+  check(foreign.length === 0, `no request to any other Supabase project (${foreign.length}); non-Supabase hosts blocked locally: ${blocked.join(", ") || "none"}`);
+
+  const bad = await run("settings-fail");
+  check(/Could not load settings: .*\[XX000\]/.test(bad.t) && /Retry/.test(bad.t), "failed settings load stays visible with its code (not an empty panel)");
+  check(/TEST homepage top \(daily\)/.test(bad.t) && /No bookings yet\./.test(bad.t), "other sections still load independently");
+  check(!/LOCAL\.FAKE\.token|LOCAL-FAKE-refresh/.test(ok.t + bad.t), "no token shown on screen");
+  await new Promise((r) => server.httpServer.close(r));
+}
+
 const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM || undefined });
 try {
   await projectIsolation(browser);
   await screens(browser);
+  await adminAdsTab(browser);
 } finally {
   await browser.close();
   fs.rmSync(OUT, { recursive: true, force: true });

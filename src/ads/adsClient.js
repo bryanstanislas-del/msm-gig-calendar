@@ -9,9 +9,16 @@ import { extensionForMime } from "./validation.js";
 
 export const CREATIVE_BUCKET = "ad-creatives-private";
 
+/** Error carrying the PostgREST/Postgres code (e.g. PGRST201) for diagnosis; never request headers or tokens. */
+export function dbError(error) {
+  const e = new Error(error?.message || "Request failed");
+  if (error?.code) e.code = String(error.code);
+  return e;
+}
+
 async function rpc(fn, args) {
   const { data, error } = await supabase.rpc(fn, args);
-  if (error) throw new Error(error.message);
+  if (error) throw dbError(error);
   return data;
 }
 
@@ -39,14 +46,14 @@ export const getFlags = () => rpc("ad_public_flags").catch(() => ({ portal: fals
 
 export async function getMyAdvertiser(userId) {
   const { data, error } = await supabase.from("ad_advertisers").select("id, display_name, contact_email, status").eq("owner_user_id", userId).maybeSingle();
-  if (error) throw new Error(error.message);
+  if (error) throw dbError(error);
   return data;
 }
 
 export async function createAdvertiser(displayName, contactEmail) {
   const { data, error } = await supabase.from("ad_advertisers").insert({ display_name: displayName, contact_email: contactEmail })
     .select("id, display_name, contact_email, status").single();
-  if (error) throw new Error(error.message);
+  if (error) throw dbError(error);
   return data;
 }
 
@@ -54,7 +61,7 @@ export async function listProducts() {
   const { data, error } = await supabase.from("ad_products")
     .select("id, code, name, description, price_per_day_pence, min_days, max_days, currency, is_test, active, ad_product_units(ad_inventory_units(code, name, desktop_width, desktop_height, mobile_width, mobile_height, max_bytes))")
     .order("code");
-  if (error) throw new Error(error.message);
+  if (error) throw dbError(error);
   return data || [];
 }
 
@@ -70,21 +77,26 @@ export async function listConfirmations(bookingIds) {
   const { data, error } = await supabase.from("ad_booking_confirmations")
     .select("booking_id, confirmed_at, total_pence, placement_pence, priority_fee_pence, priority_review, currency, terms_version, review_rule, booked_from, booked_until")
     .in("booking_id", bookingIds);
-  if (error) throw new Error(error.message);
+  if (error) throw dbError(error);
   return Object.fromEntries((data || []).map((c) => [c.booking_id, c]));
 }
 export const cancelHold = (bookingId) => rpc("ad_cancel_hold", { p_booking_id: bookingId });
 
+// Embeds name their foreign key wherever two tables are linked more than once:
+// ad_bookings <-> ad_payments has ad_payments.booking_id (every payment for the
+// booking -- funding, duplicate, conflicting) AND ad_bookings.funding_payment_id.
+// Payment history must use ad_payments_booking_id_fkey; an unhinted embed is
+// rejected by PostgREST (PGRST201). Checked by scripts/ads-postgrest-test.sh.
 const BOOKING_SELECT = `id, advertiser_id, start_date, end_date, serve_from, serve_until, amended_at, status, status_reason, hold_expires_at, is_test, created_at, confirmed_at,
   ad_purchase_snapshots(product_name, unit_codes, billable_days, price_per_day_pence, total_pence, currency, is_test),
-  ad_payments(status, amount_pence, currency, requires_refund, created_at, paid_at),
+  ad_payments!ad_payments_booking_id_fkey(status, amount_pence, currency, requires_refund, created_at, paid_at),
   ad_campaigns(id, review_status, current_version_id, approved_version_id, paused,
     ad_creative_versions!ad_creative_versions_campaign_id_fkey(id, version_no, status, destination_url, alt_text, submitted_at,
       review_clock_started_at, review_due_before, reviewed_at, rejection_reason, desktop_object_path, mobile_object_path))`;
 
 export async function listBookings() {
   const { data, error } = await supabase.from("ad_bookings").select(BOOKING_SELECT).order("created_at", { ascending: false });
-  if (error) throw new Error(error.message);
+  if (error) throw dbError(error);
   return data || [];
 }
 
@@ -104,7 +116,7 @@ export async function uploadCreative(file, advertiserId, campaignId, side) {
   if (!ext) throw new Error("Unsupported image type");
   const path = `${advertiserId}/${campaignId}/${crypto.randomUUID()}-${side}.${ext}`;
   const { error } = await supabase.storage.from(CREATIVE_BUCKET).upload(path, file, { upsert: false, contentType: file.type, cacheControl: "60" });
-  if (error) throw new Error(error.message);
+  if (error) throw dbError(error);
   return path;
 }
 
@@ -144,7 +156,7 @@ export async function downloadReport(bookingId, from, to, format) {
 // ── Admin ────────────────────────────────────────────────────────────
 export async function adminListSettings() {
   const { data, error } = await supabase.from("ad_settings").select("key, bool_value, int_value, description, updated_at").order("key");
-  if (error) throw new Error(error.message);
+  if (error) throw dbError(error);
   return data || [];
 }
 export const adminSetSetting = (key, bool, int) => rpc("ad_admin_set_setting", { p_key: key, p_bool: bool ?? null, p_int: int ?? null });
@@ -155,7 +167,7 @@ export const adminCancelBooking = (bookingId, reason, partyType, initiatedBy) =>
   rpc("ad_admin_cancel_booking", { p_booking_id: bookingId, p_reason: reason, p_party_type: partyType, p_initiated_by: initiatedBy });
 export async function adminGetCancellationCase(bookingId) {
   const { data, error } = await supabase.from("ad_cancellation_cases").select("initiated_by, party_type, removed_at, reason").eq("booking_id", bookingId).maybeSingle();
-  if (error) throw new Error(error.message);
+  if (error) throw dbError(error);
   return data;
 }
 export const adminRequestCorrection = (versionId, cause, reasons) =>
@@ -176,7 +188,7 @@ export async function adminListRefunds() {
   const { data, error } = await supabase.from("ad_refund_assessments")
     .select("id, booking_id, kind, status, total_pence, gates, note, proposed_at, decided_at, decision_note, target_pay_by, ad_refund_lines(kind, pence, lost_seconds, purchased_seconds, details), ad_refund_processing_events(status, provider_refund_id, occurred_at, note)")
     .order("proposed_at", { ascending: false });
-  if (error) throw new Error(error.message);
+  if (error) throw dbError(error);
   return data || [];
 }
 export const adminExpireHolds = () => rpc("ad_expire_stale_holds");
@@ -186,13 +198,13 @@ export async function adminListInventory() {
     supabase.from("ad_inventory_units").select("id, code, name, rotation_capacity, active, is_test").order("code"),
     supabase.from("ad_products").select("id, code, name, price_per_day_pence, min_days, max_days, active, is_test").order("code"),
   ]);
-  if (e1 || e2) throw new Error((e1 || e2).message);
+  if (e1 || e2) throw dbError(e1 || e2);
   return { units: units || [], products: products || [] };
 }
 export async function adminSetActive(table, id, active) {
   if (!["ad_inventory_units", "ad_products"].includes(table)) throw new Error("bad table");
   const { error } = await supabase.from(table).update({ active }).eq("id", id);
-  if (error) throw new Error(error.message);
+  if (error) throw dbError(error);
 }
 export async function adminAdvertiserNames() {
   const { data } = await supabase.from("ad_advertisers").select("id, display_name");
@@ -204,7 +216,7 @@ export async function adminListNotifications() {
   const { data, error } = await supabase.from("ad_notification_outbox")
     .select("id, kind, status, attempts, recipient_role, booking_id, created_at, accepted_at, delivered_at, failed_at, next_attempt_at, last_error, first_dispatched_at, dispatch_generation, reconciliation_reason")
     .order("created_at", { ascending: false }).limit(100);
-  if (error) throw new Error(error.message);
+  if (error) throw dbError(error);
   return data || [];
 }
 export const adminRetryNotification = (id, note) => rpc("ad_admin_retry_notification", { p_id: id, p_note: note });
@@ -220,7 +232,7 @@ export async function listAmendments(bookingIds) {
   const { data, error } = await supabase.from("ad_booking_amendments")
     .select("id, booking_id, reason, status, approved_at, original_from, original_until, proposed_from, proposed_until, purchased_seconds, preserves_duration, shortened_seconds, proposed_at, expires_at, decided_at")
     .in("booking_id", bookingIds).order("proposed_at", { ascending: false });
-  if (error) throw new Error(error.message);
+  if (error) throw dbError(error);
   const out = {};
   for (const a of data || []) (out[a.booking_id] ||= []).push(a);
   return out;

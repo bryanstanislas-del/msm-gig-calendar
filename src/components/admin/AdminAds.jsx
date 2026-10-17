@@ -13,7 +13,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import * as ads from "../../ads/adsClient.js";
-import { formatPence, friendlyAdsError, parseLostIntervals, refundProcessingKey, removalMessage, cancellationGuidance, CANCELLATION_INITIATORS, notificationStatusText } from "../../ads/adsPresentation.js";
+import { formatPence, friendlyAdsError, parseLostIntervals, refundProcessingKey, removalMessage, cancellationGuidance, CANCELLATION_INITIATORS, notificationStatusText, loadErrorText, loadingText } from "../../ads/adsPresentation.js";
 import { formatLondonWithOffset } from "../../ads/ukWorkingTime.js";
 import { formatDeadline, formatLondonDateTime } from "../../ads/londonTime.js";
 import {
@@ -187,6 +187,29 @@ function RefundRow({ a, onDone, setToast }) {
   );
 }
 
+// Each section loads on its own and keeps a VISIBLE state: a failed or stuck
+// request can never look like "no settings" / "no bookings".
+const SECTIONS = {
+  settings: { label: "settings", fetch: () => ads.adminListSettings() },
+  inventory: { label: "inventory and packages", fetch: () => ads.adminListInventory() },
+  bookings: { label: "bookings", fetch: () => ads.listBookings() },
+  names: { label: "advertiser names", fetch: () => ads.adminAdvertiserNames() },
+  refunds: { label: "refund assessments", fetch: () => ads.adminListRefunds() },
+  notifications: { label: "email notifications", fetch: () => ads.adminListNotifications() },
+};
+
+function LoadNotice({ st, label, onRetry, now }) {
+  if (!st || st.state === "ok") return null;
+  if (st.state === "loading") {
+    return <p role="status" style={{ color: TEXT_MUTED, fontSize: 13 }}>{loadingText(label, Math.floor((now - st.since) / 1000))}</p>;
+  }
+  return (
+    <div role="alert" style={{ border: `1px solid ${ACCENT}`, borderRadius: 6, padding: "8px 10px", margin: "6px 0", fontSize: 13, overflowWrap: "anywhere" }}>
+      {loadErrorText(label, st.error)} <SmallActionButton onClick={onRetry}>Retry</SmallActionButton>
+    </div>
+  );
+}
+
 export default function AdminAds() {
   const [settings, setSettings] = useState([]);
   const [inv, setInv] = useState({ units: [], products: [] });
@@ -200,17 +223,25 @@ export default function AdminAds() {
   const [notes, setNotes] = useState([]);
   const [noteText, setNoteText] = useState("");
 
-  const load = useCallback(async () => {
+  const [status, setStatus] = useState({});
+  const [now, setNow] = useState(() => Date.now());
+  const setters = { settings: setSettings, inventory: setInv, bookings: setBookings, names: setNames, refunds: setRefunds, notifications: setNotes };
+  const loadOne = useCallback(async (key) => {
+    setStatus((m) => ({ ...m, [key]: { state: "loading", since: Date.now() } }));
     try {
-      const [s, i, b, n] = await Promise.all([ads.adminListSettings(), ads.adminListInventory(), ads.listBookings(), ads.adminAdvertiserNames()]);
-      setSettings(s); setInv(i); setBookings(b); setNames(n);
-      setRefunds(await ads.adminListRefunds().catch(() => []));
-      setNotes(await ads.adminListNotifications().catch(() => []));
+      const data = await SECTIONS[key].fetch();
+      setters[key](data);
+      setStatus((m) => ({ ...m, [key]: { state: "ok" } }));
     } catch (e) {
-      setToast({ type: "error", msg: friendlyAdsError(e) });
+      setStatus((m) => ({ ...m, [key]: { state: "error", error: e } }));
     }
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- setters are stable state setters
+  const load = useCallback(() => Promise.allSettled(Object.keys(SECTIONS).map(loadOne)), [loadOne]);
   useEffect(() => { load(); }, [load]);
+  const anyLoading = Object.values(status).some((x) => x.state === "loading");
+  useEffect(() => { if (!anyLoading) return undefined; const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, [anyLoading]);
+  const ok = (k) => status[k]?.state === "ok";
+  const notice = (k) => <LoadNotice st={status[k]} label={SECTIONS[k].label} onRetry={() => loadOne(k)} now={now} />;
   useEffect(() => { if (!toast) return undefined; const t = setTimeout(() => setToast(null), 4000); return () => clearTimeout(t); }, [toast]);
 
   const wrap = (fn, ok) => async () => {
@@ -231,11 +262,14 @@ export default function AdminAds() {
       <SystemNotice accent={ACCENT}>
         TEST inventory and TEST prices only; Stripe is test mode only. Commercial prices, rotation capacity, VAT, refund policy and
         terms are not decided yet (order terms are a DRAFT version). Venue/gig advertising is off (phase 2). Only switch priority review on
-        when MSM can really cover 12-hour reviews; the GBP fee is the priority_fee_pence setting. Correction emails are not sent by this build:
-        record the notice (mailer or fallback) to start the advertiser's response window.
+        when MSM can really cover 12-hour reviews; the GBP fee is the priority_fee_pence setting. Advertising emails are sent only by the server
+        email worker, which stays OFF until both ads_email_enabled and the server's ADS_EMAIL_ENABLED are on. While it is off, record a fallback
+        contact on the correction to start the advertiser's response window.
       </SystemNotice>
 
       <FormSection title="Feature toggles" first>
+        {notice("settings")}
+        {ok("settings") && settings.length === 0 && <EmptyState>No settings rows were returned.</EmptyState>}
         {settings.filter((s) => s.bool_value !== null).map((s) => (
           <ToggleSetting key={s.key} accent={ACCENT} checked={!!s.bool_value} label={`${s.key}${PHASE2.has(s.key) ? " (phase 2 - locked)" : ""}`} hint={s.description}
             onChange={PHASE2.has(s.key) ? () => setToast({ type: "error", msg: "Not available in phase 1" }) : (val) => wrap(() => ads.adminSetSetting(s.key, val), "Saved")()} />
@@ -251,6 +285,8 @@ export default function AdminAds() {
       </FormSection>
 
       <FormSection title="TEST inventory and packages">
+        {notice("inventory")}
+        {ok("inventory") && inv.units.length + inv.products.length === 0 && <EmptyState>No inventory or packages were returned.</EmptyState>}
         {[...inv.units.map((u) => ({ ...u, table: "ad_inventory_units", extra: `capacity ${u.rotation_capacity}/day` })),
           ...inv.products.map((p) => ({ ...p, table: "ad_products", extra: `${formatPence(p.price_per_day_pence)}/day, ${p.min_days}-${p.max_days} days` }))].map((r) => (
           <ToggleSetting key={r.id} accent={ACCENT} checked={r.active} label={`${r.name}`} hint={`${r.code} - ${r.extra}${r.is_test ? " - TEST" : ""}`}
@@ -258,8 +294,9 @@ export default function AdminAds() {
         ))}
       </FormSection>
 
-      <FormSection title={`Review queue (${queue.length})`}>
-        {queue.length === 0 ? <EmptyState>Nothing waiting for review.</EmptyState> : queue.map(({ v, b }) => (
+      <FormSection title={ok("bookings") ? `Review queue (${queue.length})` : "Review queue"}>
+        {notice("bookings")}
+        {!ok("bookings") ? null : queue.length === 0 ? <EmptyState>Nothing waiting for review.</EmptyState> : queue.map(({ v, b }) => (
           <ReviewItem key={v.id} v={v} booking={b} onDone={load} setToast={setToast} />
         ))}
       </FormSection>
@@ -278,7 +315,9 @@ export default function AdminAds() {
             {Object.entries(CANCELLATION_INITIATORS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
           </select>
         </div>
-        {bookings.length === 0 ? <EmptyState>No bookings yet.</EmptyState> : (
+        {notice("bookings")}
+        {notice("names")}
+        {!ok("bookings") ? null : bookings.length === 0 ? <EmptyState>No bookings yet.</EmptyState> : (
           <TableShell minWidth={900}>
             <thead><tr><Th>Advertiser</Th><Th>Dates (UK)</Th><Th>Status</Th><Th>Review</Th><Th>Payment</Th><Th>Actions</Th></tr></thead>
             <tbody>
@@ -313,10 +352,11 @@ export default function AdminAds() {
         )}
       </FormSection>
 
-      <FormSection title={`Email notifications (${notes.length})`}>
+      <FormSection title={ok("notifications") ? `Email notifications (${notes.length})` : "Email notifications"}>
+        {notice("notifications")}
         <p style={{ color: TEXT_MUTED, fontSize: 12 }}>Sent only by the server worker when ads_email_enabled AND the server's ADS_EMAIL_ENABLED are on. Correction response windows start only on provider-reported delivery or a recorded fallback contact.</p>
         <TextInput accent={ACCENT} placeholder="Note for retry/cancel" value={noteText} onChange={(e) => setNoteText(e.target.value)} style={{ maxWidth: 360 }} />
-        {notes.length === 0 ? <EmptyState>No notifications queued.</EmptyState> : (
+        {!ok("notifications") ? null : notes.length === 0 ? <EmptyState>No notifications queued.</EmptyState> : (
           <TableShell minWidth={800}>
             <thead><tr><Th>Kind</Th><Th>Status</Th><Th>Attempts</Th><Th>Times</Th><Th>Last error</Th><Th>Actions</Th></tr></thead>
             <tbody>{notes.map((n) => (
@@ -340,8 +380,9 @@ export default function AdminAds() {
         )}
       </FormSection>
 
-      <FormSection title={`Refund assessments (${refunds.length})`}>
-        {refunds.length === 0 ? <EmptyState>No refund assessments.</EmptyState> : refunds.map((a) => <RefundRow key={a.id} a={a} onDone={load} setToast={setToast} />)}
+      <FormSection title={ok("refunds") ? `Refund assessments (${refunds.length})` : "Refund assessments"}>
+        {notice("refunds")}
+        {!ok("refunds") ? null : refunds.length === 0 ? <EmptyState>No refund assessments.</EmptyState> : refunds.map((a) => <RefundRow key={a.id} a={a} onDone={load} setToast={setToast} />)}
       </FormSection>
     </AdminPage>
   );

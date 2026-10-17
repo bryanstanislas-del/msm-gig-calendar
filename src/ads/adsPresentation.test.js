@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { describeBooking, formatPence, canStartCheckout, friendlyAdsError, clampToEarliest, earliestStartExplanation, reviewPromiseText, correctionText, confirmationText, parseLostIntervals, refundProcessingKey, removalMessage, cancellationGuidance, CANCELLATION_INITIATORS, notificationStatusText, amendmentText, servingIntervalText } from "./adsPresentation.js";
+import { describeBooking, formatPence, canStartCheckout, friendlyAdsError, clampToEarliest, earliestStartExplanation, reviewPromiseText, correctionText, confirmationText, parseLostIntervals, refundProcessingKey, removalMessage, cancellationGuidance, CANCELLATION_INITIATORS, notificationStatusText, amendmentText, servingIntervalText, loadErrorText, loadingText } from "./adsPresentation.js";
 
 const now = new Date("2026-10-15T12:00:00Z");
 const confirmed = { status: "confirmed", hold_expires_at: "2026-10-15T11:00:00Z" };
@@ -151,5 +151,22 @@ describe("booking amendment wording", () => {
     expect(servingIntervalText({ start_date: "2026-11-02", end_date: "2026-11-03" })).toBe("2026-11-02 to 2026-11-03 (UK dates, inclusive)");
     expect(servingIntervalText({ start_date: "2026-11-02", end_date: "2026-11-03", serve_from: "2026-11-02T11:00:00Z", serve_until: "2026-11-04T00:00:00Z" }))
       .toMatch(/^Mon 2 Nov 2026 11:00 GMT \(UTC\+00:00\) until Wed 4 Nov 2026 00:00 GMT/);
+  });
+});
+
+describe("persistent load / error states", () => {
+  it("names the section, keeps the PostgREST code and a short server message", () => {
+    const e = Object.assign(new Error("Could not embed because more than one relationship was found for 'ad_bookings' and 'ad_payments'"), { code: "PGRST201" });
+    expect(loadErrorText("bookings", e)).toBe("Could not load bookings: Something went wrong. Please try again. [PGRST201] (Could not embed because more than one relationship was found for 'ad_bookings' and 'ad_payments')");
+    expect(loadErrorText("settings", new Error("ADS_FORBIDDEN"))).toBe("Could not load settings: Something went wrong. Please try again.");
+  });
+  it("never shows token-like strings", () => {
+    const t = loadErrorText("x", new Error("JWT eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl expired; apikey=sb_secret_abc token: xyz"));
+    expect(t).not.toMatch(/eyJhbGci|sb_secret_abc|xyz/);
+    expect(t).toContain("[redacted]");
+  });
+  it("a stuck request is called out instead of looking empty", () => {
+    expect(loadingText("settings", 3)).toBe("Loading settings...");
+    expect(loadingText("settings", 12)).toMatch(/Still loading settings after 12 s - the request may be stuck/);
   });
 });

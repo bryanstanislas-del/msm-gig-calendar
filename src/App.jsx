@@ -141,6 +141,7 @@ const MOCK_USERS = {
 
 // ── Official Supabase client ────────────────────────────────────────
 import { supabase } from './supabaseClient';
+import { startAuthSync } from './authSync.js';
 import NewsletterAdmin  from './components/admin/NewsletterAdmin';
 import AdminFeatured    from './components/admin/AdminFeatured';
 import AdminEditorial   from './components/admin/AdminEditorial';
@@ -9765,33 +9766,17 @@ function MainApp() {
   // hardcoded to null with nothing reading the session the Supabase client
   // already persists to localStorage by default, so the user appeared
   // logged out every time even though their token was still valid.
+  // Startup getSession + a SYNCHRONOUS onAuthStateChange listener; profile
+  // loading is deferred out of the auth callback and stale results (after
+  // sign-out, an account switch or unmount) are dropped. See src/authSync.js.
   useEffect(() => {
-    if (USE_MOCK) return;
-    let active = true;
-
-    // 1) Explicit check on startup, per Supabase's recommended pattern.
-    supabase.auth.getSession().then(async ({ data, error }) => {
-      if (!active || error || !data.session) return;
-      const result = await DB.buildAuthFromSession(data.session);
-      if (active) setAuth(result);
+    if (USE_MOCK) return undefined;
+    return startAuthSync({
+      supabase,
+      buildAuth: (session) => DB.buildAuthFromSession(session),
+      setAuth,
+      onError: (e) => console.warn("Could not load the signed-in profile:", e?.message || "unknown error"),
     });
-
-    // 2) Keep auth state synchronized with Supabase's own auth state
-    // machine going forward -- INITIAL_SESSION (fired once when the client
-    // finishes restoring from storage, overlaps with #1 above but kept for
-    // robustness), SIGNED_IN (e.g. another tab, magic link), and
-    // SIGNED_OUT (e.g. token expiry, signed out in another tab).
-    const { data: listener } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (!active) return;
-      if (event === "SIGNED_OUT") {
-        setAuth(null);
-      } else if ((event === "INITIAL_SESSION" || event === "SIGNED_IN") && session) {
-        const result = await DB.buildAuthFromSession(session);
-        if (active) setAuth(result);
-      }
-    });
-
-    return () => { active = false; listener?.subscription?.unsubscribe(); };
   }, []);
 
   // SPRINT 4: unread notification badge. Fetched once whenever the signed-in
