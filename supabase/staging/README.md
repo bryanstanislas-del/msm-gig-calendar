@@ -3,15 +3,21 @@
 Target: Supabase project **msm-ads-staging**, ref **`oyakrgdmplmxmlhjfqcd`** (London, MSM Free).
 **Never** production `fmlaaiolqwknowhtdeue`. **Never** apply `supabase/tests/**` (local shims) to any hosted project: hosted Supabase already provides `auth`, `storage` and the API roles.
 
-These scripts create only what the unchanged ads migration and the existing App's auth/admin path need: minimal `profiles` and `user_roles`, plus `has_role()`, `is_admin_or_above()` and `update_updated_at()` with bodies identical to production. There are no Calendar tables, no real customer rows, no admin accounts, and every ads toggle stays OFF.
+These scripts create only what the unchanged ads migration and the existing App's auth/admin path need: minimal `profiles` and `user_roles`, plus `has_role()`, `is_admin_or_above()` and `update_updated_at()` with bodies identical to production. The bootstrap itself creates no Calendar tables, no real customer rows and no admin accounts, and every ads toggle stays OFF. The optional, separately authorised Calendar shell (`05`) adds empty read-only Calendar tables.
 
 ## Status (as REPORTED BY CODEX, 2026-10-16)
 
 - Done on `oyakrgdmplmxmlhjfqcd` only: preflight EMPTY → bootstrap → `20261015120000_ads_platform_phase1.sql` unchanged → postflight.
 - Synthetic `admin+msm-staging@example.invalid` and `advertiser+msm-staging@example.invalid` created via the dashboard and confirmed. The admin grant (`04`) was separately authorised and both roles verified; the advertiser has no privileged role.
 - Eight postflight checks (adjusted for the granted admin) pass. Switches OFF; TEST inventory/products inactive; storage private; no bookings or payments.
-- **Not yet applied:** `supabase/migrations/20261016090000_ads_standard_earliest_start.sql`. Apply it the same way (paste unchanged, run once) after review. It replaces only ads-owned functions, adds `ad_earliest_start()`, and resets `min_lead_days` from the seed value 3 to 0. It changes no toggles.
 - Production `fmlaaiolqwknowhtdeue`: nothing ads-related applied.
+
+## Status update (reviewer observations, 2026-10-17)
+
+- Applied on `oyakrgdmplmxmlhjfqcd` only, unchanged and in order: the eight reviewed forward migrations `20261016090000` … `20261017120000` (list in `docs/ads/launch-checklist.md` §3), then `05_calendar_shell_fixture.sql` with its exact opt-in phrase.
+- Postflight: switches 0; bookings, payments, outbox and amendments 0; creative bucket private; RLS on every public table; anon dispatch and authenticated worker claim denied; clients cannot write the shell tables; exactly 2 synthetic auth users.
+- The branch preview now loads fully against staging, showing 0 gigs / 0 venues. It no longer shows the production catalogue or a loading spinner.
+- Production untouched. Nothing in this folder remains to apply on staging; the apply steps below are kept for rebuilding a fresh staging project.
 
 See "Current status" in `docs/ads/README.md` for Vercel and Stripe.
 
@@ -67,7 +73,7 @@ Point an isolated preview at staging as described in `docs/ads/README.md` ("Veri
 
 - Sign in as the staging admin → **ADS** tab → enable TEST inventory and toggles deliberately. Nothing is enabled by these scripts.
 - `/?view=advertise` shows the ADVERTISE tab once `ads_portal_enabled` is on.
-- **Without the Calendar shell (below), the app does not start.** It stays on "Loading gigs", and the console reports `public.gigs` / `public.venues` missing from the schema cache. This was observed on the shared-client preview on 2026-10-17. The startup queries do **not** tolerate the missing tables, and that is deliberately not hidden in code.
+- **Without the Calendar shell (below), the app does not start.** It stays on "Loading gigs", and the console reports `public.gigs` / `public.venues` missing from the schema cache. This was observed on the shared-client preview on 2026-10-17, before the shell was applied. The startup queries do **not** tolerate the missing tables, and that is deliberately not hidden in code. With the shell applied (2026-10-17), the preview loads with 0 gigs / 0 venues.
 
 ## Calendar shell fixture (staging only; separately authorised)
 
@@ -86,7 +92,7 @@ Point an isolated preview at staging as described in `docs/ads/README.md` ("Veri
 
 Everything runs in one transaction. Other Calendar screens (follows, notifications page, claims workflow, import, festivals data) still need their real tables and will show errors on staging.
 
-**Manual staging apply order** (after `01` and `20261015120000`, already applied):
+**Manual staging apply order** (applied by the reviewer 2026-10-17; kept for rebuilds):
 1. Run `00_preflight_readonly.sql` for reference.
 2. Open `05_calendar_shell_fixture.sql` and replace `NOT-CONFIRMED` with `I AM APPLYING THE CALENDAR SHELL TO msm-ads-staging oyakrgdmplmxmlhjfqcd ONLY`. Run it once.
 3. Apply the ads migrations in the order listed in `docs/ads/launch-checklist.md` §3.

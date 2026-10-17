@@ -3,29 +3,31 @@
 **Purpose.** This page lists everything still required before paid bookings can open. It covers exact configuration (variable **names** only, never values), the staged migration sequence, and what has and has not been verified.
 
 **Boundaries.**
-- No hosted migration, deployment, configuration change, live Stripe action or external email was performed by Claude for this checklist.
-- Facts marked *observed* were reported by the independent reviewer from read-only checks; Claude did not re-verify them, because it does not call hosted services.
+- No hosted migration, deployment, configuration change, live Stripe action or external email was performed **by Claude**.
+- The staging applies recorded in §1 were performed by the independent reviewer. Facts marked as reviewer observations come from the reviewer's checks; Claude did not re-verify them, because it does not call hosted services.
 
-## 1. Status facts (observed by the reviewer, 2026-10-17)
+## 1. Status facts (reviewer observations, 2026-10-17)
 
 | Item | State |
 |---|---|
 | Vercel plan | Team is on **Hobby**. Vercel's fair-use guidelines (updated 14 Sep 2026, https://vercel.com/docs/limits/fair-use-guidelines) require **Pro or Enterprise for commercial usage**, including paid advertising and payment processing. **Not upgraded; nothing purchased.** |
 | Preview environment variables | Visually confirmed scoped to **Preview + this branch**. `ADS_API_ENABLED` and all email variables are **absent**. |
-| Preview deployment of `eaafbab` | Ready, ID `LCcY5MHDqxjuTv2aC7VXEuGyvye5`. Its root displayed **1,615 live gigs (production catalogue)** despite the staging overrides. Root cause: `src/App.jsx` built its own hard-coded production client. **Fixed in code by this commit (§4), but not redeployed or re-verified on the preview.** |
-| Preview after the shared-client fix (`367d29a`, branch alias) | No longer shows the production catalogue, but stays on **"Loading gigs"**. The console reports `public.gigs` / `public.venues` missing from the schema cache, because staging has no Calendar shell tables. Fix prepared: `supabase/staging/05_calendar_shell_fixture.sql` (§3, step 0). **Not applied.** |
-| Staging Supabase (`msm-ads-staging`) | Zero bookings and payments; no active or non-test inventory/products; private creative bucket. Only `20261015120000` is applied; all later ads migrations, including outbox and amendments, are **not applied**. |
+| Preview history | `eaafbab` preview (`LCcY5MHDqxjuTv2aC7VXEuGyvye5`) showed **1,615 production gigs**, because `src/App.jsx` built its own production client; fixed in `367d29a`. The `367d29a` branch alias then stayed on "Loading gigs" (staging had no Calendar shell tables); fixed by `05_calendar_shell_fixture.sql`. |
+| **Preview now (branch alias)** | **Fully loads against staging, showing 0 gigs / 0 venues**: not the production catalogue, and no loading spinner. No login, payment or email has been exercised on it. |
+| **Staging Supabase (`msm-ads-staging`, `oyakrgdmplmxmlhjfqcd` only)** | Applied by the reviewer, in order, unchanged: all **eight** reviewed forward migrations `20261016090000` … `20261017120000` (§3), then `supabase/staging/05_calendar_shell_fixture.sql` with its exact opt-in phrase. The "STATUS: NOT APPLIED" header comments inside those files are historical; the files were left byte-for-byte unchanged. |
+| Staging postflight (reviewer) | All switches **0**; bookings, payments, outbox and amendments **0**; creative bucket private; RLS enabled on every public table; anon dispatch and authenticated worker claim **denied**; clients cannot write the shell tables; auth users remain exactly **2 synthetic** users. |
 | Production Supabase | Nothing ads-related applied. |
-| Merge state | `eaafbab` merges cleanly with `main` `0bf53dc`, which carries the gig-submission ownership fix in `src/App.jsx`. This commit changes only the client set-up lines of `App.jsx`; the gig-submission code is untouched. Any merge must keep `main`'s change. |
+| Merge state | The branch (through `801b61d`) merges cleanly with `main` `0bf53dc`, which carries the gig-submission ownership fix in `src/App.jsx`. This branch changes only the client set-up lines of `App.jsx`; the gig-submission code is untouched. Any merge must keep `main`'s change. |
+| Reviewer test runs | `c4ed732`: 1,159 unit tests passed + 1 skipped (UK timezone), and **all** browser checks passed, including 0 px mobile overflow. The stalled-body reproduction now times out correctly. |
 
 ## 2. Verification: local-only vs hosted
 
 | Area | Local (this container) | Hosted |
 |---|---|---|
-| Database rules, triggers, RLS, races | `npm run test:ads-db` (disposable Postgres 16): suites 10–60, refund and amendment races, rollback | **Not verified** on staging (migrations not applied) |
-| Staging bootstrap path | `npm run test:ads-staging` (empty platform DB) | Bootstrap and `20261015120000` applied by MSM; later migrations not applied |
+| Database rules, triggers, RLS, races | `npm run test:ads-db` (disposable Postgres 16): suites 10–60, refund and amendment races, rollback | Migrations applied on staging; postflight and denial checks passed (§1, reviewer). Booking, refund, outbox and amendment **flows not exercised** on staging (all counts 0) |
+| Staging bootstrap path | `npm run test:ads-staging` (empty platform DB, incl. Calendar shell section 8) | Bootstrap, all nine ads migrations and the Calendar shell applied on staging (§1, reviewer) |
 | API handlers / Stripe / Resend | vitest with labelled mocks; signature checks with synthetic secrets | **Not verified**. No Stripe Checkout, webhook delivery, Resend send or Resend webhook was ever exercised |
-| Browser: project isolation | `npm run test:browser` A: real app built three ways; all traffic intercepted on loopback | **Not verified**: the preview must be redeployed and re-checked (§5 step 3) |
+| Browser: project isolation | `npm run test:browser` A: real app built three ways; all traffic intercepted on loopback | Preview loads against staging with 0 gigs / 0 venues, not production (§1, reviewer). A per-request network-tab audit of every screen while signed in is still to do (§5 step 3) |
 | Browser: advertiser/admin screens | `npm run test:browser` B: real components, synthetic fixtures, fake client emulating RLS/ownership; desktop and mobile screenshots in `docs/ads/verification/local-browser/` | **Not verified** with a real staging login |
 | WordPress adapter | `npm run test:wp` (stubbed WP) | Plugin not installed anywhere |
 
@@ -38,11 +40,15 @@
 - Elsewhere: run `npm ci`, then `npx playwright install chromium` once, then `npm run test:browser`.
 - The run builds locally, serves on 127.0.0.1 only, and **aborts every non-loopback request**. Supabase calls are answered locally and recorded.
 
-## 3. Staged migration sequence (STAGING ONLY, after review, in this order)
+## 3. Staging migration record (STAGING ONLY) and the sequence for any rebuild
 
-**Step 0, staging only, separately authorised:** `supabase/staging/05_calendar_shell_fixture.sql`. It adds an empty, read-only Calendar shell so the app can start against staging; it is guarded by the opt-in phrase, the staging marker, synthetic users only and no existing tables, and it is not a migration. See `supabase/staging/README.md` "Calendar shell fixture".
+**Applied on `oyakrgdmplmxmlhjfqcd` by the reviewer, 2026-10-17:**
+- earlier: bootstrap `01`, `20261015120000_ads_platform_phase1.sql` and the admin grant `04`;
+- now: the eight migrations below, in this order and unchanged;
+- then `supabase/staging/05_calendar_shell_fixture.sql` (empty read-only Calendar shell; guarded; not a migration);
+- then postflight (§1).
 
-Already applied on staging: `20261015120000_ads_platform_phase1.sql`. Apply the remaining eight **unchanged**, one file at a time, with `psql -v ON_ERROR_STOP=1 -1 -f <file>` or one SQL-editor run per file, then run `supabase/staging/03_postflight_readonly.sql`:
+**Nothing in this section remains to apply on staging.** For a rebuild of a fresh staging project, use the same order: `00` preflight → `01` → `20261015120000` → the eight below → `05` → `03` postflight → synthetic accounts via the dashboard → `04`. Apply one file at a time with `psql -v ON_ERROR_STOP=1 -1 -f <file>`, or one SQL-editor run per file.
 
 1. `20261016090000_ads_standard_earliest_start.sql`
 2. `20261016120000_ads_review_corrections_priority.sql`
@@ -53,9 +59,12 @@ Already applied on staging: `20261015120000_ads_platform_phase1.sql`. Apply the 
 7. `20261017090000_ads_outbox_dispatch_amendment_notices.sql`
 8. `20261017120000_ads_begin_dispatch_null_guard.sql`
 
-Every switch stays OFF after these: `ads_*_enabled`, `ads_email_enabled`, `ads_amendments_enabled`, `ads_hourly_packages_enabled`. `amendment_offer_minutes` stays unset. The rollback is `supabase/rollbacks/20261015120000_ads_platform_phase1_down.sql`: guarded, full, all ads objects. Production is a separate, later decision after staging passes §5.
+Every switch stayed OFF after these (postflight: switches = 0): `ads_*_enabled`, `ads_email_enabled`, `ads_amendments_enabled`, `ads_hourly_packages_enabled`. `amendment_offer_minutes` remains unset.
+- The ads rollback is `supabase/rollbacks/20261015120000_ads_platform_phase1_down.sql`: guarded, full, all ads objects.
+- The Calendar shell is removed with the staging teardown in `supabase/staging/README.md`.
+- **Production is untouched**; applying anything there is a separate, later decision after staging passes §5.
 
-## 4. Fixed in this commit (launch fixes)
+## 4. Launch fixes (`367d29a`, `c4ed732`, `801b61d`)
 
 - **Single Supabase project for the whole browser app.**
   - `src/supabaseConfig.js` resolves the project. `src/supabaseClient.js` is the only client, and `App.jsx` (Calendar, auth/session), admin and ads all import it.
@@ -80,8 +89,11 @@ Every switch stays OFF after these: `ads_*_enabled`, `ads_email_enabled`, `ads_a
 
 1. **Hosting plan.** Approve and upgrade the Vercel team to Pro or Enterprise before any commercial use (Bryan to decide; not done).
 2. **Review and merge readiness** of this draft PR (merge with `main` preserving its `App.jsx` gig-submission fix); keep the PR draft until steps 3–8 pass.
-3. **Apply the staging Calendar shell** (§3 step 0), then **redeploy the preview** from this branch and confirm in the browser network tab that the root and every screen call **only** the staging Supabase host. Gig counts must match staging, not production.
-4. **Apply §3 on staging**, then postflight.
+3. **Hosted login check on the preview** (staging migrations and shell are done, and the preview loads with 0 gigs / 0 venues):
+   - sign in with the two synthetic accounts;
+   - confirm in the network tab that the root, ADVERTISE, ADS and admin screens call **only** the staging Supabase host;
+   - confirm that the advertiser cannot reach admin data.
+4. **Ads API on the preview:** set `ADS_API_ENABLED=true` (Preview + branch only) when ready. Then check `/api/ads/delivery` returns JSON, and the Stripe webhook raw-body check from `docs/ads/README.md` deploy step 5.
 5. **Preview environment variables still missing** (Preview + this branch only, never Production):
    - `ADS_API_ENABLED=true` when ready to test;
    - `ADS_WORKER_SECRET` (≥32 chars);
@@ -93,7 +105,7 @@ Every switch stays OFF after these: `ads_*_enabled`, `ads_email_enabled`, `ads_a
 
    Already present per §1: the staging Supabase variables, a Stripe sandbox key, the webhook secret, the tracking secret and the base URL.
 6. **Scheduler (not configured):** the notify worker (`POST /api/ads/notify-worker` with the bearer secret, about every 5 minutes), `ad_expire_stale_holds()` and `ad_purge_tracking_state()` (about 15 minutes).
-7. **Synthetic hosted journey on staging:** follow the staging script in `agreed-terms-implementation.md` §3, plus:
+7. **Synthetic hosted journey on staging (none exercised yet; all flow counts are 0):** follow the staging script in `agreed-terms-implementation.md` §3. That covers hold → Stripe sandbox payment → review/correction → approval → delivery → refund assessment → removal. Add:
    - one email to a synthetic mailbox with a delivery event, and a correction window started by delivery;
    - an amendment propose and accept;
    - a forced lost acknowledgement checked in the admin reconciliation view.
@@ -108,4 +120,5 @@ Every switch stays OFF after these: `ads_*_enabled`, `ads_email_enabled`, `ads_a
    - cross-kind and MSM-initiated refund policy;
    - dual control for refund approval.
 9. **Commercial/legal:** final terms (currently `DRAFT-NOT-APPROVED-2026-10-16`), real prices, VAT and invoices, Stripe live mode (not built), bank holidays after 2028.
-10. **Production:** apply migrations, add Production-scoped variables, install the WordPress plugin, then switch on toggles. Each is a separate approved step.
+10. **WordPress:** the plugin is not installed anywhere. Install it on staging WordPress first (`wordpress/msm-ads/INSTALL.md`).
+11. **Production:** apply migrations, add Production-scoped variables, install the WordPress plugin, then switch on toggles. Each is a separate approved step. Production is untouched today.

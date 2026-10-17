@@ -1,13 +1,13 @@
 # MSM shared advertising platform — Phase 1
 
-**Status: built and tested locally. Applied ONLY to the staging Supabase project (see below). NOT applied to production, NOT deployed to production, NOT installed in WordPress, NOT connected to Stripe with any key.** Everything ships disabled by default.
+**Status: built and tested locally. All ads migrations through `20261017120000` and the Calendar shell fixture are applied ONLY to the staging Supabase project (reviewer, 2026-10-17; see `launch-checklist.md`). NOT applied to production, NOT deployed to production, NOT installed in WordPress, NOT connected to Stripe with any key.** Everything ships disabled by default.
 
 ## Current status (as REPORTED BY CODEX, 2026-10-16; not re-verified from this sandbox; no secret values recorded here)
 
 | Area | State |
 |---|---|
 | **Production** Supabase `fmlaaiolqwknowhtdeue` | **Nothing ads-related applied.** No ads migration, no bootstrap. A separate production **gig-submission fix** was merged and deployed by Bryan on 2026-10-16 ([#47](https://github.com/bryanstanislas-del/msm-gig-calendar/pull/47)); that is **not** an ads deployment. |
-| **Staging** Supabase msm-ads-staging `oyakrgdmplmxmlhjfqcd` | Staging bootstrap + `20261015120000_ads_platform_phase1.sql` applied, to this project only. **`20261016090000_ads_standard_earliest_start.sql`, `20261016120000_ads_review_corrections_priority.sql` and `20261016150000_ads_refund_cancellation_assessment.sql` are NOT applied yet.** Eight postflight checks (adjusted for the granted admin) pass. Switches OFF; TEST inventory/products inactive; storage private; no bookings or payments. |
+| **Staging** Supabase msm-ads-staging `oyakrgdmplmxmlhjfqcd` | Bootstrap, `20261015120000` and (reviewer, 2026-10-17) all eight later ads migrations through `20261017120000`, plus the Calendar shell fixture: this project only. Postflight: switches 0; bookings, payments, outbox and amendments 0; bucket private; RLS on every public table; 2 synthetic users. The branch preview loads against staging (0 gigs / 0 venues). Current details: `launch-checklist.md`. |
 | Staging users | Synthetic `admin+msm-staging@example.invalid` and `advertiser+msm-staging@example.invalid` created and confirmed. Admin grant separately authorised and both roles verified (`user_roles` + `profiles`). The advertiser has no privileged role. |
 | Vercel | Preview env, **this branch only**: staging Supabase vars, a restricted Stripe **sandbox** key, the webhook signing secret, the tracking secret and the public base URL are saved. Preview of `12feb50` redeployed **Ready**, ID `21gAEyrkfaBW4dbGMDJcFP4VaLPP` (2026-10-16 08:46 BST). Nothing in Production env; **ads not deployed to production**. |
 | `ADS_API_ENABLED` | **Unset / off.** The ads API reports disabled and delivery is empty. |
@@ -24,7 +24,7 @@
 | Area | Files |
 |---|---|
 | Additive migration (applied on staging only) | `supabase/migrations/20261015120000_ads_platform_phase1.sql` |
-| Forward migrations (not applied anywhere) | `20261016090000_ads_standard_earliest_start.sql`, `20261016120000_ads_review_corrections_priority.sql`, `20261016150000_ads_refund_cancellation_assessment.sql` |
+| Forward migrations (applied on staging only, reviewer 2026-10-17; not on production) | `20261016090000_ads_standard_earliest_start.sql`, `20261016120000_ads_review_corrections_priority.sql`, `20261016150000_ads_refund_cancellation_assessment.sql` |
 | Manual, guarded rollback | `supabase/rollbacks/20261015120000_ads_platform_phase1_down.sql` |
 | DB tests (local only) | `supabase/tests/ads/*.sql`, `scripts/ads-local-db-test.sh` |
 | Server API (one Vercel function) | `api/ads.js` (reached via the `/api/ads/:action` rewrite in `vercel.json`), `api/_ads/*.js` |
@@ -188,7 +188,7 @@ Hidden tabs do not poll. A CDN in front of WordPress must not cache `/wp-json/ms
        - concurrency tests (racing proposals and holds), tampering tests, DST/holiday tests, and accept/decline/expiry tests.
 
 - **Not verified against real services**: Stripe (only locally signed fixtures and mocks), Supabase hosted RLS/storage (local shim reproduces the relevant pieces), Vercel raw-body behaviour, WordPress (stubbed functions; the real theme was not available to inspect).
-- **Priority initial review**: now implemented in `20261016120000` (not applied anywhere): optional fee in the immutable snapshot, two Checkout line items, 12-elapsed-hour clock, missed-deadline detection feeding the refund assessment, admin toggle (default off). Not hosted-verified.
+- **Priority initial review**: now implemented in `20261016120000` (applied on staging only; not on production): optional fee in the immutable snapshot, two Checkout line items, 12-elapsed-hour clock, missed-deadline detection feeding the refund assessment, admin toggle (default off). Not hosted-verified.
 - Middle/bottom homepage positions are mapped in the adapter but not sold. Article positions keep the existing `msm_article_ad_delivery` contract untouched (the plugin does not hook it).
 - Series-level targeting, bundles and venue/gig advertising: design only (architecture doc).
 - No emails/notifications are sent to advertisers or MSM (review due, approval, rejection, correction requests, refund-required). A correction's response window only starts once a delivery is recorded (mailer hook `ad_record_correction_notice`, or the admin fallback). The admin queue shows due/overdue state.

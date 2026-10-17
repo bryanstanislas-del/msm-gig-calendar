@@ -4,7 +4,7 @@
 
 **Status.** This is a **staging build**, not authority to take paid bookings.
 
-- None of the migrations below has been applied to any hosted database. They have been applied only to disposable local Postgres 16.
+- All migrations below (through `20261017120000`) were applied to **staging only** (`oyakrgdmplmxmlhjfqcd`) by the reviewer on 2026-10-17, followed by the Calendar shell fixture; see `launch-checklist.md` §1 and §3. **Production is untouched.** No booking, payment, email or amendment flow has been exercised on staging yet.
 - No hosted API, Stripe, WordPress or email call was made, and none of those integrations is verified.
 - Every switch stays OFF.
 
