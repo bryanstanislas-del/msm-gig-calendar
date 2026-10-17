@@ -104,6 +104,8 @@ begin
   perform zz.ok(public.ad_notify_begin_dispatch(r1, 1, 'zz-lost-ack@example.invalid', H) = 'proceed', 'first dispatch recorded before the provider call');
   perform zz.ok(public.ad_notify_begin_dispatch(r1, 0, 'zz-lost-ack@example.invalid', H) = 'stale', 'wrong attempt is stale');
   perform zz.err(format($q$select public.ad_notify_begin_dispatch(%L, 1, 'zz-lost-ack@example.invalid', 'nothex')$q$, r1), '%ADS_BAD_REQUEST%', 'content hash validated');
+  perform zz.err(format($q$select public.ad_notify_begin_dispatch(%L, 1, 'zz-lost-ack@example.invalid', null)$q$, r1), '%ADS_BAD_REQUEST%', 'NULL content hash rejected (20261017120000)');
+  perform zz.err(format($q$select public.ad_notify_begin_dispatch(%L, null, 'zz-lost-ack@example.invalid', %L)$q$, r1, H), '%ADS_BAD_REQUEST%', 'NULL attempt rejected');
   perform zz.as_pg(); perform zz.at(T0 + interval '6 minutes');                -- lease (300 s) expired
   c := zz.claim_one(r1);
   perform zz.ok((c ->> 'attempt')::int = 2 and c ->> 'idempotency_key' = 'msm-ads-notify-' || r1 || '-g1'

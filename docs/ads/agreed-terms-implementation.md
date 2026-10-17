@@ -151,6 +151,7 @@ Apply **in filename order**, only after review, **on staging only**:
 5. `supabase/migrations/20261016210000_ads_notification_outbox.sql` (§1.8)
 6. `supabase/migrations/20261016230000_ads_booking_amendments.sql` (§1.9)
 7. `supabase/migrations/20261017090000_ads_outbox_dispatch_amendment_notices.sql` (§1.10)
+8. `supabase/migrations/20261017120000_ads_begin_dispatch_null_guard.sql` (NULL hash/attempt rejected in `ad_notify_begin_dispatch`)
 
 Each file is a plain forward migration on top of the previous one. They are not wrapped in a transaction, so run each with `psql -v ON_ERROR_STOP=1 -1 -f <file>`, or through the Supabase SQL editor in one run. Then run `supabase/staging/03_postflight_readonly.sql`. The local proof is `npm run test:ads-staging`, which applies all four ads migrations on a bootstrapped empty platform DB and runs every suite there.
 

@@ -21,7 +21,8 @@ import { destinationUrlProblem, altTextProblem, creativeFileProblem } from "../.
 import { addDays, formatDeadline, londonDayStart } from "../../ads/londonTime.js";
 import { REPORT_LIMITATIONS } from "../../ads/reportLimitations.js";
 
-const K = { bg: "#0d0d0d", panel: "#151515", field: "#0a0a0a", text: "#ffffff", muted: "#a6a6a6", line: "rgba(255,255,255,0.14)", red: "#e8203a" };
+// alert: lighter MSM red for TEXT on the dark panels (brand #e8203a text is 4.1:1, under WCAG AA 4.5:1).
+const K = { bg: "#0d0d0d", panel: "#151515", field: "#0a0a0a", text: "#ffffff", muted: "#a6a6a6", line: "rgba(255,255,255,0.14)", red: "#e8203a", alert: "#ff6b7d" };
 const TONE = { good: K.text, warn: K.text, bad: K.red, neutral: K.muted };
 
 const css = `
@@ -39,7 +40,7 @@ const css = `
 .msm-adp :focus-visible { outline:3px solid ${K.red}; outline-offset:2px; }
 .msm-adp__help { color:${K.muted}; font-size:13px; line-height:1.5; margin:6px 0 0; }
 .msm-adp__test { border:2px solid ${K.red}; color:${K.text}; padding:10px 14px; border-radius:8px; font-weight:700; margin:12px 0; }
-.msm-adp__err { color:${K.red}; font-weight:700; margin-top:10px; }
+.msm-adp__err { color:${K.alert}; font-weight:700; margin-top:10px; }
 .msm-adp__row { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
 .msm-adp dl { display:grid; grid-template-columns:auto 1fr; gap:4px 14px; margin:8px 0; font-size:14px; }
 .msm-adp dt { color:${K.muted}; }

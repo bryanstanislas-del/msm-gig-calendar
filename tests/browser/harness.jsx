@@ -6,8 +6,17 @@ import AdvertiserPortal from "../../src/components/ads/AdvertiserPortal.jsx";
 import AdminAds from "../../src/components/admin/AdminAds.jsx";
 import { USERS } from "./fixtures.js";
 
+// Same text/colour/font baseline the real app wraps every tab in
+// (App.jsx: background C.bg, color C.white, fontFamily F.body). Values are
+// duplicated -- importing App.jsx would pull the live app -- and kept equal
+// to App.jsx by tests/browserHarnessTheme.test.js. Web fonts are blocked in the
+// local run (no network), so the stack falls back to the system sans-serif.
+export const APP_BASELINE = { background: "#0d0d0d", color: "#fff", fontFamily: "'Barlow',sans-serif" };
+
 const q = new URLSearchParams(location.search);
 const user = USERS[q.get("user") || "owner"];
 ReactDOM.createRoot(document.getElementById("root")).render(
-  q.get("screen") === "admin" ? <AdminAds /> : <AdvertiserPortal user={{ id: user.id }} logo={null} />,
+  <div style={{ minHeight: "100vh", ...APP_BASELINE }}>
+    {q.get("screen") === "admin" ? <AdminAds /> : <AdvertiserPortal user={{ id: user.id }} logo={null} />}
+  </div>,
 );

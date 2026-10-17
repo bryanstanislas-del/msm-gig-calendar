@@ -161,7 +161,8 @@ function RefundRow({ a, onDone, setToast }) {
     <AdminCard accent={ACCENT}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
         <strong>{a.kind} - {formatPence(a.total_pence)}</strong>
-        <Pill color={a.status === "manual_gate" ? ACCENT : undefined}>{a.status}{a.gates?.length ? `: ${a.gates.join(", ")}` : ""}</Pill>
+        <Pill color={a.status === "manual_gate" ? ACCENT : undefined}>{a.status}</Pill>
+        {a.gates?.length > 0 && <span style={{ fontSize: 12, overflowWrap: "anywhere" }}>gates: {a.gates.join(", ")}</span>}
         <span style={{ color: TEXT_MUTED, fontSize: 12 }}>booking {a.booking_id} - proposed {at(a.proposed_at)}{a.target_pay_by ? ` - pay by ${at(a.target_pay_by)}` : ""}</span>
       </div>
       <ul style={{ fontSize: 12 }}>{(a.ad_refund_lines || []).map((l, i) => (

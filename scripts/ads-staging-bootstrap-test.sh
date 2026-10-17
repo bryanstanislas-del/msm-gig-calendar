@@ -45,6 +45,7 @@ $PSQL -d stg_a -f supabase/migrations/20261016180000_ads_refund_invariants_initi
 $PSQL -d stg_a -f supabase/migrations/20261016210000_ads_notification_outbox.sql >/dev/null && pass "forward migration (notification outbox) applied" || bad "outbox migration failed"
 $PSQL -d stg_a -f supabase/migrations/20261016230000_ads_booking_amendments.sql >/dev/null && pass "forward migration (booking amendments/intervals) applied" || bad "amendments migration failed"
 $PSQL -d stg_a -f supabase/migrations/20261017090000_ads_outbox_dispatch_amendment_notices.sql >/dev/null && pass "forward migration (dispatch safety/amendment notices) applied" || bad "dispatch migration failed"
+$PSQL -d stg_a -f supabase/migrations/20261017120000_ads_begin_dispatch_null_guard.sql >/dev/null && pass "forward migration (begin_dispatch NULL guard) applied" || bad "null-guard migration failed"
 post=$($PSQL -d stg_a -tA -F'|' -f supabase/staging/03_postflight_readonly.sql)
 echo "$post" | sed 's/^/     /'
 [[ "$(echo "$post" | awk -F'|' '$2!="t"' | wc -l)" == "0" ]] && pass "postflight all ok" || bad "postflight"

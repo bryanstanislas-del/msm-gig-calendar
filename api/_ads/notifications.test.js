@@ -305,3 +305,25 @@ describe("amendment emails", () => {
     expect([...kinds].sort()).toEqual([...NOTIFICATION_KINDS].sort());
   });
 });
+
+describe("Resend adapter: one deadline covers headers AND body (MOCK_fetch)", () => {
+  const args = { apiKey: "re_MOCK", from: "f@example.test", to: "t@example.test", subject: "s", html: "h", text: "h", idempotencyKey: "k-12345678" };
+  const within = (p, ms) => Promise.race([p, new Promise((r) => setTimeout(() => r("BODY_TIMEOUT_NOT_ENFORCED"), ms))]);
+  it("headers arrive, body stalls -> times out (retryable, unknown outcome) and aborts the request", async () => {
+    let signal;
+    const stalled = vi.fn(async (_u, init) => { signal = init.signal; return { ok: true, status: 200, json: () => new Promise(() => {}) }; });
+    const r = await within(sendViaResend(args, stalled, { timeoutMs: 10 }), 100);
+    expect(r).toEqual({ outcome: "retryable_error", error: "network: timeout after 10 ms" });
+    expect(signal.aborted).toBe(true);
+  });
+  it("error status with a stalled body also times out", async () => {
+    const r = await within(sendViaResend(args, async () => ({ ok: false, status: 500, json: () => new Promise(() => {}) }), { timeoutMs: 10 }), 100);
+    expect(r).toEqual({ outcome: "retryable_error", error: "network: timeout after 10 ms" });
+  });
+  it("malformed or rejected body is handled without hanging", async () => {
+    const bad = await within(sendViaResend(args, async () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError("Unexpected token <"); } }), { timeoutMs: 50 }), 200);
+    expect(bad).toEqual({ outcome: "retryable_error", error: "provider accepted without an id" });   // accepted? unknown -> never treated as sent
+    const rejected = await within(sendViaResend(args, async () => ({ ok: false, status: 422, json: () => Promise.reject(new Error("stream error")) }), { timeoutMs: 50 }), 200);
+    expect(rejected).toEqual({ outcome: "permanent_error", error: "HTTP 422" });
+  });
+});

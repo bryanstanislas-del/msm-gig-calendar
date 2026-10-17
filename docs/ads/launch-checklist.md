@@ -28,13 +28,18 @@
 | Browser: advertiser/admin screens | `npm run test:browser` B: real components, synthetic fixtures, fake client emulating RLS/ownership; desktop and mobile screenshots in `docs/ads/verification/local-browser/` | **Not verified** with a real staging login |
 | WordPress adapter | `npm run test:wp` (stubbed WP) | Plugin not installed anywhere |
 
+**Harness fidelity and legibility.**
+- The harness wraps the screens in the app's own tab baseline (`#0d0d0d` background, `#fff` text, `'Barlow',sans-serif`). `tests/browserHarnessTheme.test.js` keeps these values equal to `App.jsx`.
+- Web fonts are blocked in the local run, so the system sans-serif is used.
+- A computed-contrast sentinel fails any visible text under 3:1 or in a serif font. It lists, rather than fails, elements between 3:1 and WCAG AA 4.5:1. Current list, an **accessibility follow-up**: brand-red primary buttons (white on `#e8203a`, 4.47:1) and existing shared admin components (4.12–4.35:1).
+
 **Browser tooling.** `playwright` is pinned as a devDependency at 1.56.1 in `package.json` and the lockfile.
 - Elsewhere: run `npm ci`, then `npx playwright install chromium` once, then `npm run test:browser`.
 - The run builds locally, serves on 127.0.0.1 only, and **aborts every non-loopback request**. Supabase calls are answered locally and recorded.
 
 ## 3. Staged migration sequence (STAGING ONLY, after review, in this order)
 
-Already applied on staging: `20261015120000_ads_platform_phase1.sql`. Apply the rest **unchanged**, one file at a time, with `psql -v ON_ERROR_STOP=1 -1 -f <file>` or one SQL-editor run per file, then run `supabase/staging/03_postflight_readonly.sql`:
+Already applied on staging: `20261015120000_ads_platform_phase1.sql`. Apply the remaining eight **unchanged**, one file at a time, with `psql -v ON_ERROR_STOP=1 -1 -f <file>` or one SQL-editor run per file, then run `supabase/staging/03_postflight_readonly.sql`:
 
 1. `20261016090000_ads_standard_earliest_start.sql`
 2. `20261016120000_ads_review_corrections_priority.sql`
@@ -43,6 +48,7 @@ Already applied on staging: `20261015120000_ads_platform_phase1.sql`. Apply the 
 5. `20261016210000_ads_notification_outbox.sql`
 6. `20261016230000_ads_booking_amendments.sql`
 7. `20261017090000_ads_outbox_dispatch_amendment_notices.sql`
+8. `20261017120000_ads_begin_dispatch_null_guard.sql`
 
 Every switch stays OFF after these: `ads_*_enabled`, `ads_email_enabled`, `ads_amendments_enabled`, `ads_hourly_packages_enabled`. `amendment_offer_minutes` stays unset. The rollback is `supabase/rollbacks/20261015120000_ads_platform_phase1_down.sql`: guarded, full, all ads objects. Production is a separate, later decision after staging passes §5.
 
@@ -59,7 +65,7 @@ Every switch stays OFF after these: `ads_*_enabled`, `ads_email_enabled`, `ads_a
   - First-dispatch identity (recipient plus content SHA-256) is stored before any provider call. Payload and recipient are frozen.
   - At most 6 attempts, including expired leases. No provider call later than 23 hours after the first dispatch.
   - Anything that may have been sent and can no longer be retried safely goes to `needs_reconciliation`. It is never re-sent blindly; MSM confirms sent or not sent, and only "not sent" re-queues it under a new key generation.
-  - Provider calls have a 10-second timeout.
+  - Provider calls have a 10-second timeout covering the request and reading the response body (a provider that sends headers then stalls the body is cut off and treated as an unknown outcome).
 - **Amendment notifications** to the booking owner: proposed, accepted, rejected, withdrawn, expired. They carry exact persisted intervals and are deduplicated durably. Email delivery never changes the offer or its configured expiry. `ad_expire_amendments()` is called by the worker and by an admin button.
 - **Review fixes:**
   - The outcome email now shows the amended run.

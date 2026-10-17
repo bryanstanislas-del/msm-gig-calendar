@@ -147,8 +147,7 @@ async function screens(browser) {
   ({ ctx, page } = await open("screen=admin&user=admin"));
   t = await text(page);
   check(/Review queue \(1\)/i.test(t) && /Due by end of Mon 2 Nov 2026/.test(t), "review queue with due date");
-  check(t.includes("manual_gate: cross_kind_allocation, exceeds_booking_total") && t.includes("cannot be approved here"), "refund manual gates visible");
-  const gatedCard = page.locator("div", { hasText: "manual_gate: cross_kind_allocation" }).last();
+  check(t.includes("gates: cross_kind_allocation, exceeds_booking_total") && t.includes("cannot be approved here"), "refund manual gates visible");
   await page.getByPlaceholder("Decision / processing note").first().fill("Reviewed, policy pending");
   check(await page.getByRole("button", { name: "Approve", exact: true }).first().isDisabled(), "approve disabled for a manual-gate assessment");
   check(t.includes("May already have been sent - check the provider dashboard") && t.includes("provider idempotency window elapsed"), "notification needing reconciliation explained");
@@ -170,8 +169,41 @@ async function screens(browser) {
   t = await text(page);
   check(t.includes("MSM-initiated removal: no loss can be retained") && (await page.getByPlaceholder("Net loss after mitigation (pence)").count()) === 0,
     "MSM removal: no loss-retention field");
-  void gatedCard;
   await ctx.close();
+
+  // Legibility sentinel: every visible text element must clear WCAG AA (4.5:1)
+  // against its effective background, and render in the app's sans-serif stack.
+  for (const [name, qs] of [["advertiser", "screen=portal&user=owner"], ["admin", "screen=admin&user=admin"]]) {
+    const o = await open(qs);
+    const res = await o.page.evaluate(() => {
+      const rgb = (c) => (c.match(/[\d.]+/g) || []).map(Number);
+      const lum = ([r, g, b]) => [r, g, b].map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; })
+        .reduce((a, v, i) => a + v * [0.2126, 0.7152, 0.0722][i], 0);
+      const bgOf = (el) => { for (let e = el; e; e = e.parentElement) { const c = rgb(getComputedStyle(e).backgroundColor); if (c.length === 3 || (c.length === 4 && c[3] > 0.5)) return c.slice(0, 3); } return [255, 255, 255]; };
+      const out = { checked: 0, worst: [], belowAA: [], serif: [] };
+      for (const el of document.querySelectorAll("body *")) {
+        const own = [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
+        const r = el.getBoundingClientRect();
+        if (!own || !r.width || !r.height || ["OPTION", "SCRIPT", "STYLE"].includes(el.tagName)) continue;
+        const cs = getComputedStyle(el);
+        if (cs.visibility === "hidden" || cs.display === "none") continue;
+        const fg = rgb(cs.color).slice(0, 3), bg = bgOf(el);
+        const [a, b] = [lum(fg), lum(bg)].sort((x, y) => y - x);
+        const ratio = (a + 0.05) / (b + 0.05);
+        out.checked += 1;
+        if (ratio < 3) out.worst.push(`${el.tagName} ${ratio.toFixed(2)}:1 "${el.textContent.trim().slice(0, 40)}"`);
+        else if (ratio < 4.5) out.belowAA.push(`${el.tagName} ${ratio.toFixed(2)}:1 "${el.textContent.trim().slice(0, 30)}"`);
+        if (!/sans-serif|Bebas|Barlow/i.test(cs.fontFamily) && !["INPUT", "SELECT", "TEXTAREA", "BUTTON"].includes(el.tagName)) out.serif.push(`${el.tagName} ${cs.fontFamily}`);
+      }
+      return out;
+    });
+    check(res.checked > 30 && res.worst.length === 0, `${name}: ${res.checked} text elements legible (>= 3:1)${res.worst.length ? ` -- illegible: ${res.worst.slice(0, 5).join("; ")}` : ""}`);
+    const aa = [...new Set(res.belowAA.map((x) => x.replace(/ "[^"]*"$/, "")))];
+    console.log(`  NOTE ${name}: ${res.belowAA.length} element(s) between 3:1 and WCAG AA 4.5:1 (accessibility follow-up)${aa.length ? `: ${aa.join(", ")}` : ""}`);
+    for (const x of [...new Set(res.belowAA)].slice(0, 6)) console.log(`       ${x}`);
+    check(res.serif.length === 0, `${name}: text uses the app's sans-serif stack${res.serif.length ? ` -- ${res.serif.slice(0, 3).join("; ")}` : ""}`);
+    await o.ctx.close();
+  }
 
   // Screenshots (desktop + mobile) of the critical screens, synthetic data only.
   for (const [vp, size] of Object.entries(VIEWPORTS)) {

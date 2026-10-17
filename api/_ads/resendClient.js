@@ -17,17 +17,26 @@ export function classifyResendFailure(status, body) {
 export const RESEND_TIMEOUT_MS = 10000;
 
 export async function sendViaResend({ apiKey, from, to, subject, html, text, idempotencyKey }, fetchImpl = globalThis.fetch, { timeoutMs = RESEND_TIMEOUT_MS } = {}) {
-  let r;
+  // ONE deadline and ONE AbortController cover the request AND reading/parsing
+  // the response body: a provider that sends headers and then stalls the body
+  // cannot hold the worker either.
   const ctl = new AbortController();
   let timer;
   const timeout = new Promise((_, reject) => { timer = setTimeout(() => { ctl.abort(); reject(new Error(`timeout after ${timeoutMs} ms`)); }, timeoutMs); });
-  try {
-    r = await Promise.race([fetchImpl(RESEND_ENDPOINT, {
+  const exchange = async () => {
+    const res = await fetchImpl(RESEND_ENDPOINT, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
       body: JSON.stringify({ from, to: [to], subject, html, text }),
       signal: ctl.signal,
-    }), timeout]);
+    });
+    let parsed = null;
+    try { parsed = await res.json(); } catch { parsed = null; }        // malformed / rejected body
+    return { res, parsed };
+  };
+  let r, body;
+  try {
+    ({ res: r, parsed: body } = await Promise.race([exchange(), timeout]));
   } catch (err) {
     // Outcome unknown (the provider may have accepted it): retried under the SAME
     // idempotency key only inside the dispatch window, else reconciliation.
@@ -35,8 +44,6 @@ export async function sendViaResend({ apiKey, from, to, subject, html, text, ide
   } finally {
     clearTimeout(timer);
   }
-  let body = null;
-  try { body = await r.json(); } catch { body = null; }
   if (r.ok && typeof body?.id === "string" && body.id.length >= 6) return { outcome: "accepted", id: body.id };
   if (r.ok) return { outcome: "retryable_error", error: "provider accepted without an id" };
   // Error text from the provider only (name/message) -- never request headers or the key.
