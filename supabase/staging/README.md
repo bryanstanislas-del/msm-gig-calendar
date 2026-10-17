@@ -67,7 +67,39 @@ Point an isolated preview at staging as described in `docs/ads/README.md` ("Veri
 
 - Sign in as the staging admin → **ADS** tab → enable TEST inventory and toggles deliberately. Nothing is enabled by these scripts.
 - `/?view=advertise` shows the ADVERTISE tab once `ads_portal_enabled` is on.
-- The Calendar views stay empty or on "loading", with console errors for `gigs`, `venues`, `claim_requests` and similar. Those Calendar tables are intentionally absent; the App's startup queries tolerate their absence and the ads tabs don't depend on them.
+- **Without the Calendar shell (below), the app does not start.** It stays on "Loading gigs", and the console reports `public.gigs` / `public.venues` missing from the schema cache. This was observed on the shared-client preview on 2026-10-17. The startup queries do **not** tolerate the missing tables, and that is deliberately not hidden in code.
+
+## Calendar shell fixture (staging only; separately authorised)
+
+`05_calendar_shell_fixture.sql` creates **empty, read-only** `gigs`, `venues`, `claim_requests` and `notification_deliveries`. They carry only the columns the app's startup and synthetic admin/advertiser login paths filter and order on.
+
+**Safeguards.**
+- RLS is on, with SELECT-only policies (approved gigs public; claim requests admin-only; notifications own-only).
+- There are **no client INSERT/UPDATE/DELETE grants**, and no production rows are copied.
+- It is **not** a migration and must never run on production.
+
+**Guards.**
+1. An opt-in phrase.
+2. The `msm_staging.bootstrap` marker for `oyakrgdmplmxmlhjfqcd` must exist.
+3. Every auth user must be `@example.invalid`.
+4. None of the four tables may exist already; an existing schema is never altered.
+
+Everything runs in one transaction. Other Calendar screens (follows, notifications page, claims workflow, import, festivals data) still need their real tables and will show errors on staging.
+
+**Manual staging apply order** (after `01` and `20261015120000`, already applied):
+1. Run `00_preflight_readonly.sql` for reference.
+2. Open `05_calendar_shell_fixture.sql` and replace `NOT-CONFIRMED` with `I AM APPLYING THE CALENDAR SHELL TO msm-ads-staging oyakrgdmplmxmlhjfqcd ONLY`. Run it once.
+3. Apply the ads migrations in the order listed in `docs/ads/launch-checklist.md` §3.
+4. Run `03_postflight_readonly.sql`. Row 5 "no admin accounts yet" is expected to be false once the synthetic admin exists; every other row should be true.
+
+The shell does not depend on the ads migrations, and they do not depend on it.
+
+**Local proof.** Section 8 of `npm run test:ads-staging` covers:
+- refusal without the opt-in, on a production-like database, with a non-synthetic user, and with an existing `gigs` table (left untouched, nothing partially created);
+- a clean apply;
+- the app's startup and admin-login queries run as anon, user and admin;
+- visibility rules and SELECT-only grants (`supabase/tests/staging/20_calendar_shell.sql`);
+- a second run refused, and the ads regression suite still passing.
 
 ## Local validation (no hosted access)
 

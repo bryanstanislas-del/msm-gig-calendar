@@ -13,6 +13,7 @@ BOOT=supabase/staging/01_ads_staging_bootstrap.sql
 MIG=supabase/migrations/20261015120000_ads_platform_phase1.sql
 MIG2=supabase/migrations/20261016090000_ads_standard_earliest_start.sql
 GRANT=supabase/staging/04_grant_synthetic_admin.sql
+SHELL_FIX=supabase/staging/05_calendar_shell_fixture.sql
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 PHRASE='I AM APPLYING THIS TO msm-ads-staging oyakrgdmplmxmlhjfqcd ONLY'
@@ -112,5 +113,31 @@ uid=$(q stg_a "select id from auth.users where email='tester+msm-staging-admin@e
 expect_reject stg_a "$TMP/grant.sql" "an admin already exists" "second admin grant -> rejected"
 [[ "$(q stg_a "select count(*) from public.ad_settings where bool_value")" == "0" ]] && pass "no ads toggle was enabled by any step" || bad "toggles enabled"
 
-for d in stg_a stg_prod stg_u stg_b stg_f stg_plain stg_rb; do $PSQL -d postgres -c "drop database if exists $d" >/dev/null; done
+echo "== 8. Calendar shell fixture (staging only; empty, read-only)"
+SPHRASE='I AM APPLYING THE CALENDAR SHELL TO msm-ads-staging oyakrgdmplmxmlhjfqcd ONLY'
+sed "s/v_confirm constant text := 'NOT-CONFIRMED';/v_confirm constant text := '$SPHRASE';/" "$SHELL_FIX" > "$TMP/shell_confirmed.sql"
+grep -q "$SPHRASE';" "$TMP/shell_confirmed.sql"
+before=$(fingerprint stg_a)
+expect_reject stg_a "$SHELL_FIX" "opt-in phrase not set" "shell: no opt-in -> rejected"
+[[ "$(fingerprint stg_a)" == "$before" ]] && pass "shell: nothing created without opt-in" || bad "shell: state changed"
+expect_reject stg_prod "$TMP/shell_confirmed.sql" "msm_staging marker" "shell: production-like DB (no staging marker) -> rejected"
+[[ "$(q stg_prod "select count(*) from public.gigs")" == "1" && "$(q stg_prod "select count(*) from information_schema.columns where table_schema='public' and table_name='gigs'")" == "3" ]] && pass "shell: production-like gigs table untouched" || bad "shell: prod-like changed"
+fresh stg_ns "$PLATFORM"; $PSQL -d stg_ns -f "$TMP/boot_confirmed.sql" >/dev/null
+q stg_ns "insert into auth.users (email) values ('someone@realmail.test')" >/dev/null
+expect_reject stg_ns "$TMP/shell_confirmed.sql" "non-synthetic auth user" "shell: non-synthetic user present -> rejected"
+fresh stg_x "$PLATFORM"; $PSQL -d stg_x -f "$TMP/boot_confirmed.sql" >/dev/null
+q stg_x "create table public.gigs (id int primary key); insert into public.gigs values (1)" >/dev/null
+expect_reject stg_x "$TMP/shell_confirmed.sql" "already exist; existing schema is never altered" "shell: existing gigs table -> rejected"
+[[ "$(q stg_x "select count(*) from public.gigs")" == "1" && -z "$(q stg_x "select to_regclass('public.venues')")" ]] && pass "shell: existing schema untouched, nothing partially created" || bad "shell: partial apply"
+$PSQL -d stg_a -f "$TMP/shell_confirmed.sql" >/dev/null && pass "shell applied on the bootstrapped staging stand-in" || bad "shell apply failed"
+[[ "$(q stg_a "select count(*) from public.gigs") $(q stg_a "select count(*) from public.venues") $(q stg_a "select name from msm_staging.fixtures")" == "0 0 calendar_shell_v1" ]] && pass "shell: empty tables + fixture recorded in msm_staging" || bad "shell: contents"
+out=$($PSQL -d stg_a -f supabase/tests/staging/20_calendar_shell.sql 2>&1) && grep -q "ALL CHECKS PASSED" <<<"$out" && pass "shell: app startup/admin-login queries, RLS visibility, SELECT-only grants" || { bad "shell privileges"; echo "$out" | grep -E "ERROR|FAIL"; }
+expect_reject stg_a "$TMP/shell_confirmed.sql" "already exist" "shell: second run -> rejected"
+post=$($PSQL -d stg_a -tA -F'|' -f supabase/staging/03_postflight_readonly.sql)
+# Check 5 ("no admin accounts yet") is expected to fail after the step-7 synthetic admin grant.
+[[ "$(echo "$post" | awk -F'|' '$2!="t" && $1 !~ /^no admin accounts yet/' | wc -l)" == "0" ]] && grep -q "^RLS enabled on every public table|t" <<<"$post" \
+  && pass "shell: postflight still ok (RLS on every public table; admin check expected after the grant)" || { bad "postflight after shell"; echo "$post" | awk -F'|' '$2!="t"'; }
+out=$($PSQL -d stg_a -f supabase/tests/ads/10_ads_phase1_regression.sql 2>&1) && grep -q "ALL CHECKS PASSED" <<<"$out" && pass "shell: ads regression still passes with the shell present" || { bad "ads regression with shell"; echo "$out" | grep -E "ERROR|FAIL"; }
+
+for d in stg_a stg_prod stg_u stg_b stg_f stg_plain stg_rb stg_ns stg_x; do $PSQL -d postgres -c "drop database if exists $d" >/dev/null; done
 [[ $fail == 0 ]] && echo "ALL STAGING BOOTSTRAP TESTS PASSED" || { echo "STAGING BOOTSTRAP TESTS FAILED"; exit 1; }

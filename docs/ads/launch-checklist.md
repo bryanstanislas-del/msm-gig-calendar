@@ -13,6 +13,7 @@
 | Vercel plan | Team is on **Hobby**. Vercel's fair-use guidelines (updated 14 Sep 2026, https://vercel.com/docs/limits/fair-use-guidelines) require **Pro or Enterprise for commercial usage**, including paid advertising and payment processing. **Not upgraded; nothing purchased.** |
 | Preview environment variables | Visually confirmed scoped to **Preview + this branch**. `ADS_API_ENABLED` and all email variables are **absent**. |
 | Preview deployment of `eaafbab` | Ready, ID `LCcY5MHDqxjuTv2aC7VXEuGyvye5`. Its root displayed **1,615 live gigs (production catalogue)** despite the staging overrides. Root cause: `src/App.jsx` built its own hard-coded production client. **Fixed in code by this commit (§4), but not redeployed or re-verified on the preview.** |
+| Preview after the shared-client fix (`367d29a`, branch alias) | No longer shows the production catalogue, but stays on **"Loading gigs"**. The console reports `public.gigs` / `public.venues` missing from the schema cache, because staging has no Calendar shell tables. Fix prepared: `supabase/staging/05_calendar_shell_fixture.sql` (§3, step 0). **Not applied.** |
 | Staging Supabase (`msm-ads-staging`) | Zero bookings and payments; no active or non-test inventory/products; private creative bucket. Only `20261015120000` is applied; all later ads migrations, including outbox and amendments, are **not applied**. |
 | Production Supabase | Nothing ads-related applied. |
 | Merge state | `eaafbab` merges cleanly with `main` `0bf53dc`, which carries the gig-submission ownership fix in `src/App.jsx`. This commit changes only the client set-up lines of `App.jsx`; the gig-submission code is untouched. Any merge must keep `main`'s change. |
@@ -38,6 +39,8 @@
 - The run builds locally, serves on 127.0.0.1 only, and **aborts every non-loopback request**. Supabase calls are answered locally and recorded.
 
 ## 3. Staged migration sequence (STAGING ONLY, after review, in this order)
+
+**Step 0, staging only, separately authorised:** `supabase/staging/05_calendar_shell_fixture.sql`. It adds an empty, read-only Calendar shell so the app can start against staging; it is guarded by the opt-in phrase, the staging marker, synthetic users only and no existing tables, and it is not a migration. See `supabase/staging/README.md` "Calendar shell fixture".
 
 Already applied on staging: `20261015120000_ads_platform_phase1.sql`. Apply the remaining eight **unchanged**, one file at a time, with `psql -v ON_ERROR_STOP=1 -1 -f <file>` or one SQL-editor run per file, then run `supabase/staging/03_postflight_readonly.sql`:
 
@@ -77,7 +80,7 @@ Every switch stays OFF after these: `ads_*_enabled`, `ads_email_enabled`, `ads_a
 
 1. **Hosting plan.** Approve and upgrade the Vercel team to Pro or Enterprise before any commercial use (Bryan to decide; not done).
 2. **Review and merge readiness** of this draft PR (merge with `main` preserving its `App.jsx` gig-submission fix); keep the PR draft until steps 3–8 pass.
-3. **Redeploy the preview** from this branch and confirm in the browser network tab that the root and every screen call **only** the staging Supabase host. Gig counts must match staging, not production.
+3. **Apply the staging Calendar shell** (§3 step 0), then **redeploy the preview** from this branch and confirm in the browser network tab that the root and every screen call **only** the staging Supabase host. Gig counts must match staging, not production.
 4. **Apply §3 on staging**, then postflight.
 5. **Preview environment variables still missing** (Preview + this branch only, never Production):
    - `ADS_API_ENABLED=true` when ready to test;
