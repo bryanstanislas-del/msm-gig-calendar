@@ -10,11 +10,18 @@
 //   the component is still mounted. A slow load for the previous user can
 //   therefore never resurrect them after SIGNED_OUT or a switch.
 // * TOKEN_REFRESHED / USER_UPDATED for the same user keep the loaded profile
-//   (no refetch); a different user is loaded fresh.
+//   (no refetch); a different user is loaded fresh, and the previous user's
+//   auth is cleared IMMEDIATELY so their (e.g. admin) UI is never shown to
+//   the new account while its profile loads.
+// * The startup getSession() result is only used if no auth event has arrived
+//   since it was requested (event revision, separate from the profile
+//   generation): a slow startup can never resurrect a signed-out user or
+//   replace a newer account. A startup failure is reported, never unhandled.
 // No tokens or session contents are ever logged.
 export function startAuthSync({ supabase, buildAuth, setAuth, defer = (fn) => setTimeout(fn, 0), onError = () => {} }) {
   let stopped = false;
-  let generation = 0;
+  let generation = 0;          // profile loads
+  let eventRevision = 0;       // authoritative auth events from the listener
   let currentUserId = null;
 
   const signedOut = () => {
@@ -43,15 +50,24 @@ export function startAuthSync({ supabase, buildAuth, setAuth, defer = (fn) => se
       if (event === "SIGNED_OUT" || currentUserId !== null) signedOut();
       return;
     }
-    if (session.user.id !== currentUserId) load(session);   // first session, sign-in, or account switch
+    if (session.user.id === currentUserId) return;            // same user: keep the loaded profile
+    if (currentUserId !== null) setAuth(null);               // account switch: drop the previous user's UI now
+    load(session);                                           // first session, sign-in, or account switch
   };
 
-  // 1) Explicit startup check (Supabase's recommended pattern).
-  supabase.auth.getSession().then(({ data, error }) => {
-    if (!stopped && !error && data?.session) handle("STARTUP", data.session);
-  });
+  // 1) Explicit startup check (Supabase's recommended pattern), guarded
+  //    against any auth event that arrives while it is pending.
+  const startupRevision = eventRevision;
+  Promise.resolve()
+    .then(() => supabase.auth.getSession())
+    .then(({ data, error } = {}) => {
+      if (stopped || eventRevision !== startupRevision) return;   // a newer event is authoritative
+      if (error) { onError(error); return; }
+      if (data?.session) handle("STARTUP", data.session);
+    })
+    .catch((e) => { if (!stopped) onError(e); });
   // 2) Synchronous listener -- returns nothing, awaits nothing.
-  const { data: listener } = supabase.auth.onAuthStateChange((event, session) => { handle(event, session); });
+  const { data: listener } = supabase.auth.onAuthStateChange((event, session) => { eventRevision += 1; handle(event, session); });
 
   return () => { stopped = true; listener?.subscription?.unsubscribe(); };
 }

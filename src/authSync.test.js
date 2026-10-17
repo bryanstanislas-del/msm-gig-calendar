@@ -104,6 +104,90 @@ describe("auth sync (deterministic fake client)", () => {
   });
 });
 
+describe("auth sync: delayed startup getSession vs newer events (review repro)", () => {
+  function delayed() {
+    let resolveStartup, rejectStartup;
+    const sb = fakeSupabase(null);
+    sb.auth.getSession = () => new Promise((res, rej) => { resolveStartup = res; rejectStartup = rej; });
+    const pending = [];
+    const buildAuth = vi.fn((s) => new Promise((res) => pending.push({ id: s.user.id, res })));
+    const setAuth = vi.fn();
+    const onError = vi.fn();
+    const queue = [];
+    const stop = startAuthSync({ supabase: sb, buildAuth, setAuth, onError, defer: (fn) => queue.push(fn) });
+    const flush = async () => { await tick(); while (queue.length) queue.shift()(); await tick(); };
+    return { sb, buildAuth, setAuth, onError, stop, flush, pending,
+      // getSession is requested one microtask after start (so a synchronous throw is caught too).
+      startupResolves: async (id) => { await tick(); resolveStartup({ data: { session: id ? session(id) : null }, error: null }); await tick(); },
+      startupRejects: async (e) => { await tick(); rejectStartup(e); await tick(); } };
+  }
+  it("SIGNED_OUT before startup resolves: the stale startup session is ignored (was [null, 'stale-user'])", async () => {
+    const h = delayed();
+    await tick();
+    h.sb.emit("SIGNED_OUT", null);
+    await h.startupResolves("stale-user");
+    await h.flush();
+    expect(h.buildAuth).not.toHaveBeenCalled();
+    expect(h.setAuth.mock.calls).toEqual([[null]]);
+  });
+  it("account B signs in before startup (account A) resolves: A never replaces B", async () => {
+    const h = delayed();
+    await tick();
+    h.sb.emit("SIGNED_IN", session("b"));
+    await h.startupResolves("a");
+    await h.flush();
+    expect(h.buildAuth.mock.calls.map(([s]) => s.user.id)).toEqual(["b"]);
+    h.pending[0].res({ user: { id: "b" } });
+    await tick();
+    expect(h.setAuth.mock.calls).toEqual([[{ user: { id: "b" } }]]);
+  });
+  it("INITIAL_SESSION before startup resolves: one load, from the event", async () => {
+    const h = delayed();
+    await tick();
+    h.sb.emit("INITIAL_SESSION", session("u1"));
+    await h.startupResolves("u1");
+    await h.flush();
+    expect(h.buildAuth).toHaveBeenCalledTimes(1);
+  });
+  it("no newer event: the startup session is used", async () => {
+    const h = delayed();
+    await h.startupResolves("u1");
+    await h.flush();
+    expect(h.buildAuth.mock.calls.map(([s]) => s.user.id)).toEqual(["u1"]);
+  });
+  it("startup rejection is reported, never unhandled, and changes no auth", async () => {
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    const h = delayed();
+    await h.startupRejects(new Error("storage unavailable"));
+    await tick(); await tick();
+    process.off("unhandledRejection", unhandled);
+    expect(h.onError).toHaveBeenCalledTimes(1);
+    expect(unhandled).not.toHaveBeenCalled();
+    expect(h.setAuth).not.toHaveBeenCalled();
+  });
+  it("startup error result is reported, not treated as signed out", async () => {
+    const sb = fakeSupabase(null);
+    sb.auth.getSession = async () => ({ data: { session: null }, error: new Error("lock timeout") });
+    const setAuth = vi.fn(), onError = vi.fn();
+    startAuthSync({ supabase: sb, buildAuth: vi.fn(), setAuth, onError, defer: () => {} });
+    await tick();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(setAuth).not.toHaveBeenCalled();
+  });
+  it("account switch clears the previous user's auth immediately, before the new profile resolves", async () => {
+    const h = harness(null);
+    h.sb.emit("SIGNED_IN", session("admin-a"));
+    await h.flush();
+    await h.settle("admin-a", { user: { id: "admin-a" }, profile: { role: "admin" } });
+    h.sb.emit("SIGNED_IN", session("b"));
+    expect(lastAuth(h)).toBeNull();                          // admin UI gone right away
+    await h.flush();
+    await h.settle("b", { user: { id: "b" }, profile: { role: "band" } });
+    expect(h.setAuth.mock.calls.map(([x]) => x?.user?.id ?? null)).toEqual(["admin-a", null, "b"]);
+  });
+});
+
 describe("auth sync with the REAL supabase-js client (fake fetch, no network)", () => {
   const URL = "https://abcdefghijklmnopqrst.supabase.co";
   const KEY = "sb-abcdefghijklmnopqrst-auth-token";
