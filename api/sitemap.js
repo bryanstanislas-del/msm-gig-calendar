@@ -8,8 +8,7 @@
 
 const { createClient } = require("@supabase/supabase-js");
 
-const SUPABASE_URL      = process.env.VITE_SUPABASE_URL      || "https://fmlaaiolqwknowhtdeue.supabase.co";
-const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";
+const { resolveServerSupabase } = require("./_supabaseProject.js");
 const BASE_URL          = process.env.VITE_BASE_URL          || "https://calendar.musicscenemagazine.co.uk";
 
 function escapeXml(s) {
@@ -39,7 +38,9 @@ function buildXml(urls) {
 
 module.exports = async function handler(req, res) {
   try {
-    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    const project = resolveServerSupabase(process.env);   // same project as the browser; mixed overrides refused
+    if (project.error) throw new Error(project.error);
+    const supabase = createClient(project.url, project.anonKey);
 
     // Same eligibility condition as the live "Public can view active
     // profiles" RLS policy on profiles (profile_type in the public set

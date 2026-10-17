@@ -73,7 +73,7 @@ describe("templates: escaped, persisted facts only, explicit offsets", () => {
     const m = renderNotification({ kind: "review_outcome", payload: { version_no: "1\r\nBcc: x@y", outcome: "approved" } }, "https://x.test");
     expect(m.subject).not.toMatch(/[\r\n]/);
     expect(() => renderNotification({ kind: "nope", payload: {} }, "https://x.test")).toThrow();
-    expect(NOTIFICATION_KINDS).toEqual(["initial_priority_admin_alert", "correction_request", "correction_deadline", "review_outcome", "booking_confirmation"]);
+    expect(NOTIFICATION_KINDS.slice(0, 5)).toEqual(["initial_priority_admin_alert", "correction_request", "correction_deadline", "review_outcome", "booking_confirmation"]);
   });
 });
 
@@ -126,19 +126,21 @@ describe("Svix verification for Resend webhooks", () => {
 });
 
 describe("notify-worker handler (MOCK_supabase + MOCK_fetch)", () => {
-  const MOCK_supabase = (rows) => {
+  const MOCK_supabase = (rows, gate = "proceed") => {
     const calls = [];
-    return { calls, rpcAsService: vi.fn(async (fn, args) => {
+    return { calls, byName: (n) => calls.filter((c) => c[0] === n), rpcAsService: vi.fn(async (fn, args) => {
       calls.push([fn, args]);
+      if (fn === "ad_expire_amendments") return 0;
       if (fn === "ad_notify_claim") return rows;
+      if (fn === "ad_notify_begin_dispatch") return gate;
       if (fn === "ad_notify_result") return args.p_outcome === "accepted" ? "accepted" : args.p_outcome === "retryable_error" ? "retry_scheduled" : "failed";
       return null;
     }) };
   };
-  const call = async (over = {}, rows = [correctionRow], fetchImpl = MOCK_fetch(), headers = { authorization: `Bearer ${WORKER}` }) => {
-    const sb = MOCK_supabase(rows);
+  const call = async (over = {}, rows = [correctionRow], fetchImpl = MOCK_fetch(), headers = { authorization: `Bearer ${WORKER}` }, gate = "proceed", providerTimeoutMs) => {
+    const sb = MOCK_supabase(rows, gate);
     const r = res();
-    await handlers["notify-worker"]({ method: "POST", headers }, r, { cfg: cfg(over), supabase: sb, fetchImpl, now: () => NOW });
+    await handlers["notify-worker"]({ method: "POST", headers }, r, { cfg: cfg(over), supabase: sb, fetchImpl, now: () => NOW, ...(providerTimeoutMs ? { providerTimeoutMs } : {}) });
     return { r, sb, fetchImpl };
   };
   it("requires the worker secret (never browser-callable)", async () => {
@@ -164,14 +166,17 @@ describe("notify-worker handler (MOCK_supabase + MOCK_fetch)", () => {
   });
   it("DB switch off -> claim returns nothing -> no provider call", async () => {
     const { r, fetchImpl } = await call({}, []);
-    expect(r.payload).toEqual({ claimed: 0, accepted: 0, retry: 0, failed: 0, stale: 0 });
+    expect(r.payload).toEqual({ claimed: 0, accepted: 0, retry: 0, failed: 0, stale: 0, blocked: 0, expired_amendments: 0 });
     expect(fetchImpl).not.toHaveBeenCalled();
   });
   it("sends with the row's idempotency key and records the provider id", async () => {
     const { r, sb, fetchImpl } = await call();
     expect(fetchImpl.mock.calls[0][1].headers["Idempotency-Key"]).toBe("msm-ads-notify-o-1");
     expect(JSON.parse(fetchImpl.mock.calls[0][1].body).to).toEqual(["adv@example.test"]);
-    expect(sb.calls[1]).toEqual(["ad_notify_result", { p_id: "o-1", p_attempt: 1, p_outcome: "accepted", p_provider_message_id: "re_msg_MOCK_1", p_error: null }]);
+    expect(sb.calls.map((c) => c[0])).toEqual(["ad_expire_amendments", "ad_notify_claim", "ad_notify_begin_dispatch", "ad_notify_result"]);
+    expect(sb.byName("ad_notify_begin_dispatch")[0][1]).toMatchObject({ p_id: "o-1", p_attempt: 1, p_recipient: "adv@example.test" });
+    expect(sb.byName("ad_notify_begin_dispatch")[0][1].p_content_sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(sb.byName("ad_notify_result")[0][1]).toEqual({ p_id: "o-1", p_attempt: 1, p_outcome: "accepted", p_provider_message_id: "re_msg_MOCK_1", p_error: null });
     expect(r.payload.accepted).toBe(1);
     expect(JSON.stringify(r.payload)).not.toMatch(/MOCK_SERVICE|re_MOCK_never|LOCAL-FAKE/);
   });
@@ -182,11 +187,12 @@ describe("notify-worker handler (MOCK_supabase + MOCK_fetch)", () => {
     expect(JSON.parse(ok.fetchImpl.mock.calls[0][1].body).to).toEqual(["alerts@example.test"]);
     const missing = await call({ adminAlertEmail: "" }, [alert]);
     expect(missing.fetchImpl).not.toHaveBeenCalled();
-    expect(missing.sb.calls[1][1]).toMatchObject({ p_outcome: "permanent_error", p_error: "ADS_ADMIN_ALERT_EMAIL not configured" });
+    expect(missing.sb.byName("ad_notify_result")[0][1]).toMatchObject({ p_outcome: "permanent_error", p_error: "ADS_ADMIN_ALERT_EMAIL not configured" });
+    expect(missing.sb.byName("ad_notify_begin_dispatch")).toEqual([]);
   });
   it("provider errors are reported for retry/failure", async () => {
     const { sb, r } = await call({}, [correctionRow], MOCK_fetch(async () => ({ ok: false, status: 503, json: async () => ({ message: "down" }) })));
-    expect(sb.calls[1][1]).toMatchObject({ p_outcome: "retryable_error", p_error: "HTTP 503 down" });
+    expect(sb.byName("ad_notify_result")[0][1]).toMatchObject({ p_outcome: "retryable_error", p_error: "HTTP 503 down" });
     expect(r.payload.retry).toBe(1);
   });
 });
@@ -222,5 +228,80 @@ describe("email-events handler (Resend webhook)", () => {
     await handlers["email-events"]({ method: "POST", headers: {}, rawBody: Buffer.from("{}") }, r, { cfg: cfg({ resendWebhookSecret: "" }), supabase: {}, now: () => NOW });
     expect(r.statusCode).toBe(503);
     expect(r.payload.missing).toEqual(["ADS_RESEND_WEBHOOK_SECRET (whsec_...)"]);
+  });
+});
+
+describe("dispatch safety in the worker (MOCK_supabase + MOCK_fetch)", () => {
+  const sbFor = (rows, gate) => {
+    const calls = [];
+    return { calls, rpcAsService: vi.fn(async (fn, args) => {
+      calls.push([fn, args]);
+      if (fn === "ad_notify_claim") return rows;
+      if (fn === "ad_notify_begin_dispatch") return gate;
+      if (fn === "ad_notify_result") return args.p_outcome === "retryable_error" ? "retry_scheduled" : "accepted";
+      return 0;
+    }) };
+  };
+  const run = async ({ gate = "proceed", fetchImpl = MOCK_fetch(), over = {}, timeout } = {}) => {
+    const sb = sbFor([correctionRow], gate);
+    const r = res();
+    await handlers["notify-worker"]({ method: "POST", headers: { authorization: `Bearer ${WORKER}` } }, r,
+      { cfg: cfg(over), supabase: sb, fetchImpl, now: () => NOW, ...(timeout ? { providerTimeoutMs: timeout } : {}) });
+    return { sb, r, fetchImpl, hash: sb.calls.find((c) => c[0] === "ad_notify_begin_dispatch")?.[1].p_content_sha256 };
+  };
+  it("blocked (changed recipient/content or window elapsed) or stale -> no provider call, no result", async () => {
+    for (const gate of ["blocked", "stale"]) {
+      const { fetchImpl, sb, r } = await run({ gate });
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(sb.calls.some((c) => c[0] === "ad_notify_result")).toBe(false);
+      expect(r.payload[gate === "blocked" ? "blocked" : "stale"]).toBe(1);
+    }
+  });
+  it("content hash covers sender and rendered content: a changed sender is detected", async () => {
+    const a = await run(); const b = await run(); const c = await run({ over: { emailFrom: "Other <other@example.test>" } });
+    expect(a.hash).toBe(b.hash);
+    expect(c.hash).not.toBe(a.hash);
+  });
+  it("a hung provider call times out (bounded) and is reported as retryable, unknown outcome", async () => {
+    const hung = vi.fn(() => new Promise(() => {}));
+    const t0 = Date.now();
+    const { sb } = await run({ fetchImpl: hung, timeout: 50 });
+    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(hung.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+    expect(hung.mock.calls[0][1].signal.aborted).toBe(true);
+    expect(sb.calls.find((c) => c[0] === "ad_notify_result")[1]).toMatchObject({ p_outcome: "retryable_error", p_error: "network: timeout after 50 ms" });
+  });
+  it("lost acknowledgement: the retry reuses the same idempotency key from the claim", async () => {
+    const f = MOCK_fetch();
+    await run({ fetchImpl: f }); await run({ fetchImpl: f });
+    expect(f.mock.calls.map((c) => c[1].headers["Idempotency-Key"])).toEqual(["msm-ads-notify-o-1", "msm-ads-notify-o-1"]);
+  });
+});
+
+describe("amendment emails", () => {
+  const p = { advertiser: "ZZ <b>Co</b>", booking_id: "b-1", original_from: "2026-11-02T00:00:00Z", original_until: "2026-11-04T00:00:00Z",
+    proposed_from: "2026-11-02T11:00:00Z", proposed_until: "2026-11-04T00:00:00Z", purchased_seconds: 172800, preserves_duration: false,
+    shortened_seconds: 39600, expires_at: "2026-11-03T10:30:00Z", decided_at: "2026-11-02T12:00:00Z" };
+  it("proposal: exact intervals with offsets, shortfall, refund not waived, nothing changes without acceptance; escaped", () => {
+    const m = renderNotification({ kind: "amendment_proposed", payload: p }, "https://x.test");
+    expect(m.text).toContain("New run: Mon 2 Nov 2026 11:00 GMT (UTC+00:00) until Wed 4 Nov 2026 00:00 GMT (UTC+00:00) (end not included), 37 h.");
+    expect(m.text).toContain("11 h shorter than your purchased 48 h");
+    expect(m.text).toContain("Accepting does not waive any refund");
+    expect(m.text).toContain("Nothing changes unless you accept in your account by Tue 3 Nov 2026 10:30 GMT (UTC+00:00)");
+    expect(m.html).toContain("ZZ &lt;b&gt;Co&lt;/b&gt;");
+    expect(m.html).not.toContain("<b>Co</b>");
+  });
+  it("accepted / rejected / withdrawn / expired state the resulting run", () => {
+    expect(renderNotification({ kind: "amendment_accepted", payload: p }, "https://x.test").text).toContain("now runs Mon 2 Nov 2026 11:00 GMT");
+    for (const k of ["amendment_rejected", "amendment_withdrawn", "amendment_expired"]) {
+      expect(renderNotification({ kind: k, payload: p }, "https://x.test").text).toContain("stays Mon 2 Nov 2026 00:00 GMT (UTC+00:00) until Wed 4 Nov 2026 00:00 GMT");
+    }
+  });
+  it("every outbox kind allowed by the latest migration has a template", async () => {
+    const fs = await import("node:fs");
+    const sql = fs.readFileSync(new URL("../../supabase/migrations/20261017090000_ads_outbox_dispatch_amendment_notices.sql", import.meta.url), "utf8");
+    const m = /ad_notification_outbox_kind_check\s+check \(kind in \(([^)]+)\)\)/.exec(sql);
+    const kinds = m[1].match(/'([a-z_]+)'/g).map((x) => x.slice(1, -1));
+    expect([...kinds].sort()).toEqual([...NOTIFICATION_KINDS].sort());
   });
 });

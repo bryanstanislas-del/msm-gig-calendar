@@ -39,7 +39,7 @@
 //    exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
 //  );
 //
-//  3. Replace SUPABASE_URL and SUPABASE_ANON_KEY below with your project values.
+//  3. Project URL/anon key: see src/supabaseConfig.js (one shared client in src/supabaseClient.js).
 //  4. To make someone an admin: update public.profiles set role='admin' where id='<uuid>';
 //
 // ════════════════════════════════════════════════════════════════════
@@ -102,9 +102,11 @@ import VenuePicker from "./venueSearch/VenuePicker.jsx";
 import { venueFieldsFromPickerState, cityConflictsWithSelection, buildVenueUpdatePayload, computeVenueEditSeed } from "./venueSearch/gigVenueFields.js";
 
 // ── Supabase config ────────────────────────────────────────────────
-const SUPABASE_URL = "https://fmlaaiolqwknowhtdeue.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZtbGFhaW9scXdrbm93aHRkZXVlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA3NTk2MTUsImV4cCI6MjA5NjMzNTYxNX0.0RyMAC4JVxGSErcAzTZaaWkWtzSpGpz8laaFye7r2Go";
-const USE_MOCK = SUPABASE_URL === "YOUR_SUPABASE_URL";
+// Project URL/key are NOT defined here any more: the whole app uses the one
+// shared client from ./supabaseClient (production by default, or a complete
+// VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY preview override). The built-in
+// mock mode was only reachable with the placeholder URL, i.e. never.
+const USE_MOCK = false;
 
 // ── Constants ──────────────────────────────────────────────────────
 // GENRES / GENRE_COLORS live in ./genres.js -- shared with src/smartImport
@@ -138,8 +140,7 @@ const MOCK_USERS = {
 };
 
 // ── Official Supabase client ────────────────────────────────────────
-import { createClient } from '@supabase/supabase-js';
-const supabase = USE_MOCK ? null : createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+import { supabase } from './supabaseClient';
 import NewsletterAdmin  from './components/admin/NewsletterAdmin';
 import AdminFeatured    from './components/admin/AdminFeatured';
 import AdminEditorial   from './components/admin/AdminEditorial';

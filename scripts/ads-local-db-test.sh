@@ -50,6 +50,8 @@ echo "== Notification outbox suite"
 $PSQL -d "$(dburl ads_phase1_rls)" -f supabase/tests/ads/40_notification_outbox.sql 2>&1 | grep -E "NOTICE|ERROR|FAIL"
 echo "== Booking amendments suite"
 $PSQL -d "$(dburl ads_phase1_rls)" -f supabase/tests/ads/50_booking_amendments.sql 2>&1 | grep -E "NOTICE|ERROR|FAIL"
+echo "== Dispatch safety + amendment notifications suite"
+$PSQL -d "$(dburl ads_phase1_rls)" -f supabase/tests/ads/60_dispatch_safety_amendment_notices.sql 2>&1 | grep -E "NOTICE|ERROR|FAIL"
 
 echo "== Concurrency: parallel holds on a capacity-1 unit"
 fresh_db ads_phase1_conc

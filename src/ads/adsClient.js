@@ -202,13 +202,17 @@ export async function adminAdvertiserNames() {
 // ── Notification outbox (admin visibility; sending happens only in the server worker) ──
 export async function adminListNotifications() {
   const { data, error } = await supabase.from("ad_notification_outbox")
-    .select("id, kind, status, attempts, recipient_role, booking_id, created_at, accepted_at, delivered_at, failed_at, next_attempt_at, last_error")
+    .select("id, kind, status, attempts, recipient_role, booking_id, created_at, accepted_at, delivered_at, failed_at, next_attempt_at, last_error, first_dispatched_at, dispatch_generation, reconciliation_reason")
     .order("created_at", { ascending: false }).limit(100);
   if (error) throw new Error(error.message);
   return data || [];
 }
 export const adminRetryNotification = (id, note) => rpc("ad_admin_retry_notification", { p_id: id, p_note: note });
 export const adminCancelNotification = (id, note) => rpc("ad_admin_cancel_notification", { p_id: id, p_note: note });
+/** After checking the provider dashboard: confirmed_sent records it; confirmed_not_sent re-queues under a NEW idempotency generation. */
+export const adminReconcileNotification = (id, resolution, providerMessageId, note) =>
+  rpc("ad_admin_reconcile_notification", { p_id: id, p_resolution: resolution, p_provider_message_id: providerMessageId || null, p_note: note });
+export const adminExpireAmendments = () => rpc("ad_expire_amendments");
 
 // ── Booking amendments (owner accepts/rejects; admin proposes/withdraws) ──
 export async function listAmendments(bookingIds) {

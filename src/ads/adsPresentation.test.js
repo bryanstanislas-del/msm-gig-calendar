@@ -126,6 +126,7 @@ describe("notification status wording", () => {
     expect(notificationStatusText({ status: "accepted" })).toMatch(/not yet reported delivered/);
     expect(notificationStatusText({ status: "delivered" })).toMatch(/not proof it was read/);
     expect(notificationStatusText({ status: "pending" })).toMatch(/off unless both switches are on/);
+    expect(notificationStatusText({ status: "needs_reconciliation" })).toMatch(/never re-sent automatically/);
   });
 });
 

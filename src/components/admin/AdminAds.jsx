@@ -73,7 +73,7 @@ function ReviewItem({ v, booking, onDone, setToast }) {
       <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
         <SmallActionButton tone="accent" accent={ACCENT} disabled={busy || !paid} onClick={() => act("approve")}>Approve this version</SmallActionButton>
         <SmallActionButton disabled={busy || reason.trim().length < 5} onClick={() => act("reject")}>Reject</SmallActionButton>
-        <select value={cause} onChange={(e) => setCause(e.target.value)} aria-label="Correction cause" style={{ minHeight: 36 }}>
+        <select value={cause} onChange={(e) => setCause(e.target.value)} aria-label="Correction cause" style={{ minHeight: 36, maxWidth: "100%" }}>
           <option value="advertiser_material">Advertiser material needs a correction</option>
           <option value="msm_error">MSM error (not advertiser delay; does not count as the review)</option>
         </select>
@@ -266,12 +266,13 @@ export default function AdminAds() {
       <FormSection title="Bookings">
         <div style={{ marginBottom: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
           <SmallActionButton onClick={wrap(ads.adminExpireHolds, "Expired lapsed holds")}>Expire lapsed holds now</SmallActionButton>
+          <SmallActionButton onClick={wrap(ads.adminExpireAmendments, "Expired lapsed amendment offers")}>Expire lapsed amendment offers</SmallActionButton>
           <TextInput accent={ACCENT} placeholder="Reason for pause/removal (required to remove)" value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} style={{ maxWidth: 360 }} />
-          <select value={partyType} onChange={(e) => setPartyType(e.target.value)} aria-label="Advertiser status for removal" style={{ minHeight: 36 }}>
+          <select value={partyType} onChange={(e) => setPartyType(e.target.value)} aria-label="Advertiser status for removal" style={{ minHeight: 36, maxWidth: "100%" }}>
             <option value="undetermined">Business/consumer status not yet determined (assessment gated)</option>
             <option value="business">Business (determined on the facts)</option>
           </select>
-          <select value={initiatedBy} onChange={(e) => setInitiatedBy(e.target.value)} aria-label="Who initiated the cancellation" style={{ minHeight: 36 }}>
+          <select value={initiatedBy} onChange={(e) => setInitiatedBy(e.target.value)} aria-label="Who initiated the cancellation" style={{ minHeight: 36, maxWidth: "100%" }}>
             <option value="">Who initiated it? (required to remove)</option>
             {Object.entries(CANCELLATION_INITIATORS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
           </select>
@@ -323,10 +324,14 @@ export default function AdminAds() {
                 <Td>{notificationStatusText(n)}</Td>
                 <Td>{n.attempts}</Td>
                 <Td style={{ fontSize: 11 }}>queued {at(n.created_at)}{n.accepted_at ? ` - accepted ${at(n.accepted_at)}` : ""}{n.delivered_at ? ` - delivered ${at(n.delivered_at)}` : ""}{n.status === "pending" ? ` - next ${at(n.next_attempt_at)}` : ""}</Td>
-                <Td style={{ fontSize: 11 }}>{n.last_error || "-"}</Td>
+                <Td style={{ fontSize: 11 }}>{n.reconciliation_reason ? `${n.reconciliation_reason}. ` : ""}{n.last_error || "-"}{n.first_dispatched_at ? ` (first dispatch ${at(n.first_dispatched_at)}, generation ${n.dispatch_generation})` : ""}</Td>
                 <Td>
                   {["dead", "failed"].includes(n.status) && <SmallActionButton disabled={noteText.trim().length < 5} onClick={wrap(() => ads.adminRetryNotification(n.id, noteText.trim()), "Queued for retry")}>Retry</SmallActionButton>}
-                  {["pending", "dead", "failed"].includes(n.status) && <SmallActionButton disabled={noteText.trim().length < 5} onClick={wrap(() => ads.adminCancelNotification(n.id, noteText.trim()), "Cancelled")}>Cancel</SmallActionButton>}
+                  {n.status === "needs_reconciliation" && <>
+                    <SmallActionButton disabled={noteText.trim().length < 10} onClick={wrap(() => ads.adminReconcileNotification(n.id, "confirmed_sent", null, noteText.trim()), "Recorded as sent")}>Provider shows it was sent</SmallActionButton>
+                    <SmallActionButton disabled={noteText.trim().length < 10} onClick={wrap(() => ads.adminReconcileNotification(n.id, "confirmed_not_sent", null, noteText.trim()), "Re-queued under a new idempotency key")}>Provider shows it was NOT sent</SmallActionButton>
+                  </>}
+                  {["pending", "dead", "failed", "needs_reconciliation"].includes(n.status) && <SmallActionButton disabled={noteText.trim().length < 5} onClick={wrap(() => ads.adminCancelNotification(n.id, noteText.trim()), "Cancelled")}>Cancel</SmallActionButton>}
                 </Td>
               </Tr>))}
             </tbody>

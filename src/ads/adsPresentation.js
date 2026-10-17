@@ -217,6 +217,7 @@ export function notificationStatusText(n) {
     failed: "Failed - not sent",
     dead: "Gave up after repeated errors",
     cancelled: "Cancelled by MSM",
+    needs_reconciliation: "May already have been sent - check the provider dashboard, then confirm sent or not sent (never re-sent automatically)",
   };
   return T[n?.status] || String(n?.status || "");
 }

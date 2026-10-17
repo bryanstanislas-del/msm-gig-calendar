@@ -75,6 +75,39 @@ const RENDERERS = {
   },
 };
 
+const hours = (sec) => Math.round(Number(sec) / 360) / 10;
+const runText = (from, until) => `${at(from)} until ${at(until)} (end not included)`;
+function amendment(kind, title, subjectWord, lines) {
+  RENDERERS[kind] = (p, base) => ({
+    subject: oneLine(`Booking change ${subjectWord}: ${at(p.proposed_from)}`),
+    ...layout(title, [`Hello ${p.advertiser},`, ...lines(p).filter(Boolean), `Reference: ${p.booking_id}`], `${base}/`, "Open your advertiser account"),
+  });
+}
+// Amendment emails never change the amendment: only the owner's response in the
+// account does. The offer expiry is the configured period from the proposal
+// time and is not affected by when (or whether) this email is delivered.
+amendment("amendment_proposed", "Proposed change to your booking", "proposed", (p) => [
+  "Because approval came after your booked run had started, MSM proposes this change:",
+  `New run: ${runText(p.proposed_from, p.proposed_until)}, ${hours((new Date(p.proposed_until) - new Date(p.proposed_from)) / 1000)} h.`,
+  `Current run: ${runText(p.original_from, p.original_until)}.`,
+  p.preserves_duration ? `Your purchased ${hours(p.purchased_seconds)} h are kept.`
+    : `This is ${hours(p.shortened_seconds)} h shorter than your purchased ${hours(p.purchased_seconds)} h because another booking follows. Accepting does not waive any refund you may be owed.`,
+  `Nothing changes unless you accept in your account by ${at(p.expires_at)}. Acceptance re-checks availability. This offer replaces any earlier offer for this booking.`,
+]);
+amendment("amendment_accepted", "Booking change accepted", "accepted", (p) => [
+  `You accepted the change at ${at(p.decided_at)}. Your advert now runs ${runText(p.proposed_from, p.proposed_until)}.`,
+  `Previously: ${runText(p.original_from, p.original_until)}.`,
+]);
+amendment("amendment_rejected", "Booking change declined", "declined", (p) => [
+  `You declined the proposed change at ${at(p.decided_at)}. Your booking stays ${runText(p.original_from, p.original_until)}.`,
+]);
+amendment("amendment_withdrawn", "Booking change withdrawn", "withdrawn", (p) => [
+  `MSM withdrew the proposed change (${runText(p.proposed_from, p.proposed_until)}) at ${at(p.decided_at)}. Your booking stays ${runText(p.original_from, p.original_until)}.`,
+]);
+amendment("amendment_expired", "Booking change offer expired", "expired", (p) => [
+  `The offer to run ${runText(p.proposed_from, p.proposed_until)} expired at ${at(p.expires_at)} without acceptance. Your booking stays ${runText(p.original_from, p.original_until)}.`,
+]);
+
 /** { subject, html, text } for one claimed outbox row; throws for unknown kinds. */
 export function renderNotification(row, baseUrl) {
   const r = RENDERERS[row?.kind];

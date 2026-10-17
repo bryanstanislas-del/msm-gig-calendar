@@ -16,7 +16,7 @@ import { probeImage, sha256Hex } from "./imageProbe.js";
 import { buildReportCsv, buildReportPdf } from "./report.js";
 import { missingConfig } from "./config.js";
 import { renderNotification } from "./emailTemplates.js";
-import { sendViaResend } from "./resendClient.js";
+import { sendViaResend, RESEND_TIMEOUT_MS } from "./resendClient.js";
 import { verifySvix, SvixSignatureError } from "./svixSignature.js";
 import crypto from "node:crypto";
 import { isKnownPlacement, isSafeDestinationUrl, destinationUrlProblem, altTextProblem, UUID_RE, MAX_CREATIVE_BYTES } from "../../src/ads/validation.js";
@@ -399,7 +399,7 @@ function workerAuthorised(req, secret) {
   return crypto.timingSafeEqual(a, b);
 }
 
-export async function handleNotifyWorker(req, res, { cfg, supabase, fetchImpl = globalThis.fetch }) {
+export async function handleNotifyWorker(req, res, { cfg, supabase, fetchImpl = globalThis.fetch, providerTimeoutMs = RESEND_TIMEOUT_MS }) {
   if (req.method !== "POST" && req.method !== "GET") return send(res, 405, { error: "METHOD_NOT_ALLOWED" });
   if (!cfg.apiEnabled) return send(res, 503, { error: "ADS_DISABLED" });
   const missingWorker = missingConfig(cfg, ["worker"]);
@@ -408,8 +408,10 @@ export async function handleNotifyWorker(req, res, { cfg, supabase, fetchImpl = 
   if (!cfg.emailEnabled) return send(res, 503, { error: "ADS_EMAIL_DISABLED" });
   const missing = missingConfig(cfg, ["service", "email"]);
   if (missing.length) return notConfigured(res, missing);
+  // Lapsed amendment offers become `expired` (and enqueue their email) first.
+  const expiredAmendments = await supabase.rpcAsService("ad_expire_amendments", {});
   const rows = (await supabase.rpcAsService("ad_notify_claim", { p_limit: 20, p_lease_seconds: 300 })) || [];
-  const summary = { claimed: rows.length, accepted: 0, retry: 0, failed: 0, stale: 0 };
+  const summary = { claimed: rows.length, accepted: 0, retry: 0, failed: 0, stale: 0, blocked: 0, expired_amendments: Number(expiredAmendments) || 0 };
   for (const row of rows) {
     let outcome, id = null, error = null;
     const to = row.recipient_role === "admin" ? cfg.adminAlertEmail : row.recipient_email;
@@ -421,7 +423,16 @@ export async function handleNotifyWorker(req, res, { cfg, supabase, fetchImpl = 
       try { msg = renderNotification(row, cfg.baseUrl); } catch (e) { msg = null; error = String(e?.message || e).slice(0, 200); }
       if (!msg) outcome = "permanent_error";
       else {
-        const r = await sendViaResend({ apiKey: cfg.resendApiKey, from: cfg.emailFrom, to, ...msg, idempotencyKey: row.idempotency_key }, fetchImpl);
+        // Durable first dispatch: exact recipient + content hash recorded BEFORE
+        // the provider call; a retry must match it, inside the 23 h window.
+        const contentSha256 = crypto.createHash("sha256")
+          .update(JSON.stringify({ from: cfg.emailFrom, to, subject: msg.subject, html: msg.html, text: msg.text })).digest("hex");
+        const gate = await supabase.rpcAsService("ad_notify_begin_dispatch", { p_id: row.id, p_attempt: row.attempt, p_recipient: to, p_content_sha256: contentSha256 });
+        if (gate !== "proceed") {
+          if (gate === "stale") summary.stale += 1; else summary.blocked += 1;
+          continue;                                   // no provider call
+        }
+        const r = await sendViaResend({ apiKey: cfg.resendApiKey, from: cfg.emailFrom, to, ...msg, idempotencyKey: row.idempotency_key }, fetchImpl, { timeoutMs: providerTimeoutMs });
         ({ outcome } = r); id = r.id || null; error = r.error || null;
       }
     }
@@ -429,6 +440,7 @@ export async function handleNotifyWorker(req, res, { cfg, supabase, fetchImpl = 
     if (result === "stale") summary.stale += 1;
     else if (outcome === "accepted") summary.accepted += 1;
     else if (result === "retry_scheduled") summary.retry += 1;
+    else if (result === "needs_reconciliation") summary.blocked += 1;
     else summary.failed += 1;
   }
   return send(res, 200, summary);

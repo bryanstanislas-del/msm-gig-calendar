@@ -13,16 +13,27 @@ export function classifyResendFailure(status, body) {
   return "permanent_error";
 }
 
-export async function sendViaResend({ apiKey, from, to, subject, html, text, idempotencyKey }, fetchImpl = globalThis.fetch) {
+/** A hung provider call must not hold the batch (or its leases) indefinitely. */
+export const RESEND_TIMEOUT_MS = 10000;
+
+export async function sendViaResend({ apiKey, from, to, subject, html, text, idempotencyKey }, fetchImpl = globalThis.fetch, { timeoutMs = RESEND_TIMEOUT_MS } = {}) {
   let r;
+  const ctl = new AbortController();
+  let timer;
+  const timeout = new Promise((_, reject) => { timer = setTimeout(() => { ctl.abort(); reject(new Error(`timeout after ${timeoutMs} ms`)); }, timeoutMs); });
   try {
-    r = await fetchImpl(RESEND_ENDPOINT, {
+    r = await Promise.race([fetchImpl(RESEND_ENDPOINT, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
       body: JSON.stringify({ from, to: [to], subject, html, text }),
-    });
+      signal: ctl.signal,
+    }), timeout]);
   } catch (err) {
+    // Outcome unknown (the provider may have accepted it): retried under the SAME
+    // idempotency key only inside the dispatch window, else reconciliation.
     return { outcome: "retryable_error", error: `network: ${String(err?.message || err).slice(0, 120)}` };
+  } finally {
+    clearTimeout(timer);
   }
   let body = null;
   try { body = await r.json(); } catch { body = null; }

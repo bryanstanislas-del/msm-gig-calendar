@@ -15,6 +15,8 @@
 | Stripe | Sandbox `acct_1UQvPbRhBFkeZB2o` (livemode=false). A webhook endpoint exists for the five documented events, pinned to `2026-09-30.endive`. **Zero test deliveries** observed at setup. **Checkout and webhooks are untested.** |
 | WordPress | Plugin **not installed** anywhere. |
 
+> **Launch status, exact remaining configuration and the staged migration sequence:** [`launch-checklist.md`](launch-checklist.md).
+>
 > **Agreed terms of 2026-10-16** (review, corrections, priority, intervals, refunds, cancellation): see **[`agreed-terms-implementation.md`](agreed-terms-implementation.md)** for the gap matrix, migration order, the staging manual test script and the release blockers. Where this README and that document differ, that document is current.
 
 ## What is in this PR

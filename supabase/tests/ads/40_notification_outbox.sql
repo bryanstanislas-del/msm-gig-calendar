@@ -45,6 +45,13 @@ declare c uuid; a uuid; d text; m text; begin
     jsonb_build_object('path', m, 'mime', 'image/png', 'bytes', 1000, 'width', 600, 'height', 250, 'sha256', repeat('2', 64)),
     p_dest, 'ZZ banner'); end $$;
 grant execute on all functions in schema zz to anon, authenticated, service_role;
+-- Worker step: record dispatch identity (as the server worker does) then report acceptance.
+create function zz.dispatch_accept(p_id uuid, p_attempt int, p_msg text) returns text language plpgsql as $$
+declare g text; begin
+  g := public.ad_notify_begin_dispatch(p_id, p_attempt, 'zz-recipient@example.invalid', repeat('ab', 32));
+  if g <> 'proceed' then return 'gate:' || g; end if;
+  return public.ad_notify_result(p_id, p_attempt, 'accepted', p_msg, null); end $$;
+grant execute on all functions in schema zz to anon, authenticated, service_role;
 
 do $$
 declare
@@ -107,9 +114,9 @@ begin
   perform zz.as_service();
   c := public.ad_notify_claim(10, 300);
   perform zz.ok(jsonb_array_length(c) = 2 and (c -> 0 ->> 'attempt')::int = 1
-                and c -> 0 ->> 'idempotency_key' = 'msm-ads-notify-' || (c -> 0 ->> 'id'), 'claim returns rows with a stable per-row idempotency key');
+                and c -> 0 ->> 'idempotency_key' = 'msm-ads-notify-' || (c -> 0 ->> 'id') || '-g1', 'claim returns rows with a stable per-row, per-generation idempotency key');
   perform zz.ok(public.ad_notify_claim(10, 300) = '[]'::jsonb, 'leased rows are not claimed twice');
-  perform zz.ok(public.ad_notify_result(oc, 1, 'accepted', 're_msg_conf_1', null) = 'accepted', 'confirmation accepted by provider');
+  perform zz.ok(zz.dispatch_accept(oc, 1, 're_msg_conf_1') = 'accepted', 'confirmation accepted by provider');
   perform zz.ok(public.ad_notify_result(oc, 1, 'accepted', 're_msg_conf_1', null) = 'stale', 'duplicate result ignored');
   perform zz.as_pg();
   perform zz.ok((select status = 'accepted' and delivered_at is null from public.ad_notification_outbox where id = oc), 'accepted is not delivered');
@@ -154,7 +161,7 @@ begin
   c := public.ad_notify_claim(10, 60);
   perform zz.ok((c -> 0 ->> 'id')::uuid = oq and (c -> 0 ->> 'attempt')::int = 2, 'expired lease reclaimed');
   perform zz.ok(public.ad_notify_result(oq, 1, 'accepted', 're_msg_old', null) = 'stale', 'crashed worker result ignored');
-  perform zz.ok(public.ad_notify_result(oq, 2, 'accepted', 're_msg_corr_1', null) = 'accepted', 'current worker accepted');
+  perform zz.ok(zz.dispatch_accept(oq, 2, 're_msg_corr_1') = 'accepted', 'current worker accepted');
 
   -- Provider events: accepted/sent start nothing; delivered starts the window.
   perform zz.as_pg();
@@ -190,7 +197,7 @@ begin
   perform zz.as_service();
   c := public.ad_notify_claim(10, 300);
   select (x ->> 'id')::uuid, (x ->> 'attempt')::int into oq, n from jsonb_array_elements(c) x where x ->> 'kind' = 'correction_request';
-  perform public.ad_notify_result(oq, n, 'accepted', 're_msg_corr_2', null);
+  perform zz.dispatch_accept(oq, n, 're_msg_corr_2');
   perform zz.ok(public.ad_notify_provider_event('svix_evt_0006', 'email.bounced', 're_msg_corr_2', '2026-10-27 11:01+00', '{}') = 'bounced:failed_before_delivery_no_window',
                 'bounce before delivery starts no window');
   perform zz.as_pg();
@@ -218,7 +225,7 @@ begin
   perform zz.as_service();
   c := public.ad_notify_claim(10, 300);
   select (x ->> 'id')::uuid, (x ->> 'attempt')::int into oq, n from jsonb_array_elements(c) x where x ->> 'kind' = 'correction_request';
-  perform public.ad_notify_result(oq, n, 'accepted', 're_msg_corr_4', null);
+  perform zz.dispatch_accept(oq, n, 're_msg_corr_4');
   perform zz.ok(public.ad_notify_provider_event('svix_evt_0007', 'email.bounced', 're_msg_corr_4', '2026-10-27 12:05+00', '{}') = 'bounced:fallback_window_unaffected',
                 'email bounce after fallback contact is not a late failure');
   perform zz.as_pg();

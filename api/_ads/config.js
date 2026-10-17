@@ -2,7 +2,13 @@
 // the Vercel server environment and NEVER from VITE_* variables (those are
 // bundled into the browser). See docs/ads/README.md for the full list.
 
+import supabaseProject from "../_supabaseProject.js";
+
 export function loadAdsConfig(env = process.env) {
+  // Same project-selection rule as the browser and the public routes; no
+  // production fallback here (missing = not configured), and a mixed pair is
+  // reported as a configuration error rather than used.
+  const project = supabaseProject.resolveServerSupabase(env, { fallbackToProduction: false });
   const stripeKey = env.STRIPE_SECRET_KEY || "";
   let stripeMode = "missing";
   if (/^(sk|rk)_test_/.test(stripeKey)) stripeMode = "test";
@@ -10,8 +16,9 @@ export function loadAdsConfig(env = process.env) {
   return {
     apiEnabled: env.ADS_API_ENABLED === "true",
     baseUrl: (env.ADS_PUBLIC_BASE_URL || env.VITE_BASE_URL || "https://calendar.musicscenemagazine.co.uk").replace(/\/+$/, ""),
-    supabaseUrl: (env.SUPABASE_URL || env.VITE_SUPABASE_URL || "").replace(/\/+$/, ""),
-    anonKey: env.SUPABASE_ANON_KEY || env.VITE_SUPABASE_ANON_KEY || "",
+    supabaseUrl: project.error ? "" : project.url.replace(/\/+$/, ""),
+    anonKey: project.error ? "" : project.anonKey,
+    supabaseProjectError: project.error || "",
     serviceKey: env.SUPABASE_SERVICE_ROLE_KEY || "",
     stripeSecretKey: stripeMode === "test" ? stripeKey : "",
     stripeMode,
@@ -52,6 +59,9 @@ const ENV_NAMES = {
 /** Names of missing env vars for the given capability groups (names only, never values). */
 export function missingConfig(cfg, groups) {
   const missing = new Set();
+  if (cfg.supabaseProjectError && groups.some((g) => (REQUIREMENTS[g] || []).includes("supabaseUrl"))) {
+    missing.add(`SUPABASE_URL/VITE_SUPABASE_URL (${cfg.supabaseProjectError})`);
+  }
   for (const g of groups) {
     for (const key of REQUIREMENTS[g] || []) {
       const v = cfg[key];

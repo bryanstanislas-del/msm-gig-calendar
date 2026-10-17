@@ -8,7 +8,8 @@
     "test": "vitest run",
     "test:wp": "php wordpress/msm-ads/tests/run-tests.php",
     "test:ads-db": "bash scripts/ads-local-db-test.sh",
-    "test:ads-staging": "bash scripts/ads-staging-bootstrap-test.sh"
+    "test:ads-staging": "bash scripts/ads-staging-bootstrap-test.sh",
+    "test:browser": "node scripts/ads-browser-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",
@@ -22,6 +23,7 @@
     "@vercel/routing-utils": "^5.3.3",
     "@vitejs/plugin-react": "^4.0.0",
     "pg": "^8.23.1",
+    "playwright": "1.56.1",
     "vite": "^5.0.0",
     "vite-plugin-pwa": "^1.3.0",
     "vitest": "^4.1.10"

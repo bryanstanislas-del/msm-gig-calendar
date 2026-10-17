@@ -130,6 +130,16 @@ Legend: **Done** = implemented and covered by local tests. **Partial** = core bu
 | Tests | `50_booking_amendments.sql`: gates, shortened at a following booking, preserved duration, later holds refused, report and refund denominator, ownership (other advertiser, admin), immutability, supersede after a refused acceptance, expiry exactly at `expires_at`, run ended exactly at the proposed end, no capacity, approved before start, cancelled booking, DST (47 elapsed hours, 11:00 GMT Sat → 11:00 BST Mon), 24 h gates, delivery boundaries (start inclusive, end exclusive, never before start), metrics after the end, replacement gate. Runner: acceptance vs a competing hold for the freed hours, in both orders → exactly one wins, no day over capacity. **Mutation check:** without the unit lock in `ad_respond_amendment` the hold-first order double-booked a day and the test failed. |
 | Not done | No amendment email (could reuse the outbox later); the portal accept/reject UI is build-checked only; new bookings are still sold as calendar dates. |
 
+### 1.10 Launch fixes (migration `20261017090000`)
+
+| Item | Implemented | Evidence |
+|---|---|---|
+| Amendment notifications | Owner-addressed outbox kinds `amendment_proposed/accepted/rejected/withdrawn/expired` from persisted amendment rows (exact intervals, purchased/shortened hours, configured expiry); one row per (kind, amendment) via the unique dedupe key; superseded proposals covered by the newer proposal's email; no internal note in payloads; delivery never alters the offer or its expiry; `ad_expire_amendments()` (service role or admin) marks lapsed offers expired exactly at `expires_at` | `60_` part 2; template and kind-parity tests in `notifications.test.js` |
+| Dispatch safety (review finding) | Durable first dispatch (recipient + content SHA-256 before any provider call); frozen payload/recipient; ≤ 6 attempts including expired leases; no provider call ≥ 23 h after first dispatch (Resend keeps keys 24 h); possibly-sent rows → `needs_reconciliation` (manual confirm sent / not sent → new key generation); admin retry refused where a re-send could duplicate; 10 s provider timeout | `60_` part 1: lost acknowledgement, crash before/after dispatch, lease expiry, recovery beyond the window (23 h, 30 h, late retry), attempt cap through expired leases, changed recipient/content, reconciliation. JS: gate before fetch, hung provider timeout, stable key, sender change detected. Reproduced on `eaafbab`: an exhausted row with a 2-day-old lease was reclaimed as attempt 7 under the same key |
+| Review-outcome interval | Uses the effective (amended) run | Reproduced on `eaafbab`: a replacement approval after an accepted amendment emailed 00:00 instead of 11:00; fixed and tested |
+| Amendment start | Next whole UK hour after the FIRST approval that let the advert serve | Reproduced on `eaafbab`: +10 h (based on the later replacement approval) instead of +4 h; fixed and tested |
+| Advertiser data exposure | Column privileges hide `note`, `proposed_by`, `decided_by` and history `recorded_by`; admins use `ad_admin_list_amendments` | Reproduced via `information_schema.column_privileges` on `eaafbab`; `60_` asserts permission denied |
+
 ## 2. Forward migrations and rollback
 
 Apply **in filename order**, only after review, **on staging only**:
@@ -140,6 +150,7 @@ Apply **in filename order**, only after review, **on staging only**:
 4. `supabase/migrations/20261016180000_ads_refund_invariants_initiator_deadlines.sql` (review fixes on `9fc02d8`, see §1.7)
 5. `supabase/migrations/20261016210000_ads_notification_outbox.sql` (§1.8)
 6. `supabase/migrations/20261016230000_ads_booking_amendments.sql` (§1.9)
+7. `supabase/migrations/20261017090000_ads_outbox_dispatch_amendment_notices.sql` (§1.10)
 
 Each file is a plain forward migration on top of the previous one. They are not wrapped in a transaction, so run each with `psql -v ON_ERROR_STOP=1 -1 -f <file>`, or through the Supabase SQL editor in one run. Then run `supabase/staging/03_postflight_readonly.sql`. The local proof is `npm run test:ads-staging`, which applies all four ads migrations on a bootstrapped empty platform DB and runs every suite there.
 
@@ -227,4 +238,5 @@ Each file is a plain forward migration on top of the previous one. They are not 
 | `fd97927` | This document and README updates |
 | `97ed361` | Review fixes on `9fc02d8`: cross-kind refund invariant, cancellation initiator, deadline boundaries, partial-refund note (migration `20261016180000`) |
 | `c65d4e2` | Increment A: notification outbox, worker, templates, Resend adapter, signed delivery events (migration `20261016210000`) |
-| (this commit) | Increment B: booking amendments + exact intervals (migration `20261016230000`) |
+| `eaafbab` | Increment B: booking amendments + exact intervals (migration `20261016230000`) |
+| (next commit) | Launch fixes: single Supabase project, email dispatch safety, amendment notifications, review fixes, local browser verification (migration `20261017090000`); see `launch-checklist.md` |
