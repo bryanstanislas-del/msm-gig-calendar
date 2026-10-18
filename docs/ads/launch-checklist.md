@@ -6,12 +6,34 @@
 - No hosted migration, deployment, configuration change, live Stripe action or external email was performed **by Claude**.
 - The staging applies recorded in §1 were performed by the independent reviewer. Facts marked as reviewer observations come from the reviewer's checks; Claude did not re-verify them, because it does not call hosted services.
 
+## 0. Hosted staging observations, 2026-10-18 (reviewer, HOSTED — not local test results)
+
+Everything in this section was observed on hosted services by the reviewer. None of it comes from the local suites in §2, and Claude made no hosted call. **Production was untouched.**
+
+| Item | Observation |
+|---|---|
+| Vercel team/project | Browser session verified the correct team **msm-gig-calendar-s-projects** and project **msm-gig-calendar**. |
+| Code | Commit **`af6a7de`** on `claude/quirky-bohr-2dmbus`. |
+| Preview deployment | Redeploy **`BaXeggfhb4ZuMWSxba6THETax4qh`** is **Ready** on Preview. |
+| Preview configuration | `ADS_API_ENABLED=true` added as a configuration variable **only for Preview + `claude/quirky-bohr-2dmbus`**. No other environment changed. |
+| Ads API routing | `GET /api/ads/delivery?placement=wordpress-home-top` returned `{"placement":"wordpress-home-top","label":"Advertisement","ads":[]}`: JSON from the ads function, not the Calendar HTML. |
+| Calendar shell | Still shows **0 gigs / 0 venues** (staging, not the production catalogue). |
+| Advertiser portal | The authenticated synthetic advertiser sees the **TEST-only £10/day** product. |
+| Staging switches (`oyakrgdmplmxmlhjfqcd` only) | `ads_checkout_enabled` was **enabled** for the sandbox journey. `stripe_livemode` and every other ads switch remain **false**. |
+| Test holds | The earlier test hold `3a6a9ed9-1561-41a9-aba7-e4a830dacdc9` was **cancelled**, because the portal requires more than 31 minutes left on a hold before checkout. A fresh **held** TEST booking `18edcf3f-9273-4016-bed8-d88984f7f1a4` for **20 Oct 2026** at the **£10 TEST price** has a **60-minute** hold. |
+| Stripe | Stripe **TEST (sandbox)** Checkout opened for that booking, in **GBP**. |
+| Staging database after checkout opened (fresh read) | **2 bookings** (the old one cancelled, the new one held). **1 `ad_payments` row** for the new booking: `status = open`, `livemode = false`, `amount_pence = 1000`, `currency = gbp`, `paid_at = null`. So a sandbox Checkout Session and its open payment row exist, but **no payment is paid or webhook-confirmed**. Also 0 creative versions, 0 `ad_notification_outbox` rows, 0 stored ad-creatives objects. (Checkout session id deliberately not recorded.) |
+| Not done | **No payment submitted.** No artwork uploaded, no moderation or approval, no delivery of an advert, no email. |
+| **Stopped at payment: decision needed** | Stripe's sandbox Checkout displayed **"By paying, you agree to Link's Terms and Privacy"**. **Bryan must decide** whether accepting Link's terms is acceptable, or Link should be disabled for this account, **before any payment is submitted**, including a sandbox one. |
+
+Not recorded here, on purpose: checkout URLs, session ids or tokens, card details, keys and secrets.
+
 ## 1. Status facts (reviewer observations, 2026-10-17)
 
 | Item | State |
 |---|---|
 | Vercel plan | Team is on **Hobby**. Vercel's fair-use guidelines (updated 14 Sep 2026, https://vercel.com/docs/limits/fair-use-guidelines) require **Pro or Enterprise for commercial usage**, including paid advertising and payment processing. **Not upgraded; nothing purchased.** |
-| Preview environment variables | Visually confirmed scoped to **Preview + this branch**. `ADS_API_ENABLED` and all email variables are **absent**. |
+| Preview environment variables | Visually confirmed scoped to **Preview + this branch**. On 2026-10-17 `ADS_API_ENABLED` and all email variables were absent; on **2026-10-18** `ADS_API_ENABLED=true` was added for Preview + this branch only (§0). Email variables are **still absent**. |
 | Preview history | `eaafbab` preview (`LCcY5MHDqxjuTv2aC7VXEuGyvye5`) showed **1,615 production gigs**, because `src/App.jsx` built its own production client; fixed in `367d29a`. The `367d29a` branch alias then stayed on "Loading gigs" (staging had no Calendar shell tables); fixed by `05_calendar_shell_fixture.sql`. |
 | **Preview now (branch alias)** | **Fully loads against staging, showing 0 gigs / 0 venues**: not the production catalogue, and no loading spinner. No login, payment or email has been exercised on it. |
 | **Staging Supabase (`msm-ads-staging`, `oyakrgdmplmxmlhjfqcd` only)** | Applied by the reviewer, in order, unchanged: all **eight** reviewed forward migrations `20261016090000` … `20261017120000` (§3), then `supabase/staging/05_calendar_shell_fixture.sql` with its exact opt-in phrase. The "STATUS: NOT APPLIED" header comments inside those files are historical; the files were left byte-for-byte unchanged. |
@@ -29,7 +51,7 @@
 |---|---|---|
 | Database rules, triggers, RLS, races | `npm run test:ads-db` (disposable Postgres 16): suites 10–60, refund and amendment races, rollback | Migrations applied on staging; postflight and denial checks passed (§1, reviewer). Booking, refund, outbox and amendment **flows not exercised** on staging (all counts 0) |
 | Staging bootstrap path | `npm run test:ads-staging` (empty platform DB, incl. Calendar shell section 8) | Bootstrap, all nine ads migrations and the Calendar shell applied on staging (§1, reviewer) |
-| API handlers / Stripe / Resend | vitest with labelled mocks; signature checks with synthetic secrets | **Not verified**. No Stripe Checkout, webhook delivery, Resend send or Resend webhook was ever exercised |
+| API handlers / Stripe / Resend | vitest with labelled mocks; signature checks with synthetic secrets | 2026-10-18 (§0): `/api/ads/delivery` routing verified, and Stripe **TEST** Checkout **opened** (open payment row). **Not verified:** payment submission, webhook delivery and confirmation, Resend send, Resend webhook |
 | PostgREST API layer | `npm run test:ads-postgrest`: real PostgREST 12.2.3 (checksum-pinned, loopback only) replays **every** `adsClient.js` select as admin, owner and other advertiser (36 calls), plus payment-history semantics (funding + duplicate) and the unhinted embed's PGRST201. Fails on the old client | Hosted ADS load failed before the fix (§1); re-check after redeploy |
 | Browser: project isolation | `npm run test:browser` A: real app built three ways; all traffic intercepted on loopback | Preview loads against staging with 0 gigs / 0 venues, not production (§1, reviewer). A per-request network-tab audit of every screen while signed in is still to do (§5 step 3) |
 | Browser: real app, admin ADS tab | `npm run test:browser` C: real app build, stored synthetic admin session, Supabase answered locally (PGRST201 emulated for an unhinted embed). Settings, inventory and bookings render; a forced settings failure stays visible with its code while other sections load. Fails on the old code | Login passed; ADS load blocked before the fix; not re-checked |
@@ -99,7 +121,7 @@ Every switch stayed OFF after these (postflight: switches = 0): `ads_*_enabled`,
    - sign in with the synthetic advertiser as well;
    - confirm in the network tab that the root, ADVERTISE, ADS and admin screens call **only** the staging Supabase host;
    - confirm that the advertiser cannot reach admin data.
-4. **Ads API on the preview:** set `ADS_API_ENABLED=true` (Preview + branch only) when ready. Then check `/api/ads/delivery` returns JSON, and the Stripe webhook raw-body check from `docs/ads/README.md` deploy step 5.
+4. **Ads API on the preview:** *(2026-10-18, §0: done; `ADS_API_ENABLED=true` set for Preview + branch only, and `/api/ads/delivery` returns JSON.)* Still to do: the Stripe webhook raw-body check from `docs/ads/README.md` deploy step 5.
 5. **Preview environment variables still missing** (Preview + this branch only, never Production):
    - `ADS_API_ENABLED=true` when ready to test;
    - `ADS_WORKER_SECRET` (≥32 chars);
@@ -111,7 +133,7 @@ Every switch stayed OFF after these (postflight: switches = 0): `ads_*_enabled`,
 
    Already present per §1: the staging Supabase variables, a Stripe sandbox key, the webhook secret, the tracking secret and the base URL.
 6. **Scheduler (not configured):** the notify worker (`POST /api/ads/notify-worker` with the bearer secret, about every 5 minutes), `ad_expire_stale_holds()` and `ad_purge_tracking_state()` (about 15 minutes).
-7. **Synthetic hosted journey on staging (none exercised yet; all flow counts are 0):** follow the staging script in `agreed-terms-implementation.md` §3. That covers hold → Stripe sandbox payment → review/correction → approval → delivery → refund assessment → removal. Add:
+7. **Synthetic hosted journey on staging.** Started 2026-10-18 (§0): hold → sandbox Checkout opened, then **stopped before payment** pending Bryan's decision on Link's terms. Nothing paid, approved, delivered or emailed yet. follow the staging script in `agreed-terms-implementation.md` §3. That covers hold → Stripe sandbox payment → review/correction → approval → delivery → refund assessment → removal. Add:
    - one email to a synthetic mailbox with a delivery event, and a correction window started by delivery;
    - an amendment propose and accept;
    - a forced lost acknowledgement checked in the admin reconciliation view.
