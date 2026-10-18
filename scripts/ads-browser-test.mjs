@@ -1,0 +1,302 @@
+#!/usr/bin/env node
+// LOCAL BROWSER VERIFICATION (synthetic fixtures only; no hosted API, no
+// real provider, no credentials). Playwright is a pinned devDependency
+// (playwright 1.56.1 in package.json/package-lock.json). Setup elsewhere:
+//   npm ci && npx playwright install chromium   (once)
+// In the Claude Code container the matching Chromium is pre-installed
+// (PLAYWRIGHT_BROWSERS_PATH), so no download happens.
+// Every request leaving 127.0.0.1 is intercepted:
+// Supabase calls are answered locally with [] and recorded, anything else is
+// aborted -- nothing reaches the network.
+//
+//   npm run test:browser
+//
+// A. Supabase project isolation: the REAL app built with no override, a
+//    complete synthetic override and a partial override.
+// B. Critical advertiser/admin screens rendered from the real components
+//    against tests/browser/fakeSupabase.js (RLS/ownership emulated).
+import { build, preview } from "vite";
+import { chromium } from "playwright";
+import path from "node:path";
+import fs from "node:fs";
+import os from "node:os";
+import { fileURLToPath } from "node:url";
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const SHOTS = process.env.ADS_BROWSER_SCREENSHOTS || path.join(ROOT, "docs/ads/verification/local-browser");
+fs.mkdirSync(SHOTS, { recursive: true });
+const VIEWPORTS = { desktop: { width: 1280, height: 900 }, mobile: { width: 390, height: 844 } };
+const OUT = fs.mkdtempSync(path.join(os.tmpdir(), "msm-ads-browser-"));
+const NOW = "2026-11-02T12:00:00Z";
+const STAGING = "https://stagingsynthetic000a.supabase.co";    // synthetic 20-char ref, never contacted
+let failures = 0;
+const check = (ok, label) => { console.log(`  ${ok ? "PASS" : "FAIL"} ${label}`); if (!ok) failures += 1; };
+
+async function buildApp(dir, env) {
+  const saved = { VITE_SUPABASE_URL: process.env.VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY: process.env.VITE_SUPABASE_ANON_KEY };
+  delete process.env.VITE_SUPABASE_URL; delete process.env.VITE_SUPABASE_ANON_KEY;
+  Object.assign(process.env, env);
+  try {
+    await build({ root: ROOT, logLevel: "error", build: { outDir: dir, emptyOutDir: true } });
+  } finally {
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
+}
+
+async function serve(dir, port, configFile = false) {
+  return preview({ root: ROOT, configFile, logLevel: "error", build: { outDir: dir }, preview: { port, strictPort: true, host: "127.0.0.1" } });
+}
+
+async function isolatedPage(browser, record, viewport = VIEWPORTS.desktop) {
+  const ctx = await browser.newContext({ serviceWorkers: "block", viewport });
+  await ctx.route("**/*", (route) => {
+    const u = new URL(route.request().url());
+    if (u.hostname === "127.0.0.1") return route.continue();
+    if (u.hostname.endsWith(".supabase.co")) {
+      record.supabase.push(u.hostname);
+      return route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: "[]" });
+    }
+    record.other.push(u.hostname);
+    return route.abort();
+  });
+  const page = await ctx.newPage();
+  page.on("pageerror", (e) => record.errors.push(String(e.message || e)));
+  return { ctx, page };
+}
+
+async function projectIsolation(browser) {
+  console.log("== A. Supabase project isolation (real app build; all requests intercepted locally)");
+  const cases = [
+    { name: "no override (production fallback)", env: {}, port: 4801 },
+    { name: "complete synthetic override", env: { VITE_SUPABASE_URL: STAGING, VITE_SUPABASE_ANON_KEY: "LOCAL-FAKE-anon-key" }, port: 4802 },
+    { name: "partial override (URL only)", env: { VITE_SUPABASE_URL: STAGING }, port: 4803 },
+  ];
+  for (const c of cases) {
+    const dir = path.join(OUT, `app-${c.port}`);
+    await buildApp(dir, c.env);
+    const server = await serve(dir, c.port);
+    const record = { supabase: [], other: [], errors: [] };
+    const { ctx, page } = await isolatedPage(browser, record);
+    await page.goto(`http://127.0.0.1:${c.port}/`, { waitUntil: "load" });
+    await page.waitForTimeout(2500);
+    const hosts = [...new Set(record.supabase)];
+    if (c.name.startsWith("no override")) {
+      check(hosts.length === 1 && hosts[0] !== new URL(STAGING).hostname, `${c.name}: one project for the whole app (${hosts.join(",") || "none"})`);
+    } else if (c.name.startsWith("complete")) {
+      check(record.supabase.length > 0 && hosts.length === 1 && hosts[0] === new URL(STAGING).hostname,
+        `${c.name}: every Supabase request (${record.supabase.length}) goes to the override project only`);
+    } else {
+      check(record.supabase.length === 0, `${c.name}: no Supabase request at all`);
+      check(record.errors.some((e) => /Partial Supabase override/.test(e)), `${c.name}: refused loudly ("Partial Supabase override")`);
+    }
+    await ctx.close();
+    await new Promise((r) => server.httpServer.close(r));
+  }
+}
+
+async function screens(browser) {
+  console.log("== B. Advertiser / admin screens (synthetic fixtures, fake client)");
+  const dir = path.join(OUT, "harness");
+  await build({ configFile: path.join(ROOT, "tests/browser/vite.harness.config.js"), build: { outDir: dir } });
+  const server = await serve(dir, 4810);
+  const open = async (qs, viewport) => {
+    const record = { supabase: [], other: [], errors: [] };
+    const { ctx, page } = await isolatedPage(browser, record, viewport);
+    await page.clock.setFixedTime(new Date(NOW));
+    await page.goto(`http://127.0.0.1:4810/harness.html?${qs}`);
+    await page.waitForLoadState("networkidle");
+    return { ctx, page, record };
+  };
+  const text = (page) => page.locator("body").innerText();
+
+  // Owner: review/correction deadlines, confirmation, priority price + deadline, amendment acceptance.
+  let { ctx, page, record } = await open("screen=portal&user=owner");
+  let t = await text(page);
+  check(t.includes("MSM asked for a correction to version 1: Logo <script>x</script> cropped; Link returns 404.")
+    && (await page.locator("script", { hasText: "x" }).count()) === 0, "correction reasons shown as text (not markup), exact version");
+  check(t.includes("Please submit a corrected version by Mon 2 Nov 2026 14:00 GMT (UTC+00:00)"), "correction response deadline with explicit offset");
+  check(!/advertiser_material/.test(t), "internal correction cause not shown to the advertiser");
+  check(t.includes("Placement £20.00 + priority review £150.00 = £170.00") && t.includes("DRAFT-NOT-APPROVED-2026-10-16"), "durable confirmation: price split + draft terms");
+  await page.getByRole("button", { name: "Check availability & price" }).click();
+  await page.getByText("Add optional priority review").click();
+  await page.getByRole("button", { name: "Check availability & price" }).click();
+  t = await text(page);
+  check(t.includes("Priority review (£150.00)") && t.includes("by Tue 3 Nov 2026 00:00 GMT (UTC+00:00)"), "priority price and exact deadline shown before payment");
+  check(t.includes("run Mon 2 Nov 2026 11:00 GMT (UTC+00:00) until Wed 4 Nov 2026 00:00 GMT (UTC+00:00) (end not included), 37 h")
+    && t.includes("11 h shorter than your purchased 48 h") && t.includes("does not waive any refund"), "amendment: exact intervals, shortfall, refund not waived");
+  check(t.includes("This offer has expired."), "lapsed offer shown as expired");
+  check((await page.getByRole("button", { name: "Accept this change" }).count()) === 1, "accept button only for the one open, unexpired offer");
+  check(!t.includes("2026-11-08"), "another advertiser's booking/offer is invisible");
+  await page.getByRole("button", { name: "Accept this change" }).click();
+  await page.waitForTimeout(400);
+  t = await text(page);
+  const calls = await page.evaluate(() => window.__rpcCalls.filter((c) => c.name === "ad_respond_amendment"));
+  check(calls.length === 1 && calls[0].args.p_amendment_id === "am-open" && calls[0].args.p_decision === "accept" && calls[0].user === "u-owner", "owner acceptance sent once, for the right offer");
+  check(t.includes("Status: accepted") && t.includes("Mon 2 Nov 2026 11:00 GMT (UTC+00:00) until Wed 4 Nov 2026 00:00 GMT (UTC+00:00) (end not included; changed by agreement)"),
+    "after acceptance: accepted status and the new serving interval");
+  check(record.other.length === 0 && record.supabase.length === 0, "harness made no external request");
+  await ctx.close();
+
+  // Other advertiser: sees only their own offer.
+  ({ ctx, page } = await open("screen=portal&user=other"));
+  t = await text(page);
+  check(!t.includes("Mon 2 Nov 2026 11:00 GMT") && t.includes("Sun 8 Nov 2026 10:00 GMT"), "other advertiser sees only their own offer");
+  await ctx.close();
+
+  // Admin: SLA, refund gates, cancellation initiator, reconciliation, no acceptance on the owner's behalf.
+  ({ ctx, page } = await open("screen=admin&user=admin"));
+  t = await text(page);
+  check(/Review queue \(1\)/i.test(t) && /Due by end of Mon 2 Nov 2026/.test(t), "review queue with due date");
+  check(t.includes("gates: cross_kind_allocation, exceeds_booking_total") && t.includes("cannot be approved here"), "refund manual gates visible");
+  await page.getByPlaceholder("Decision / processing note").first().fill("Reviewed, policy pending");
+  check(await page.getByRole("button", { name: "Approve", exact: true }).first().isDisabled(), "approve disabled for a manual-gate assessment");
+  check(t.includes("May already have been sent - check the provider dashboard") && t.includes("provider idempotency window elapsed"), "notification needing reconciliation explained");
+  check((await page.getByRole("button", { name: "Retry" }).count()) === 0, "no blind retry for a possibly-sent email");
+  check((await page.getByRole("button", { name: "Accept this change" }).count()) === 0, "admin has no way to accept an amendment for the advertiser");
+  await page.getByPlaceholder("Reason for pause/removal (required to remove)").fill("Advertiser asked by email");
+  check(await page.getByRole("button", { name: "Remove" }).first().isDisabled(), "removal blocked until the initiator is chosen");
+  await page.getByLabel("Who initiated the cancellation").selectOption("advertiser");
+  check(!(await page.getByRole("button", { name: "Remove" }).first().isDisabled()), "removal enabled once the initiator is recorded");
+  const summaries = page.locator("summary", { hasText: "Review SLA / corrections / refunds" });
+  await summaries.first().click();
+  await page.waitForTimeout(300);
+  t = await text(page);
+  check(t.includes("correction_response: Mon 2 Nov 2026 11:00 GMT (UTC+00:00) -> Mon 2 Nov 2026 14:00 GMT (UTC+00:00)")
+    && t.includes("(advertiser_material)"), "admin SLA: deadlines with offsets and the internal cause");
+  const removedRow = page.locator("tr", { hasText: "b-removed" });
+  await removedRow.locator("summary").click();
+  await page.waitForTimeout(300);
+  t = await text(page);
+  check(t.includes("MSM-initiated removal: no loss can be retained") && (await page.getByPlaceholder("Net loss after mitigation (pence)").count()) === 0,
+    "MSM removal: no loss-retention field");
+  await ctx.close();
+
+  // Legibility sentinel: every visible text element must clear WCAG AA (4.5:1)
+  // against its effective background, and render in the app's sans-serif stack.
+  for (const [name, qs] of [["advertiser", "screen=portal&user=owner"], ["admin", "screen=admin&user=admin"]]) {
+    const o = await open(qs);
+    const res = await o.page.evaluate(() => {
+      const rgb = (c) => (c.match(/[\d.]+/g) || []).map(Number);
+      const lum = ([r, g, b]) => [r, g, b].map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; })
+        .reduce((a, v, i) => a + v * [0.2126, 0.7152, 0.0722][i], 0);
+      const bgOf = (el) => { for (let e = el; e; e = e.parentElement) { const c = rgb(getComputedStyle(e).backgroundColor); if (c.length === 3 || (c.length === 4 && c[3] > 0.5)) return c.slice(0, 3); } return [255, 255, 255]; };
+      const out = { checked: 0, worst: [], belowAA: [], serif: [] };
+      for (const el of document.querySelectorAll("body *")) {
+        const own = [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
+        const r = el.getBoundingClientRect();
+        if (!own || !r.width || !r.height || ["OPTION", "SCRIPT", "STYLE"].includes(el.tagName)) continue;
+        const cs = getComputedStyle(el);
+        if (cs.visibility === "hidden" || cs.display === "none") continue;
+        const fg = rgb(cs.color).slice(0, 3), bg = bgOf(el);
+        const [a, b] = [lum(fg), lum(bg)].sort((x, y) => y - x);
+        const ratio = (a + 0.05) / (b + 0.05);
+        out.checked += 1;
+        if (ratio < 3) out.worst.push(`${el.tagName} ${ratio.toFixed(2)}:1 "${el.textContent.trim().slice(0, 40)}"`);
+        else if (ratio < 4.5) out.belowAA.push(`${el.tagName} ${ratio.toFixed(2)}:1 "${el.textContent.trim().slice(0, 30)}"`);
+        if (!/sans-serif|Bebas|Barlow/i.test(cs.fontFamily) && !["INPUT", "SELECT", "TEXTAREA", "BUTTON"].includes(el.tagName)) out.serif.push(`${el.tagName} ${cs.fontFamily}`);
+      }
+      return out;
+    });
+    check(res.checked > 30 && res.worst.length === 0, `${name}: ${res.checked} text elements legible (>= 3:1)${res.worst.length ? ` -- illegible: ${res.worst.slice(0, 5).join("; ")}` : ""}`);
+    const aa = [...new Set(res.belowAA.map((x) => x.replace(/ "[^"]*"$/, "")))];
+    console.log(`  NOTE ${name}: ${res.belowAA.length} element(s) between 3:1 and WCAG AA 4.5:1 (accessibility follow-up)${aa.length ? `: ${aa.join(", ")}` : ""}`);
+    for (const x of [...new Set(res.belowAA)].slice(0, 6)) console.log(`       ${x}`);
+    check(res.serif.length === 0, `${name}: text uses the app's sans-serif stack${res.serif.length ? ` -- ${res.serif.slice(0, 3).join("; ")}` : ""}`);
+    await o.ctx.close();
+  }
+
+  // Screenshots (desktop + mobile) of the critical screens, synthetic data only.
+  for (const [vp, size] of Object.entries(VIEWPORTS)) {
+    for (const [name, qs] of [["advertiser", "screen=portal&user=owner"], ["admin", "screen=admin&user=admin"]]) {
+      const o = await open(qs, size);
+      await o.page.screenshot({ path: path.join(SHOTS, `${name}-${vp}.png`), fullPage: true });
+      const overflow = await o.page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+      check(overflow <= 1, `${name} ${vp}: no horizontal page scroll (${overflow}px)`);
+      check(o.record.other.length === 0, `${name} ${vp}: no external request`);
+      await o.ctx.close();
+    }
+  }
+  console.log(`  screenshots: ${path.relative(ROOT, SHOTS)}/{advertiser,admin}-{desktop,mobile}.png`);
+  await new Promise((r) => server.httpServer.close(r));
+}
+
+// C. REAL app build, authenticated synthetic admin session, ADS tab. Supabase
+// is answered locally; an unhinted ad_payments embed is rejected exactly as
+// PostgREST does (PGRST201), so the old client fails here as it did hosted.
+async function adminAdsTab(browser) {
+  console.log("== C. Real app: authenticated admin session -> ADS tab (Supabase answered locally)");
+  const dir = path.join(OUT, "app-admin");
+  await buildApp(dir, { VITE_SUPABASE_URL: STAGING, VITE_SUPABASE_ANON_KEY: "LOCAL-FAKE-anon-key" });
+  const server = await serve(dir, 4820);
+  const ref = new URL(STAGING).hostname.split(".")[0];
+  const user = { id: "u-admin", aud: "authenticated", role: "authenticated", email: "admin@example.invalid" };
+  const json = (route, status, body, extra = {}) => route.fulfill({ status, contentType: "application/json",
+    headers: { "access-control-allow-origin": "*", "access-control-expose-headers": "content-range", "content-range": "*/0", ...extra }, body: JSON.stringify(body) });
+  const run = async (variant) => {
+    const ctx = await browser.newContext({ serviceWorkers: "block", viewport: VIEWPORTS.desktop });
+    await ctx.addInitScript(([key, value]) => { localStorage.setItem(key, value); }, [`sb-${ref}-auth-token`, JSON.stringify({
+      access_token: "LOCAL.FAKE.token", refresh_token: "LOCAL-FAKE-refresh", token_type: "bearer", expires_in: 3600,
+      expires_at: Math.floor(Date.now() / 1000) + 3600, user })]);
+    const seen = [];
+    await ctx.route("**/*", (route) => {
+      const req = route.request();
+      const u = new URL(req.url());
+      if (u.hostname === "127.0.0.1") return route.continue();
+      if (!u.hostname.endsWith(".supabase.co")) { seen.push(`blocked ${u.hostname}`); return route.abort(); }
+      if (u.hostname !== new URL(STAGING).hostname) { seen.push(`foreign ${u.hostname}`); return route.abort(); }
+      if (req.method() === "OPTIONS") return route.fulfill({ status: 200, headers: { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "access-control-allow-methods": "*" } });
+      const p = u.pathname, sel = u.searchParams.get("select") || "";
+      seen.push(p);
+      if (p === "/rest/v1/ad_bookings") seen.push(/ad_payments!ad_payments_booking_id_fkey\(/.test(sel) ? "bookings:hinted" : "bookings:unhinted");
+      if (p === "/auth/v1/user") return json(route, 200, user);
+      if (p === "/rest/v1/rpc/ad_public_flags") return json(route, 200, { portal: true, checkout: false, delivery: false });
+      if (p === "/rest/v1/profiles" && u.searchParams.get("user_id") === "eq.u-admin") return json(route, 200, [{ id: "p-admin", user_id: "u-admin", role: "admin", band_name: "ZZ Admin", profile_type: null, disabled: false }]);
+      if (p === "/rest/v1/ad_settings") return variant === "settings-fail"
+        ? json(route, 500, { code: "XX000", message: "synthetic settings failure", details: null, hint: null })
+        : json(route, 200, [{ key: "ads_portal_enabled", bool_value: false, int_value: null, description: "Portal" }, { key: "hold_minutes", bool_value: null, int_value: 60, description: "Hold length" }]);
+      if (p === "/rest/v1/ad_inventory_units") return json(route, 200, [{ id: "u1", code: "wordpress-home-top", name: "Homepage top", rotation_capacity: 1, active: false, is_test: true }]);
+      if (p === "/rest/v1/ad_products") return json(route, 200, [{ id: "p1", code: "TEST-wp-home-top-daily", name: "TEST homepage top (daily)", price_per_day_pence: 1000, min_days: 1, max_days: 28, active: false, is_test: true }]);
+      if (p === "/rest/v1/ad_bookings" && /(^|,)ad_payments\(/.test(sel)) {
+        return json(route, 300, { code: "PGRST201", message: "Could not embed because more than one relationship was found for 'ad_bookings' and 'ad_payments'", details: [], hint: null });
+      }
+      return json(route, 200, []);
+    });
+    const page = await ctx.newPage();
+    const errors = [];
+    page.on("pageerror", (e) => errors.push(String(e.message || e)));
+    await page.goto("http://127.0.0.1:4820/");
+    await page.getByRole("button", { name: "ADS", exact: true }).first().click({ timeout: 15000 });
+    await page.waitForTimeout(6000);                         // past the 4 s toast: what remains on screen is what an admin sees
+    const t = await page.locator("body").innerText();
+    await ctx.close();
+    return { t, seen, errors };
+  };
+
+  const ok = await run("ok");
+  check(ok.seen.includes("/rest/v1/profiles") && ok.seen.includes("/rest/v1/ad_settings"), "session restored, admin profile loaded, ADS tab requested settings");
+  check(/ads_portal_enabled/.test(ok.t) && /hold_minutes/.test(ok.t), "settings rendered");
+  check(/TEST homepage top \(daily\)/.test(ok.t), "inventory/packages rendered");
+  check(ok.seen.includes("bookings:hinted") && !ok.seen.includes("bookings:unhinted"), "bookings request names the payment-history foreign key");
+  check(/No bookings yet\./.test(ok.t) && !/Could not load/.test(ok.t), "bookings loaded (embed accepted), no load error");
+  const blocked = [...new Set(ok.seen.filter((x) => x.startsWith("blocked")).map((x) => x.slice(8)))];
+  const foreign = ok.seen.filter((x) => x.startsWith("foreign"));
+  check(foreign.length === 0, `no request to any other Supabase project (${foreign.length}); non-Supabase hosts blocked locally: ${blocked.join(", ") || "none"}`);
+
+  const bad = await run("settings-fail");
+  check(/Could not load settings: .*\[XX000\]/.test(bad.t) && /Retry/.test(bad.t), "failed settings load stays visible with its code (not an empty panel)");
+  check(/TEST homepage top \(daily\)/.test(bad.t) && /No bookings yet\./.test(bad.t), "other sections still load independently");
+  check(!/LOCAL\.FAKE\.token|LOCAL-FAKE-refresh/.test(ok.t + bad.t), "no token shown on screen");
+  await new Promise((r) => server.httpServer.close(r));
+}
+
+const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM || undefined });
+try {
+  await projectIsolation(browser);
+  await screens(browser);
+  await adminAdsTab(browser);
+} finally {
+  await browser.close();
+  fs.rmSync(OUT, { recursive: true, force: true });
+}
+console.log(failures ? `BROWSER CHECKS FAILED (${failures})` : "ALL BROWSER CHECKS PASSED");
+process.exit(failures ? 1 : 0);

@@ -5,8 +5,7 @@
 
 const { createClient } = require("@supabase/supabase-js");
 
-const SUPABASE_URL   = process.env.SUPABASE_URL   || "https://fmlaaiolqwknowhtdeue.supabase.co";
-const SUPABASE_ANON  = process.env.SUPABASE_ANON_KEY || "";
+const { resolveServerSupabase } = require("./_supabaseProject.js");
 const BASE_URL       = process.env.VITE_BASE_URL || "https://calendar.musicscenemagazine.co.uk";
 const FALLBACK_IMAGE = "https://musicscenemagazine.co.uk/wp-content/uploads/2026/06/msm-share.jpg";
 
@@ -96,7 +95,10 @@ module.exports = async function(req, res) {
 
   // Bot/crawler — fetch gig from Supabase and return OG HTML + JSON-LD
   try {
-    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON);
+    // Same project as the browser build; a mixed/partial override throws (handled below).
+    const project = resolveServerSupabase(process.env);
+    if (project.error) throw new Error(project.error);
+    const supabase = createClient(project.url, project.anonKey);
     const { data, error } = await supabase
       .from("gigs")
       .select("band_name,venue,city,date,time,end_date,genre,notes,description,tickets,poster_url,slug,band_profile_id,venue_id")
