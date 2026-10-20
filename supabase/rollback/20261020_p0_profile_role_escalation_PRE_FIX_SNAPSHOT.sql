@@ -3,6 +3,7 @@
 -- Project: msm-gig-calendar (fmlaaiolqwknowhtdeue), captured 2026-10-20 ~15:50 UTC
 -- Contains definitions and ACLs only. No secrets, no customer data.
 --
+-- Applied fix: migrations 20261020160458 + 20261020160559.
 -- WARNING: running this RE-OPENS the privilege-escalation vulnerability.
 -- Only use it if the fix breaks something critical and no forward fix is
 -- possible. Prefer a forward migration.

@@ -28,7 +28,9 @@
 --      TRUNCATE/REFERENCES/TRIGGER/MAINTAIN for anon/authenticated
 --      (TRUNCATE is not covered by RLS).
 --
--- Safe on a fresh database (no data assumptions beyond the guard below).
+-- Applied to production fmlaaiolqwknowhtdeue as 20261020160458; privilege
+-- revokes split into 20261020160559. Verified by
+-- supabase/tests/profiles_role_escalation_regression.sql (30/30 pass live).
 -- ============================================================================
 
 set lock_timeout = '3s';
@@ -117,18 +119,18 @@ begin
     return new;
   end if;
 
-  if new.id                  is distinct from old.id                  then v_changed := v_changed || 'id'; end if;
-  if new.user_id             is distinct from old.user_id             then v_changed := v_changed || 'user_id'; end if;
-  if new.role                is distinct from old.role                then v_changed := v_changed || 'role'; end if;
-  if new.profile_type        is distinct from old.profile_type        then v_changed := v_changed || 'profile_type'; end if;
-  if new.disabled            is distinct from old.disabled            then v_changed := v_changed || 'disabled'; end if;
-  if new.admin_created       is distinct from old.admin_created       then v_changed := v_changed || 'admin_created'; end if;
-  if new.claimed             is distinct from old.claimed             then v_changed := v_changed || 'claimed'; end if;
-  if new.claimed_at          is distinct from old.claimed_at          then v_changed := v_changed || 'claimed_at'; end if;
-  if new.claim_status        is distinct from old.claim_status        then v_changed := v_changed || 'claim_status'; end if;
-  if new.verified            is distinct from old.verified            then v_changed := v_changed || 'verified'; end if;
-  if new.verification_method is distinct from old.verification_method then v_changed := v_changed || 'verification_method'; end if;
-  if new.created_at          is distinct from old.created_at          then v_changed := v_changed || 'created_at'; end if;
+  if new.id                  is distinct from old.id                  then v_changed := array_append(v_changed, 'id'::text); end if;
+  if new.user_id             is distinct from old.user_id             then v_changed := array_append(v_changed, 'user_id'::text); end if;
+  if new.role                is distinct from old.role                then v_changed := array_append(v_changed, 'role'::text); end if;
+  if new.profile_type        is distinct from old.profile_type        then v_changed := array_append(v_changed, 'profile_type'::text); end if;
+  if new.disabled            is distinct from old.disabled            then v_changed := array_append(v_changed, 'disabled'::text); end if;
+  if new.admin_created       is distinct from old.admin_created       then v_changed := array_append(v_changed, 'admin_created'::text); end if;
+  if new.claimed             is distinct from old.claimed             then v_changed := array_append(v_changed, 'claimed'::text); end if;
+  if new.claimed_at          is distinct from old.claimed_at          then v_changed := array_append(v_changed, 'claimed_at'::text); end if;
+  if new.claim_status        is distinct from old.claim_status        then v_changed := array_append(v_changed, 'claim_status'::text); end if;
+  if new.verified            is distinct from old.verified            then v_changed := array_append(v_changed, 'verified'::text); end if;
+  if new.verification_method is distinct from old.verification_method then v_changed := array_append(v_changed, 'verification_method'::text); end if;
+  if new.created_at          is distinct from old.created_at          then v_changed := array_append(v_changed, 'created_at'::text); end if;
 
   if cardinality(v_changed) > 0 then
     raise exception 'Only MSM admins can change these profile fields: %', array_to_string(v_changed, ', ')
@@ -142,15 +144,7 @@ $function$;
 comment on function public.profiles_guard_protected_columns() is
   'Blocks non-admin anon/authenticated changes to authorisation, ownership and moderation columns on profiles (P0 fix 2026-10-20).';
 
-revoke all on function public.profiles_guard_protected_columns() from public, anon, authenticated;
-
 drop trigger if exists profiles_guard_protected_columns on public.profiles;
 create trigger profiles_guard_protected_columns
   before update on public.profiles
   for each row execute function public.profiles_guard_protected_columns();
-
--- 3. Remove unused / RLS-bypassing privileges --------------------------------
-revoke insert, update, delete, truncate, references, trigger, maintain
-  on table public.profiles from anon;
-revoke truncate, references, trigger, maintain
-  on table public.profiles from authenticated;

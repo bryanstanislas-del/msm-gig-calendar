@@ -6,7 +6,9 @@
 -- results as an exception so nothing persists. Safe to run against any
 -- environment (no pg_net, handle_new_user is a no-op, no mail sent).
 --
--- Usage: run as a single batch (optionally prefixed by a migration to test
+-- Usage: run as a single batch against a database that has migrations
+-- 20261020160458 + 20261020160559 applied. Expect FAILURES=0.
+-- Last run: production 2026-10-20 after apply, 30/30 pass.
 -- it uncommitted). Read the result block from the error message.
 -- The real trusted super_admin is used for the admin path by lookup only;
 -- its identity is never printed.
