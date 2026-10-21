@@ -150,7 +150,7 @@ module.exports = async function handler(req, res) {
     //    itself continues to be routed to api/gig.js, unchanged) ──
     if (type === "gig") {
       const { data, error } = await supabase
-        .from("gigs")
+        .from("public_gigs")
         .select("band_name, venue, city, date, time, genre, notes, poster_url, slug")
         .eq("slug", slug)
         .eq("status", "approved")
@@ -198,7 +198,7 @@ module.exports = async function handler(req, res) {
     // all. /artist/:slug must serve both.
     if (type === "band") {
       const { data, error } = await supabase
-        .from("profiles")
+        .from("public_profiles")
         .select("band_name, city, bio, photo_url, band_slug, profile_type, primary_genre, genre, website, facebook, instagram, twitter, tiktok_url, seo_title, seo_description")
         .eq("band_slug", slug)
         .in("profile_type", ["band", "solo_artist"])
@@ -244,7 +244,7 @@ module.exports = async function handler(req, res) {
     // ── VENUE ──
     if (type === "venue") {
       const { data, error } = await supabase
-        .from("venues")
+        .from("public_venues")
         .select("name, city, description, photo_url, slug, address, postcode, website, facebook, instagram, twitter, seo_title, seo_description")
         .eq("slug", slug)
         .single();
@@ -294,7 +294,7 @@ module.exports = async function handler(req, res) {
     // ── FESTIVAL ──
     if (type === "festival") {
       const { data, error } = await supabase
-        .from("profiles")
+        .from("public_profiles")
         .select("band_name, city, postcode, bio, photo_url, band_slug, festival_start_date, festival_end_date, website, facebook, instagram, twitter, tiktok_url, seo_title, seo_description")
         .eq("band_slug", slug)
         .eq("profile_type", "festival")

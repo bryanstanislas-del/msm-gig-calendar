@@ -47,20 +47,20 @@ module.exports = async function handler(req, res) {
     // or narrower, so this sitemap can never claim a URL is public when
     // RLS itself would actually hide it (or vice versa).
     const [artists, festivals, venues, gigs] = await Promise.all([
-      supabase.from("profiles")
+      supabase.from("public_profiles")
         .select("band_slug, updated_at")
         .in("profile_type", ["band", "solo_artist"])
         .eq("disabled", false)
         .not("band_slug", "is", null),
-      supabase.from("profiles")
+      supabase.from("public_profiles")
         .select("band_slug, updated_at")
         .eq("profile_type", "festival")
         .eq("disabled", false)
         .not("band_slug", "is", null),
-      supabase.from("venues")
+      supabase.from("public_venues")
         .select("slug, updated_at")
         .not("slug", "is", null),
-      supabase.from("gigs")
+      supabase.from("public_gigs")
         .select("slug, updated_at")
         .eq("status", "approved")
         .not("slug", "is", null),

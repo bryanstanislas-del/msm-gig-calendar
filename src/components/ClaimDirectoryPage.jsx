@@ -50,7 +50,7 @@ async function fetchProfilesPage({ page, pageSize, term }) {
   const from = page * pageSize;
   const to = from + pageSize - 1;
   let query = supabase
-    .from('profiles')
+    .from('public_profiles')
     .select('id, band_name, city, photo_url, band_slug, profile_type, claim_status', { count: 'exact' })
     .neq('claim_status', 'claimed')
     .or('disabled.is.null,disabled.eq.false')
@@ -66,7 +66,7 @@ async function fetchVenuesPage({ page, pageSize, term }) {
   const from = page * pageSize;
   const to = from + pageSize - 1;
   let query = supabase
-    .from('venues')
+    .from('public_venues')
     .select('id, name, city, photo_url, slug, claim_status', { count: 'exact' })
     .neq('claim_status', 'claimed')
     .order('name')

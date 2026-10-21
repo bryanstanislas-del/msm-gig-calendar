@@ -302,7 +302,7 @@ export const DB = {
   async getBandBySlug(slug) {
     if (USE_MOCK) return null;
     const { data, error } = await supabase
-      .from("profiles")
+      .from("public_profiles")
       .select("*")
       .eq("band_slug", slug);
     if (error || !data || data.length === 0) return null;
@@ -335,6 +335,7 @@ export const DB = {
       "apple_music_url","bandcamp_url","soundcloud_url","booking_email",
       "management_contact","press_contact","phone",
       "seo_title","seo_description","seo_search_phrases",
+      "public_contacts_consent",
     ];
     const safeUpdates = {};
     for (const key of allowedFields) {
@@ -522,7 +523,7 @@ export const DB = {
   async getGigsByBand(bandName, bandProfileId) {
     if (USE_MOCK) return MOCK_GIGS.filter(g => g.band_name === bandName && g.status === "approved");
     // Prefer ID-based lookup, fall back to name match
-    let query = supabase.from("gigs").select("*").eq("status","approved").order("date", { ascending: true });
+    let query = supabase.from("public_gigs").select("*").eq("status","approved").order("date", { ascending: true });
     if (bandProfileId) {
       query = query.eq("band_profile_id", bandProfileId);
     } else {
@@ -539,7 +540,7 @@ export const DB = {
     ];
     // FIX 1: Filter on profile_type='band' not role='band'
     // role is an auth/permissions field; profile_type is the entity type discriminator
-    let query = supabase.from("profiles").select("*").eq("profile_type","band").order("band_name");
+    let query = supabase.from(includeDisabled ? "profiles" : "public_profiles").select("*").eq("profile_type","band").order("band_name");
     if (!includeDisabled) query = query.or("disabled.is.null,disabled.eq.false");
     const { data, error } = await query;
     if (error) throw new Error(error.message);
@@ -549,7 +550,7 @@ export const DB = {
   // FIX 3: New method to fetch festival profiles
   async getFestivals(includeDisabled = false) {
     if (USE_MOCK) return [];
-    let query = supabase.from("profiles").select("*").eq("profile_type","festival").order("band_name");
+    let query = supabase.from(includeDisabled ? "profiles" : "public_profiles").select("*").eq("profile_type","festival").order("band_name");
     if (!includeDisabled) query = query.or("disabled.is.null,disabled.eq.false");
     const { data, error } = await query;
     if (error) throw new Error(error.message);
@@ -563,7 +564,7 @@ export const DB = {
   async getArtistProfiles() {
     if (USE_MOCK) return [];
     const { data, error } = await supabase
-      .from("profiles")
+      .from("public_profiles")
       .select("*")
       .in("profile_type", ["band", "solo_artist"])
       .or("disabled.is.null,disabled.eq.false")
@@ -586,7 +587,7 @@ export const DB = {
   async getApprovedGigs() {
     if (USE_MOCK) return MOCK_GIGS.filter(g => g.status === "approved");
     return fetchAllPages((from, to) =>
-      supabase.from("gigs").select("*").eq("status","approved")
+      supabase.from("public_gigs").select("*").eq("status","approved")
         .order("date", { ascending: true }).order("id", { ascending: true })
         .range(from, to)
     );
@@ -625,7 +626,9 @@ export const DB = {
       };
     }
     const countFor = async (status) => {
-      let q = supabase.from("gigs").select("id", { count: "exact", head: true });
+      // Approved = public count (works for everyone); other statuses are
+      // admin-only and read the full table.
+      let q = supabase.from(status === "approved" ? "public_gigs" : "gigs").select("id", { count: "exact", head: true });
       if (status) q = q.eq("status", status);
       const { count, error } = await q;
       if (error) throw new Error(error.message);
@@ -672,10 +675,12 @@ export const DB = {
   // `id` tiebreaks alongside `name` (not unique on its own -- two venues
   // can legitimately share a name in different cities) for stable,
   // non-duplicating, non-skipping pagination.
-  async getVenues() {
+  // includePrivate: admin callers only (full venue rows for editing,
+  // backups and import matching). Everyone else reads public_venues.
+  async getVenues(includePrivate = false) {
     if (USE_MOCK) return [];
     return fetchAllPages((from, to) =>
-      supabase.from("venues").select("*")
+      supabase.from(includePrivate ? "venues" : "public_venues").select("*")
         .order("name", { ascending: true }).order("id", { ascending: true })
         .range(from, to)
     );
@@ -699,7 +704,7 @@ export const DB = {
   async getGigBySlug(slug) {
     if (USE_MOCK) return null;
     const { data, error } = await supabase
-      .from("gigs")
+      .from("public_gigs")
       .select("*")
       .eq("slug", slug)
       .eq("status", "approved");
@@ -711,13 +716,13 @@ export const DB = {
     if (USE_MOCK) return { prev: null, next: null };
     const dt = `${date}T${time||"00:00"}`;
     const [{ data: prev }, { data: next }] = await Promise.all([
-      supabase.from("gigs").select("id,slug,band_name,venue,city,date,time,genre")
+      supabase.from("public_gigs").select("id,slug,band_name,venue,city,date,time,genre")
         .eq("status","approved")
         .or(`date.lt.${date},and(date.eq.${date},time.lt.${time||"00:00"})`)
         .neq("id", currentId)
         .order("date", { ascending:false }).order("time", { ascending:false })
         .limit(1),
-      supabase.from("gigs").select("id,slug,band_name,venue,city,date,time,genre")
+      supabase.from("public_gigs").select("id,slug,band_name,venue,city,date,time,genre")
         .eq("status","approved")
         .or(`date.gt.${date},and(date.eq.${date},time.gt.${time||"00:00"})`)
         .neq("id", currentId)
@@ -730,7 +735,7 @@ export const DB = {
   async getVenueBySlug(slug) {
     if (USE_MOCK) return null;
     const { data, error } = await supabase
-      .from("venues")
+      .from("public_venues")
       .select("*")
       .eq("slug", slug);
     if (error || !data || data.length === 0) return null;
@@ -784,7 +789,7 @@ export const DB = {
   async getGigsByVenue(venueId) {
     if (USE_MOCK) return [];
     const { data, error } = await supabase
-      .from("gigs")
+      .from("public_gigs")
       .select("*")
       .eq("venue_id", venueId)
       .eq("status", "approved")
@@ -801,7 +806,7 @@ export const DB = {
   async getGigsByFestival(festivalProfileId) {
     if (USE_MOCK) return [];
     const { data, error } = await supabase
-      .from("gigs")
+      .from("public_gigs")
       .select("*")
       .eq("festival_profile_id", festivalProfileId)
       .eq("status", "approved")
@@ -997,16 +1002,31 @@ export const DB = {
   // own group by profile_type, same grouping "My Following" needs.
   async getUserFollows(userId) {
     if (USE_MOCK || !userId) return { artists: [], festivals: [], venues: [] };
-    const [bandRes, venueRes] = await Promise.all([
+    const [followBandRes, followVenueRes] = await Promise.all([
       supabase.from("band_follows")
-        .select("id, created_at, profiles:band_profile_id(id, band_name, band_slug, profile_type)")
+        .select("id, created_at, band_profile_id")
         .eq("user_id", userId).order("created_at", { ascending:false }),
       supabase.from("venue_follows")
-        .select("id, created_at, venues:venue_id(id, name, slug)")
+        .select("id, created_at, venue_id")
         .eq("user_id", userId).order("created_at", { ascending:false }),
     ]);
-    if (bandRes.error)  throw new Error(bandRes.error.message);
-    if (venueRes.error) throw new Error(venueRes.error.message);
+    if (followBandRes.error)  throw new Error(followBandRes.error.message);
+    if (followVenueRes.error) throw new Error(followVenueRes.error.message);
+
+    // Followed entities are resolved through the public read models, so a
+    // follower only ever receives public listing fields.
+    const bandIds  = [...new Set((followBandRes.data  || []).map(r => r.band_profile_id).filter(Boolean))];
+    const venueIds = [...new Set((followVenueRes.data || []).map(r => r.venue_id).filter(Boolean))];
+    const [profRes, venRes] = await Promise.all([
+      bandIds.length  ? supabase.from("public_profiles").select("id, band_name, band_slug, profile_type").in("id", bandIds)  : Promise.resolve({ data: [] }),
+      venueIds.length ? supabase.from("public_venues").select("id, name, slug").in("id", venueIds) : Promise.resolve({ data: [] }),
+    ]);
+    if (profRes.error) throw new Error(profRes.error.message);
+    if (venRes.error)  throw new Error(venRes.error.message);
+    const profById  = new Map((profRes.data || []).map(p => [p.id, p]));
+    const venueById = new Map((venRes.data  || []).map(v => [v.id, v]));
+    const bandRes  = { data: (followBandRes.data  || []).map(r => ({ id: r.id, created_at: r.created_at, profiles: profById.get(r.band_profile_id) || null })) };
+    const venueRes = { data: (followVenueRes.data || []).map(r => ({ id: r.id, created_at: r.created_at, venues: venueById.get(r.venue_id) || null })) };
 
     const artists = [], festivals = [];
     (bandRes.data || []).forEach(row => {
@@ -1071,8 +1091,7 @@ export const DB = {
       .select(`
         id, read_state, created_at,
         notification_events:notification_event_id (
-          event_type, entity_type, entity_id, gig_id, metadata,
-          gigs:gig_id ( slug )
+          event_type, entity_type, entity_id, gig_id, metadata
         )
       `)
       .eq("recipient_user_id", userId)
@@ -1083,6 +1102,17 @@ export const DB = {
 
     const rows = (data || []).filter(row => row.notification_events);
 
+    // Gig links resolve through public_gigs (approved gigs, public fields).
+    const gigIds = [...new Set(rows.map(r => r.notification_events.gig_id).filter(Boolean))];
+    if (gigIds.length) {
+      const { data: gigRows } = await supabase.from("public_gigs").select("id, slug").in("id", gigIds);
+      const slugById = new Map((gigRows || []).map(g => [g.id, g.slug]));
+      rows.forEach(r => {
+        const ev = r.notification_events;
+        ev.gigs = ev.gig_id && slugById.get(ev.gig_id) ? { slug: slugById.get(ev.gig_id) } : null;
+      });
+    }
+
     const festivalIds = [...new Set(
       rows
         .filter(r => r.notification_events.entity_type === "festival" && !r.notification_events.gigs?.slug)
@@ -1090,7 +1120,7 @@ export const DB = {
     )];
     let festivalSlugs = {};
     if (festivalIds.length) {
-      const { data: profs } = await supabase.from("profiles").select("id, band_slug").in("id", festivalIds);
+      const { data: profs } = await supabase.from("public_profiles").select("id, band_slug").in("id", festivalIds);
       (profs || []).forEach(p => { festivalSlugs[p.id] = p.band_slug; });
     }
 
@@ -1236,7 +1266,7 @@ function VenueLink({ gig, venues=[] }) {
           onMouseLeave={e=>e.currentTarget.style.color=C.muted}
         >{gig.venue}</Link> · {gig.city}
         {/* STAGE 1: surface claim status inline; the actual claim action lives on the venue's profile page */}
-        {venue.admin_created && venue.claim_status !== "claimed" && (
+        {(venue.claimable ?? (venue.admin_created && venue.claim_status !== "claimed")) && (
           <Link to={`/venue/${venue.slug}`} style={{ textDecoration:"none" }}>
             <ClaimStatusBadge claimStatus={venue.claim_status} entityType="venue" />
           </Link>
@@ -2974,7 +3004,7 @@ function AdminPanel({ allGigs, gigCounts, onRefresh, bands=[] }) {
       // Re-link band_profile_id if band_name changed
       let extra = {};
       if (editForm.band_name !== editing.band_name) {
-        const { data: bp } = await supabase.from("profiles").select("id").ilike("band_name", editForm.band_name.trim()).limit(1);
+        const { data: bp } = await supabase.from("public_profiles").select("id").ilike("band_name", editForm.band_name.trim()).limit(1);
         extra.band_profile_id = bp?.[0]?.id || null;
       }
       // Recomputed from the picker's actual latest state, same submit-time
@@ -3559,7 +3589,7 @@ function GigModal({ gig, onClose, bands=[], venues=[] }) {
           </Link>
         )}
         {/* STAGE 1: claim status/link -- action itself lives on the profile page */}
-        {bandProfile?.band_slug && bandProfile.admin_created && bandProfile.claim_status !== "claimed" && (
+        {bandProfile?.band_slug && (bandProfile.claimable ?? (bandProfile.admin_created && bandProfile.claim_status !== "claimed")) && (
           <div style={{ marginTop:6 }}>
             <Link to={
               bandProfile.profile_type === "festival" ? `/festival/${bandProfile.band_slug}`
@@ -4109,7 +4139,12 @@ function AdminBands({ bands, onRefresh }) {
   };
 
   // ── Open edit ──
-  const openEdit = (band) => {
+  // Always load the full stored row first: list state may hold public
+  // listing rows, and saving a form built from those would blank stored
+  // private fields (booking/phone etc.).
+  const openEdit = async (listBand) => {
+    const { data: full } = await supabase.from("profiles").select("*").eq("id", listBand.id).maybeSingle();
+    const band = full || listBand;
     setSelected(band);
     setEditForm({
       band_name:           band.band_name           || "",
@@ -4594,6 +4629,7 @@ function EditProfile({ user, profile, onSaved }) {
     management_contact:  profile?.management_contact  || "",
     press_contact:       profile?.press_contact       || "",
     phone:               profile?.phone               || "",
+    public_contacts_consent: profile?.public_contacts_consent === true,
     seo_title:           profile?.seo_title            || "",
     seo_description:     profile?.seo_description       || "",
     seo_search_phrases:  profile?.seo_search_phrases    || "",
@@ -4786,6 +4822,17 @@ function EditProfile({ user, profile, onSaved }) {
           <Input label="CONTACT NUMBER"      type="tel"   value={form.phone}               onChange={set("phone")}               placeholder="+44..." />
           <Input label="MANAGEMENT CONTACT"  value={form.management_contact} onChange={set("management_contact")} placeholder="Name / email / phone" />
           <Input label="PRESS CONTACT"       value={form.press_contact}      onChange={set("press_contact")}      placeholder="Name / email / phone" />
+          <label style={{ gridColumn:"1/-1", display:"flex", gap:10, alignItems:"flex-start", fontSize:14, color:C.white, cursor:"pointer", marginTop:4 }}>
+            <input type="checkbox" checked={!!form.public_contacts_consent}
+              onChange={e => setForm(f => ({ ...f, public_contacts_consent: e.target.checked }))}
+              style={{ marginTop:3 }} />
+            <span>
+              Show my booking, management and press contacts on my public profile.
+              <span style={{ display:"block", fontSize:12, color:C.muted, marginTop:4 }}>
+                Off by default. Your contact number is never shown publicly.
+              </span>
+            </span>
+          </label>
 
         </div>
 
@@ -5002,13 +5049,13 @@ function GigDetailPage() {
       // and this doesn't need to wait for the band/venue fetch above.
       const [bandData, venueData, festivalData, pn, aw] = await Promise.all([
         g.band_profile_id
-          ? supabase.from("profiles").select("*").eq("id", g.band_profile_id).then(r => r.data?.[0] || null)
+          ? supabase.from("public_profiles").select("*").eq("id", g.band_profile_id).then(r => r.data?.[0] || null)
           : Promise.resolve(null),
         g.venue_id
-          ? supabase.from("venues").select("*").eq("id", g.venue_id).then(r => r.data?.[0] || null)
+          ? supabase.from("public_venues").select("*").eq("id", g.venue_id).then(r => r.data?.[0] || null)
           : Promise.resolve(null),
         g.festival_profile_id
-          ? supabase.from("profiles").select("*").eq("id", g.festival_profile_id).then(r => r.data?.[0] || null)
+          ? supabase.from("public_profiles").select("*").eq("id", g.festival_profile_id).then(r => r.data?.[0] || null)
           : Promise.resolve(null),
         DB.getPrevNextGigs(g.date, g.time, g.id),
         DB.getActiveAwards({ profileId: g.band_profile_id || null, gigId: g.id }),
@@ -7885,7 +7932,7 @@ function ImportReviewDashboard({ parseResult }) {
     setErrorMsg("");
     try {
       const [venues, artistProfiles, gigs] = await Promise.all([
-        DB.getVenues(),
+        DB.getVenues(true),
         DB.getArtistProfiles(),
         DB.getAllGigs(),
       ]);
@@ -8544,7 +8591,11 @@ function AdminVenues({ venues, allGigs, onRefresh, filterMode="all", onFilterMod
            (v.city||"").toLowerCase().includes(q);
   }).sort((a,b) => (gigCounts[b.id]||0) - (gigCounts[a.id]||0));
 
-  const openEdit = (venue) => {
+  // Full stored row first (see AdminBands.openEdit): list state may hold
+  // public listing rows without contact fields.
+  const openEdit = async (listVenue) => {
+    const { data: full } = await supabase.from("venues").select("*").eq("id", listVenue.id).maybeSingle();
+    const venue = full || listVenue;
     setSelected(venue);
     setEditForm({
       name:          venue.name          || "",
@@ -9788,13 +9839,17 @@ function MainApp() {
 
   useEffect(() => { refreshUnreadCount(); }, [refreshUnreadCount]);
 
+  // Set once admin data loads; public listing rows must never overwrite the
+  // full admin rows (admin edit forms and backups depend on complete data).
+  const adminDataRef = useRef(false);
+
   // Load public gigs and bands on mount
   useEffect(() => {
     DB.getApprovedGigs().then(data=>{ setGigs(data); setLoading(false); });
     DB.getGigCounts().then(setGigCounts);
-    DB.getBands().then(setBands);
-    DB.getFestivals().then(setFestivals); // FIX 3: load festival profiles
-    DB.getVenues().then(setVenues);
+    DB.getBands().then(d => { if (!adminDataRef.current) setBands(d); });
+    DB.getFestivals().then(d => { if (!adminDataRef.current) setFestivals(d); }); // FIX 3: load festival profiles
+    DB.getVenues().then(d => { if (!adminDataRef.current) setVenues(d); });
     // Editorial Promo + Future Advertising Positions, Phase 1: entirely
     // independent of the gigs fetch above -- never awaited by it, and a
     // failure here (network error, RLS misconfiguration, etc.) degrades
@@ -9806,10 +9861,11 @@ function MainApp() {
   // Load all gigs when admin logs in
   useEffect(() => {
     if (isAdmin) {
+      adminDataRef.current = true;
       DB.getAllGigs().then(setAllGigs);
       DB.getBands(true).then(setBands);
       DB.getFestivals(true).then(setFestivals); // FIX 3: load all festival profiles for admin
-      DB.getVenues().then(setVenues);
+      DB.getVenues(true).then(setVenues);
       DB.getClaimRequests().then(setClaims); // PHASE 4
     }
   }, [isAdmin, auth]);
@@ -9824,7 +9880,7 @@ function MainApp() {
     setBands(freshBands);
     const freshFestivals = await DB.getFestivals(true); // FIX 3
     setFestivals(freshFestivals);
-    const freshVenues = await DB.getVenues();
+    const freshVenues = await DB.getVenues(true);
     setVenues(freshVenues);
     const freshClaims = await DB.getClaimRequests(); // PHASE 4
     setClaims(freshClaims);
