@@ -55,7 +55,8 @@ describe("DB.getApprovedGigs (paginated)", () => {
 
     expect(result.length).toBe(1250);
     expect(calls.length).toBe(2); // 1000 + 250, second page < pageSize terminates
-    expect(calls[0].table).toBe("gigs");
+    // Public calendar reads the public read model, never the base table.
+    expect(calls[0].table).toBe("public_gigs");
     expect(calls[0].eqs).toEqual([["status", "approved"]]);
     // Deterministic secondary ordering: date is not unique across 1,610+
     // gigs, so `id` must ride alongside it for pagination to never
@@ -163,6 +164,22 @@ describe("DB.getVenues (paginated)", () => {
 
     expect(result.length).toBe(266);
     expect(calls.length).toBe(1);
+    // Public callers read the public read model.
+    expect(calls[0].table).toBe("public_venues");
+  });
+
+  it("A2. admin callers (includePrivate) read the full venues table", async () => {
+    const all = Array.from({ length: 3 }, (_, i) => ({ id: `v${i}`, name: `Venue ${i}` }));
+    const calls = [];
+    tableImpl = (table) => makeChain(table, (state) => {
+      calls.push(state);
+      const [from, to] = state.range;
+      return { data: all.slice(from, to + 1), error: null };
+    });
+
+    const result = await DB.getVenues(true);
+
+    expect(result.length).toBe(3);
     expect(calls[0].table).toBe("venues");
   });
 
@@ -273,6 +290,12 @@ describe("DB.getGigCounts (true database counts, not array length)", () => {
       expect(call.selectArgs[1]).toEqual({ count: "exact", head: true });
       expect(call.range).toBeNull(); // count queries never page -- head:true never returns rows
     }
+    // Public "GIGS LIVE" (approved) counts the public read model; the
+    // admin-only totals count the full table.
+    const tableFor = (st) => calls.find(c => (c.eqs.find(([k]) => k === "status") || [])[1] === st)?.table;
+    expect(tableFor("approved")).toBe("public_gigs");
+    expect(tableFor("pending")).toBe("gigs");
+    expect(tableFor("rejected")).toBe("gigs");
   });
 
   it("propagates an error rather than returning a wrong/zero count", async () => {

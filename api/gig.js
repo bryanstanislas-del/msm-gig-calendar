@@ -98,7 +98,7 @@ module.exports = async function(req, res) {
   try {
     const supabase = createClient(SUPABASE_URL, SUPABASE_ANON);
     const { data, error } = await supabase
-      .from("gigs")
+      .from("public_gigs")
       .select("band_name,venue,city,date,time,end_date,genre,notes,description,tickets,poster_url,slug,band_profile_id,venue_id")
       .eq("slug", slug)
       .eq("status", "approved")
@@ -121,10 +121,10 @@ module.exports = async function(req, res) {
     // entirely, not fabricated, when there's no linked profile/venue.
     const [artistRow, venueRow] = await Promise.all([
       data.band_profile_id
-        ? supabase.from("profiles").select("band_slug").eq("id", data.band_profile_id).single().then(r => r.data).catch(() => null)
+        ? supabase.from("public_profiles").select("band_slug").eq("id", data.band_profile_id).single().then(r => r.data).catch(() => null)
         : Promise.resolve(null),
       data.venue_id
-        ? supabase.from("venues").select("slug").eq("id", data.venue_id).single().then(r => r.data).catch(() => null)
+        ? supabase.from("public_venues").select("slug").eq("id", data.venue_id).single().then(r => r.data).catch(() => null)
         : Promise.resolve(null),
     ]);
 
