@@ -282,7 +282,7 @@ describe("DB.getGigCounts (true database counts, not array length)", () => {
       return { count: totals[key], error: null };
     });
 
-    const result = await DB.getGigCounts();
+    const result = await DB.getGigCounts(true);
 
     expect(result).toEqual(totals);
     expect(calls.length).toBe(4);
@@ -298,8 +298,24 @@ describe("DB.getGigCounts (true database counts, not array length)", () => {
     expect(tableFor("rejected")).toBe("gigs");
   });
 
+  it("public callers count only the public read model (approved)", async () => {
+    const calls = [];
+    tableImpl = (table) => makeChain(table, (state) => {
+      calls.push(state);
+      return { count: 1610, error: null };
+    });
+
+    const result = await DB.getGigCounts();
+
+    expect(calls.length).toBe(1);
+    expect(calls[0].table).toBe("public_gigs");
+    expect(calls[0].selectArgs[1]).toEqual({ count: "exact", head: true });
+    expect(result).toEqual({ total: 1610, approved: 1610, pending: null, rejected: null });
+  });
+
   it("propagates an error rather than returning a wrong/zero count", async () => {
     tableImpl = (table) => makeChain(table, () => ({ count: null, error: { message: "count query failed" } }));
+    await expect(DB.getGigCounts(true)).rejects.toThrow("count query failed");
     await expect(DB.getGigCounts()).rejects.toThrow("count query failed");
   });
 });
