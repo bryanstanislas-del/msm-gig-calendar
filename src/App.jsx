@@ -615,7 +615,10 @@ export const DB = {
   // same `{ count:"exact", head:true }` pattern already established
   // elsewhere in this file (see the band-delete gig-count check), with
   // `head:true` so no row data is transferred just to produce a number.
-  async getGigCounts() {
+  // Public callers get the live (approved) count only, from the public read
+  // model. includePrivate (admin only) adds total/pending/rejected from the
+  // full table. Errors always propagate rather than returning a wrong count.
+  async getGigCounts(includePrivate = false) {
     if (USE_MOCK) {
       const all = MOCK_GIGS;
       return {
@@ -634,6 +637,10 @@ export const DB = {
       if (error) throw new Error(error.message);
       return count || 0;
     };
+    if (!includePrivate) {
+      const approved = await countFor("approved");
+      return { total: approved, approved, pending: null, rejected: null };
+    }
     const [total, approved, pending, rejected] = await Promise.all([
       countFor(null), countFor("approved"), countFor("pending"), countFor("rejected"),
     ]);
@@ -9846,7 +9853,7 @@ function MainApp() {
   // Load public gigs and bands on mount
   useEffect(() => {
     DB.getApprovedGigs().then(data=>{ setGigs(data); setLoading(false); });
-    DB.getGigCounts().then(setGigCounts);
+    DB.getGigCounts().then(d => { if (!adminDataRef.current) setGigCounts(d); });
     DB.getBands().then(d => { if (!adminDataRef.current) setBands(d); });
     DB.getFestivals().then(d => { if (!adminDataRef.current) setFestivals(d); }); // FIX 3: load festival profiles
     DB.getVenues().then(d => { if (!adminDataRef.current) setVenues(d); });
@@ -9863,6 +9870,7 @@ function MainApp() {
     if (isAdmin) {
       adminDataRef.current = true;
       DB.getAllGigs().then(setAllGigs);
+      DB.getGigCounts(true).then(setGigCounts);
       DB.getBands(true).then(setBands);
       DB.getFestivals(true).then(setFestivals); // FIX 3: load all festival profiles for admin
       DB.getVenues(true).then(setVenues);
@@ -9875,7 +9883,7 @@ function MainApp() {
     setAllGigs(fresh);
     const approvedFresh = fresh.filter(g=>g.status==="approved");
     setGigs(approvedFresh);
-    DB.getGigCounts().then(setGigCounts);
+    DB.getGigCounts(true).then(setGigCounts);
     const freshBands = await DB.getBands(true);
     setBands(freshBands);
     const freshFestivals = await DB.getFestivals(true); // FIX 3
