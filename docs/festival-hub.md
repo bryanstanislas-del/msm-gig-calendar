@@ -139,6 +139,52 @@ opened directly at `/festival-hub/`. Before any production launch this needs
 its own decision (e.g. ship the service-worker change first and let it
 propagate, or serve the hub from a separate origin).
 
+### Standalone preview (avoids, does not fix, the stale-worker problem)
+
+To review the hub on an origin that has **never** served the calendar, a
+separate hub-only build is deployed from the `feature/festival-hub-standalone`
+branch as a Vercel **Preview** (never production, never merged, no PR).
+
+**This does not fix the calendar origin.** A cached pre-hub service worker
+on calendar.musicscenemagazine.co.uk (or any origin that served the
+calendar) cannot be fixed retroactively by page code: it answers
+navigations from its cache before any new page code runs. Only the
+worker's own update or the user clearing site data changes that. The
+standalone preview simply uses a fresh origin with no calendar worker.
+
+How it is built and served:
+
+| Piece | What it does |
+| --- | --- |
+| `vite.festival-hub-standalone.config.js` | Builds only `festival-hub/index.html` into `dist-hub-standalone/`: no PWA plugin, no service worker or manifest, no `public/` copy (only the logo and favicon), no source maps. Records the full module graph to `dist-hub-standalone.modules.json` (outside the output). |
+| `scripts/standalone/verify-output.mjs` | Runs after that build (`npm run build:hub-standalone`) and fails it unless the output is only the hub HTML, its JS/CSS, the logo and favicon; the module graph is only `src/festivalHub/*`, React/ReactDOM/scheduler and Vite helpers; content has no backend host/ref/JWT/secret names, service worker, manifest, API path, source map or calendar code; the HTML is noindex with a single external module script. On Vercel (`VERCEL=1`) it also fails if `api/` or `supabase/` exist in the checkout. |
+| `scripts/standalone/vercel.json` (template) | On the deploy branch it becomes the root `vercel.json`: build command `npm run build:hub-standalone`, output `dist-hub-standalone`, rewrites **only** `/`, `/festival-hub`, `/festival-hub/` to the hub (no catch-all, so every other path is 404), and headers on every response: strict CSP (`default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self'; connect-src 'none'; worker-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'` …), `X-Robots-Tag: noindex, nofollow`, `nosniff`, referrer and permissions policies. `'unsafe-inline'` styles are needed because the hub's CSS is an inline `<style>` and React style attributes. |
+| `scripts/standalone/.vercelignore` (template) | On the deploy branch it becomes the root `.vercelignore`: ignore everything, re-include only the hub build inputs (package files, `vercel.json`, the standalone Vite config, `festival-hub/`, `src/festivalHub/` without tests, the logo, favicon and `scripts/standalone/`). `api/` and `supabase/` are never uploaded, so no serverless functions can be detected; if they ever were, the verifier fails the build so nothing deploys. |
+
+What remains true: the project's `SUPABASE_*` environment variables are
+still present in the Vercel build environment (removing them would be a
+project-settings change). The standalone build never reads them, Vite only
+exposes `VITE_*` variables, and the verifier proves no key or backend host
+is in the output. The calendar's own build (`npm run build`) and the
+`feature/festival-hub` preview are unchanged (verified byte-identical).
+
+Tests: `scripts/standalone/verify-output.test.js` (verifier rejects SW,
+manifest, source maps, calendar bundle/App/backend client in the graph,
+keys, API paths, inline scripts, missing noindex; template rules) and
+`npm run test:e2e:hub-standalone`, which simulates the Vercel upload from
+`.vercelignore`, builds from only those files with `VERCEL=1`, serves them
+with the template's routes and headers, and checks routing, 404s, headers,
+fresh rendering at `/` and `/festival-hub(/)`, no service worker (a forced
+registration is blocked by CSP), no backend/API requests (forced fetches
+are blocked by CSP), local saves and real/demo separation.
+
+**Syncing the deploy branch (no merges):** the deploy branch is a
+`feature/festival-hub` commit plus one config commit. To update it, replay
+new `feature/festival-hub` commits onto it with `git cherry-pick <sha>…`
+(never `git merge`), run `npm run build:hub-standalone` and
+`npm run test:e2e:hub-standalone`, then push the deploy branch. It never
+gets a PR and is never merged anywhere.
+
 ### Preview caveat
 
 On the Preview deployment, every calendar page (`/`, `/claim`, profiles,
@@ -153,6 +199,8 @@ npm run dev:hub          # hub dev server, open /festival-hub/index.html
 npm run build            # calendar build, then hub build
 npm test                 # unit tests (includes src/festivalHub/*)
 npm run test:e2e:hub     # Playwright checks against dist/ (needs a build)
+npm run build:hub-standalone      # hub-only build + output verifier
+npm run test:e2e:hub-standalone   # standalone upload/build/routing/CSP checks
 OLD_DIST=/path/to/dist-from-main npm run test:e2e:hub   # also measure the stale-worker case
 ```
 

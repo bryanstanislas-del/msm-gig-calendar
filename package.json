@@ -5,9 +5,11 @@
     "dev": "vite",
     "dev:hub": "vite --config vite.festival-hub.config.js",
     "build": "vite build && vite build --config vite.festival-hub.config.js",
+    "build:hub-standalone": "vite build --config vite.festival-hub-standalone.config.js && node scripts/standalone/verify-output.mjs",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:e2e:hub": "node scripts/e2e/festival-hub.mjs"
+    "test:e2e:hub": "node scripts/e2e/festival-hub.mjs",
+    "test:e2e:hub-standalone": "node scripts/e2e/festival-hub-standalone.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",
