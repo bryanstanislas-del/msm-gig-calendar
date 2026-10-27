@@ -20,8 +20,7 @@ const { createClient } = require("@supabase/supabase-js");
 const fs   = require("fs");
 const path = require("path");
 
-const SUPABASE_URL      = process.env.VITE_SUPABASE_URL      || "https://fmlaaiolqwknowhtdeue.supabase.co";
-const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";
+const { resolveServerSupabase } = require("./_supabaseProject.js");
 const BASE_URL          = process.env.VITE_BASE_URL           || "https://calendar.musicscenemagazine.co.uk";
 const FALLBACK_IMAGE    = "https://musicscenemagazine.co.uk/wp-content/uploads/msm-share.jpg";
 
@@ -144,7 +143,9 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    const project = resolveServerSupabase(process.env);   // same project as the browser; mixed overrides refused
+    if (project.error) throw new Error(project.error);
+    const supabase = createClient(project.url, project.anonKey);
 
     // ── GIG (kept for completeness / direct query-string use; /gig/:slug
     //    itself continues to be routed to api/gig.js, unchanged) ──
