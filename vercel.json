@@ -11,6 +11,8 @@
   ],
   "rewrites": [
     { "source": "/api/(.*)",     "destination": "/api/$1" },
+    { "source": "/festival-hub", "destination": "/festival-hub/index.html" },
+    { "source": "/festival-hub/", "destination": "/festival-hub/index.html" },
     { "source": "/sitemap.xml",  "destination": "/api/sitemap" },
     { "source": "/robots.txt",   "destination": "/api/robots" },
     { "source": "/gig/:slug",    "destination": "/api/gig" },
