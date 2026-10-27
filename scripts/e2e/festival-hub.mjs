@@ -334,7 +334,8 @@ console.log("Hub — storage failures");
   await page.goto(`${ORIGIN}/festival-hub#festival=twyfest`);
   await check("write failure shows a visible notice", async () => {
     await page.getByRole("dialog").getByRole("button", { name: /Save to shortlist/ }).click();
-    await page.getByRole("alert").filter({ hasText: "couldn't be saved" }).waitFor();
+    // While the modal is open the warning is announced inside it (the page behind is inert).
+    await page.getByRole("dialog").getByRole("alert").filter({ hasText: "Not saved" }).waitFor();
     await page.getByRole("dialog").getByRole("button", { name: /Remove from shortlist/ }).waitFor(); // still works in-page
   });
   await ctx.close();
@@ -371,6 +372,120 @@ console.log("Hub — storage failures");
   await check("corrupt JSON shows notice and empty shortlist", async () => {
     await page.getByRole("alert").filter({ hasText: "couldn't be read" }).waitFor();
     assert(!/on your shortlist/.test(await countText(page)), "should be empty");
+  });
+  await ctx.close();
+}
+
+// ── QA regressions: storage feedback, empty-state reset, contrast, headings ──
+console.log("QA regressions — storage feedback, keyboard reset, contrast, headings");
+// Contrast of the text as rendered: colour composited over the real backgrounds.
+const renderedContrast = (locator) => locator.evaluate((el, pseudo) => {
+  const rgba = (s) => { const m = s.match(/rgba?\(([^)]+)\)/); const p = m[1].split(",").map(Number); return { r: p[0], g: p[1], b: p[2], a: p.length > 3 ? p[3] : 1 }; };
+  const chain = []; for (let e = el; e; e = e.parentElement) chain.unshift(e);
+  let bg = { r: 255, g: 255, b: 255 };
+  for (const e of chain) { const c = rgba(getComputedStyle(e).backgroundColor); if (c.a > 0) bg = { r: c.r * c.a + bg.r * (1 - c.a), g: c.g * c.a + bg.g * (1 - c.a), b: c.b * c.a + bg.b * (1 - c.a) }; }
+  const fg = rgba(getComputedStyle(el, pseudo).color);
+  const f = { r: fg.r * fg.a + bg.r * (1 - fg.a), g: fg.g * fg.a + bg.g * (1 - fg.a), b: fg.b * fg.a + bg.b * (1 - fg.a) };
+  const lum = ({ r, g, b }) => { const c = [r, g, b].map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+  const [a, b] = [lum(f), lum(bg)].sort((x, y) => y - x);
+  return Math.round(((a + 0.05) / (b + 0.05)) * 100) / 100;
+}, null);
+const placeholderContrast = (locator) => locator.evaluate((el) => {
+  const rgba = (s) => { const m = s.match(/rgba?\(([^)]+)\)/); const p = m[1].split(",").map(Number); return { r: p[0], g: p[1], b: p[2], a: p.length > 3 ? p[3] : 1 }; };
+  const chain = []; for (let e = el; e; e = e.parentElement) chain.unshift(e);
+  let bg = { r: 255, g: 255, b: 255 };
+  for (const e of chain) { const c = rgba(getComputedStyle(e).backgroundColor); if (c.a > 0) bg = { r: c.r * c.a + bg.r * (1 - c.a), g: c.g * c.a + bg.g * (1 - c.a), b: c.b * c.a + bg.b * (1 - c.a) }; }
+  const fg = rgba(getComputedStyle(el, "::placeholder").color);
+  const lum = ({ r, g, b }) => { const c = [r, g, b].map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+  const [a, b] = [lum(fg), lum(bg)].sort((x, y) => y - x);
+  return Math.round(((a + 0.05) / (b + 0.05)) * 100) / 100;
+});
+const alertsInDom = (page) => page.evaluate(() => [...document.querySelectorAll("[role=alert]")].map((a) => ({ inDialog: !!a.closest("dialog"), text: a.textContent })));
+
+for (const viewport of [{ width: 375, height: 760 }, { width: 1280, height: 900 }]) {
+  const { ctx, log } = await newContext({ viewport });
+  await ctx.addInitScript(() => { Storage.prototype.setItem = () => { throw new DOMException("full", "QuotaExceededError"); }; });
+  const page = await ctx.newPage();
+  await check(`${viewport.width}px: failed save shows a visible, announced warning INSIDE the dialog and never says "saved"`, async () => {
+    await page.goto(`${ORIGIN}/festival-hub#festival=twyfest`);
+    const dlg = page.getByRole("dialog");
+    await tabTo(page, (i) => i.tag === "BUTTON" && /Save to shortlist/.test(i.label));
+    await page.keyboard.press("Enter");
+    const warning = dlg.getByRole("alert");
+    await warning.waitFor();
+    assert(/Not saved/.test(await warning.textContent()) && /lost when you reload/.test(await warning.textContent()), await warning.textContent());
+    await warning.scrollIntoViewIfNeeded();
+    const visibleOnTop = await warning.evaluate((w) => { const r = w.getBoundingClientRect(); const top = document.elementFromPoint(r.left + 8, r.top + 8); return w.contains(top); });
+    assert(visibleOnTop, "warning is covered");
+    const alerts = await alertsInDom(page);
+    assert(alerts.length === 1 && alerts[0].inDialog, `expected exactly one alert, in the dialog: ${JSON.stringify(alerts)}`);
+    const status = await dlg.getByRole("status").textContent();
+    assert(!/Saved to your shortlist/.test(status), `status claims success: ${status}`);
+    // In-memory only: the listing shows as shortlisted on this page, and a second change says so.
+    await dlg.getByRole("button", { name: /Remove from shortlist/ }).click();
+    assert(/Removed on this page only — not saved/.test(await dlg.getByRole("status").textContent()), await dlg.getByRole("status").textContent());
+    await dlg.getByRole("button", { name: /Save to shortlist/ }).click();
+    assert(/Added on this page only — not saved, so it will be lost when you reload/.test(await dlg.getByRole("status").textContent()), "re-add status");
+    await page.keyboard.press("Escape");
+    await dlg.waitFor({ state: "detached" });
+    const after = await alertsInDom(page);
+    assert(after.length === 1 && !after[0].inDialog && /couldn't be saved/.test(after[0].text), `page warning after close: ${JSON.stringify(after)}`);
+    if (viewport.width === 375) await page.screenshot({ path: join(OUT, "qa-storage-fail-375.png") });
+    return assertHubNetworkClean(log, `storage-${viewport.width}`);
+  });
+  await ctx.close();
+}
+{
+  const { ctx } = await newContext({ viewport: { width: 375, height: 760 } });
+  const page = await ctx.newPage();
+  await check("375px: successful save/remove are announced as saved/removed in THIS browser, with no warning", async () => {
+    await page.goto(`${ORIGIN}/festival-hub#festival=dorsetfest`);
+    const dlg = page.getByRole("dialog");
+    await dlg.getByRole("button", { name: /Save to shortlist/ }).click();
+    assert(await dlg.getByRole("status").textContent() === "Saved to your shortlist in this browser.", await dlg.getByRole("status").textContent());
+    await dlg.getByRole("button", { name: /Remove from shortlist/ }).click();
+    assert(await dlg.getByRole("status").textContent() === "Removed from your shortlist in this browser.", "remove status");
+    assert((await alertsInDom(page)).length === 0, "unexpected alert");
+  });
+  await check("375px: keyboard reset from the empty state focuses the results; next Tab reaches the first card", async () => {
+    await page.goto(`${ORIGIN}/festival-hub`);
+    await page.getByLabel("Region").focus();
+    await page.getByLabel("Region").selectOption("Wales");
+    await page.getByLabel("Status").selectOption("closed");
+    await tabTo(page, (i) => i.tag === "BUTTON" && /Reset filters/.test(i.label) && i.label.length < 20 && true, 30);
+    // the filter-bar reset comes first; continue to the empty-state one
+    if (!(await page.evaluate(() => !!document.activeElement.closest(".fh-empty")))) await tabTo(page, (i) => i.tag === "BUTTON" && /Reset filters/.test(i.label), 30);
+    assert(await page.evaluate(() => !!document.activeElement.closest(".fh-empty")), "not on the empty-state reset");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => document.activeElement?.id === "fh-results");
+    assert(/26 listings/.test(await countText(page)), "results not restored");
+    await page.keyboard.press("Tab");
+    const first = await page.locator(".fh-card").first().getAttribute("href");
+    assert((await activeInfo(page)).href === first, `next Tab went to ${JSON.stringify(await activeInfo(page))}`);
+  });
+  await check("listings have a level-2 heading before the level-3 card titles", async () => {
+    const levels = await page.locator("h1, h2, h3").evaluateAll((hs) => hs.map((h) => `${h.tagName}:${h.textContent.trim().slice(0, 20)}`));
+    const h2 = levels.indexOf("H2:Festival listings");
+    const firstCard = levels.findIndex((l) => l.startsWith("H3:"));
+    assert(h2 > levels.indexOf("H1:Festival Hub 2027") && h2 < firstCard, levels.slice(0, 5).join(", "));
+  });
+  await check("375px: changed text colours meet WCAG AA (≥4.5:1) as rendered", async () => {
+    const results = {};
+    results.openBadge = await renderedContrast(page.locator(".fh-st-open").first());
+    results.primaryButton = await renderedContrast(page.locator(".fh-btn-primary").first());
+    results.liveSiteSmall = await renderedContrast(page.locator(".fh-btn-primary small").first());
+    results.placeholder = await placeholderContrast(page.getByLabel("Search"));
+    await page.keyboard.press("Home");
+    await page.locator(".fh-skip").focus();
+    results.skipLink = await renderedContrast(page.locator(".fh-skip"));
+    await page.goto(`${ORIGIN}/festival-hub?demo=1`);
+    results.demoBanner = await renderedContrast(page.locator(".fh-banner").first());
+    results.demoBadge = await renderedContrast(page.locator(".fh-badge-demo").first());
+    await page.goto(`${ORIGIN}/festival-hub#festival=hanwell-hootie`);
+    results.dialogApplyButton = await renderedContrast(page.getByRole("dialog").locator(".fh-btn-primary").first());
+    const low = Object.entries(results).filter(([, r]) => r < 4.5);
+    assert(low.length === 0, `below 4.5:1: ${JSON.stringify(low)}`);
+    return JSON.stringify(results);
   });
   await ctx.close();
 }
