@@ -1,50 +1,56 @@
 import { describe, it, expect } from "vitest";
 import { DEMO_LISTINGS } from "./demoFixtures.js";
-import { isValidId } from "./storage.js";
-import { isValidDateOnly } from "./status.js";
+import { CURATED_LISTINGS } from "./curatedListings.js";
+import { validateDirectory } from "./schema.js";
+import { applicationStatus, STATUS } from "./status.js";
+import { getDirectory, modeFromSearch, MODES } from "./listings.js";
+
+const NOW = new Date("2026-10-27T12:00:00Z");
 
 describe("demo fixtures", () => {
-  it("are all flagged demo, with unique valid ids", () => {
-    const ids = DEMO_LISTINGS.map((l) => l.id);
-    expect(new Set(ids).size).toBe(ids.length);
+  it("validate as demo data with no errors", () => {
+    const { problems } = validateDirectory(DEMO_LISTINGS, { demo: true, today: "2026-10-27" });
+    expect(problems.filter((p) => p.errors.length)).toEqual([]);
+  });
+  it("are fictional: 'Example' names, demo- ids, example.org links only", () => {
     for (const l of DEMO_LISTINGS) {
       expect(l.isDemo).toBe(true);
-      expect(isValidId(l.id)).toBe(true);
       expect(l.id.startsWith("demo-")).toBe(true);
-    }
-  });
-  it("only link to example.org placeholder pages", () => {
-    for (const l of DEMO_LISTINGS) {
-      for (const url of [l.applyUrl, l.sourceUrl]) {
-        expect(new URL(url).hostname).toBe("example.org");
-        expect(url).toMatch(/^https:\/\/example\.org\/festival-hub-demo\//);
-      }
-    }
-  });
-  it("use 'Example' names and demo locations, never real festival claims", () => {
-    for (const l of DEMO_LISTINGS) {
       expect(l.name).toMatch(/Example/);
-      expect(l.location).toMatch(/\(demo\)$/);
-      if (l.fee) expect(l.fee).toMatch(/\(example\)$/);
+      const urls = [l.officialUrl, l.application.url, l.application.sourceUrl, l.listingVerification.sourceUrl].filter(Boolean);
+      for (const u of urls) expect(new URL(u).hostname).toBe("example.org");
     }
   });
-  it("have required fields; dates are date-only or explicitly missing", () => {
-    for (const l of DEMO_LISTINGS) {
-      expect(l.region && l.name && Array.isArray(l.genres)).toBeTruthy();
-      expect(isValidDateOnly(l.festivalDates.start)).toBe(true);
-      for (const d of [l.application.opens, l.application.closes, l.lastChecked]) {
-        expect(d === null || isValidDateOnly(d)).toBe(true);
-      }
-    }
+  it("cover every status case", () => {
+    const s = Object.fromEntries(DEMO_LISTINGS.map((l) => [l.id, applicationStatus(l, NOW).status]));
+    expect(s).toEqual({
+      "demo-northfields": STATUS.OPEN, "demo-coastline": STATUS.OPEN, "demo-highland": STATUS.NOT_YET_OPEN,
+      "demo-valleys": STATUS.CLOSED, "demo-riverside": STATUS.UNVERIFIED, "demo-moorland": STATUS.OPEN,
+      "demo-harbour": STATUS.NOT_YET_ANNOUNCED, "demo-midlands": STATUS.OPEN, "demo-lakeside": STATUS.UNVERIFIED,
+      "demo-borders": STATUS.UNVERIFIED,
+    });
   });
-  it("application deadline falls before the festival starts, and the festival ends on or after it starts", () => {
-    for (const l of DEMO_LISTINGS) {
-      const { start, end } = l.festivalDates;
-      if (end) expect(end >= start, `${l.id} end before start`).toBe(true);
-      const { opens, closes } = l.application;
-      if (closes) expect(closes < start, `${l.id} closes ${closes} on/after festival start ${start}`).toBe(true);
-      if (opens) expect(opens < start, `${l.id} opens ${opens} on/after festival start ${start}`).toBe(true);
-      if (opens && closes) expect(opens <= closes, `${l.id} opens after closes`).toBe(true);
-    }
+});
+
+describe("modes never mix", () => {
+  it("real and demo directories are disjoint and each validated for its mode", () => {
+    const real = getDirectory(MODES.REAL, { today: "2026-10-27" });
+    const demo = getDirectory(MODES.DEMO, { today: "2026-10-27" });
+    expect(real.listings).toHaveLength(CURATED_LISTINGS.length);
+    expect(demo.listings).toHaveLength(DEMO_LISTINGS.length);
+    const realIds = new Set(real.listings.map((l) => l.id));
+    expect(demo.listings.some((l) => realIds.has(l.id))).toBe(false);
+    expect(real.listings.some((l) => l.isDemo)).toBe(false);
+  });
+  it("demo listings are rejected in real mode and vice versa", () => {
+    expect(getDirectory(MODES.REAL, { real: DEMO_LISTINGS, today: "2026-10-27" }).listings).toEqual([]);
+    expect(getDirectory(MODES.DEMO, { demo: CURATED_LISTINGS, today: "2026-10-27" }).listings).toEqual([]);
+  });
+  it("an empty real directory stays empty (no demo fallback)", () => {
+    expect(getDirectory(MODES.REAL, { real: [] }).listings).toEqual([]);
+  });
+  it("only ?demo=1 selects demo mode", () => {
+    expect(modeFromSearch("?demo=1")).toBe(MODES.DEMO);
+    for (const q of ["", "?demo=0", "?demo=true", "?x=1"]) expect(modeFromSearch(q)).toBe(MODES.REAL);
   });
 });

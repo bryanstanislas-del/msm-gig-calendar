@@ -1,46 +1,44 @@
 import { describe, it, expect } from "vitest";
-import { ALL, DEFAULT_FILTERS, applyFilters, genresOf, regionsOf, isDefaultFilters } from "./filters.js";
-import { DEMO_LISTINGS } from "./demoFixtures.js";
+import { DEFAULT_FILTERS, applyFilters, genresOf, regionsOf, isDefaultFilters } from "./filters.js";
+import { CURATED_LISTINGS } from "./curatedListings.js";
 import { STATUS } from "./status.js";
 
-const TODAY = "2026-10-27";
-const run = (patch = {}, savedIds) => applyFilters(DEMO_LISTINGS, { ...DEFAULT_FILTERS, ...patch }, { today: TODAY, savedIds });
+const now = new Date("2026-10-27T12:00:00Z");
+const run = (patch = {}, savedIds) => applyFilters(CURATED_LISTINGS, { ...DEFAULT_FILTERS, ...patch }, { now, savedIds });
 const ids = (r) => r.map((x) => x.listing.id);
 
-describe("applyFilters", () => {
-  it("default filters return every listing, open first, soonest deadline first", () => {
+describe("applyFilters (real directory on the check date)", () => {
+  it("defaults return everything, open first then soonest deadline", () => {
     const r = run();
-    expect(r).toHaveLength(DEMO_LISTINGS.length);
-    expect(ids(r).slice(0, 3)).toEqual(["demo-coastline", "demo-northfields", "demo-midlands"]);
+    expect(r).toHaveLength(26);
+    expect(ids(r).slice(0, 3)).toEqual(["hanwell-hootie", "kelburn-garden-party", "buckle-and-boots"]);
     expect(r.at(-1).info.status).toBe(STATUS.CLOSED);
   });
-  it("filters by region, genre and status, and combines them", () => {
-    expect(ids(run({ region: "Scotland" }))).toEqual(["demo-highland"]);
-    expect(ids(run({ genre: "Indie" })).sort()).toEqual(["demo-harbour", "demo-moorland", "demo-northfields"]);
-    expect(ids(run({ status: STATUS.NOT_YET_OPEN })).sort()).toEqual(["demo-harbour", "demo-highland"]);
-    expect(ids(run({ status: STATUS.UNVERIFIED })).sort()).toEqual(["demo-moorland", "demo-riverside"]);
-    expect(ids(run({ genre: "Indie", status: STATUS.OPEN }))).toEqual(["demo-northfields"]);
-    expect(run({ region: "Wales", status: STATUS.OPEN })).toHaveLength(0);
+  it("status filter counts", () => {
+    expect(run({ status: STATUS.OPEN })).toHaveLength(13);
+    expect(run({ status: STATUS.UNVERIFIED })).toHaveLength(7);
+    expect(run({ status: STATUS.CLOSED })).toHaveLength(4);
   });
-  it("deadline window only matches open listings closing within N days", () => {
+  it("region filter", () => {
+    expect(ids(run({ region: "Scotland" })).sort()).toEqual(["butefest", "kelburn-garden-party"]);
+  });
+  it("genre filter includes 'All genres' festivals but not unknown-genre ones", () => {
+    const jazz = ids(run({ genre: "Jazz" })).sort();
+    expect(jazz).toEqual(["focus-wales", "kelburn-garden-party", "mostly-jazz-funk-and-soul", "the-great-escape"]);
+    expect(genresOf(CURATED_LISTINGS)).not.toContain("All genres");
+  });
+  it("deadline window matches only open listings with a published deadline", () => {
     expect(ids(run({ deadline: "7" }))).toEqual([]);
-    expect(ids(run({ deadline: "30" }))).toEqual(["demo-coastline"]);
-    expect(ids(run({ deadline: "90" }))).toEqual(["demo-coastline", "demo-northfields"]);
+    expect(ids(run({ deadline: "90" }))).toEqual(["hanwell-hootie", "kelburn-garden-party", "buckle-and-boots"]);
   });
-  it("search is case-insensitive over name, region, location and genres", () => {
-    expect(ids(run({ search: "  HIGHLAND " }))).toEqual(["demo-highland"]);
-    expect(ids(run({ search: "hip-hop" }))).toEqual(["demo-midlands"]);
-    expect(run({ search: "no such thing" })).toHaveLength(0);
-  });
-  it("shortlist-only uses saved ids", () => {
+  it("search and shortlist", () => {
+    expect(ids(run({ search: "  dorset " })).sort()).toEqual(["dorsetfest", "teddy-rocks"]);
+    expect(ids(run({ savedOnly: true }, new Set(["twyfest"])))).toEqual(["twyfest"]);
     expect(run({ savedOnly: true })).toHaveLength(0);
-    expect(ids(run({ savedOnly: true }, new Set(["demo-valleys"])))).toEqual(["demo-valleys"]);
   });
   it("option lists and default detection", () => {
-    expect(regionsOf(DEMO_LISTINGS)).toContain("Northern Ireland");
-    expect(genresOf(DEMO_LISTINGS)).toEqual([...genresOf(DEMO_LISTINGS)].sort((a, b) => a.localeCompare(b)));
+    expect(regionsOf(CURATED_LISTINGS)).toContain("Northern Ireland");
     expect(isDefaultFilters(DEFAULT_FILTERS)).toBe(true);
     expect(isDefaultFilters({ ...DEFAULT_FILTERS, region: "Wales" })).toBe(false);
-    expect(DEFAULT_FILTERS.region).toBe(ALL);
   });
 });

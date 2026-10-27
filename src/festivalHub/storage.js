@@ -1,6 +1,8 @@
 // Festival Hub -- browser-local shortlist and application progress.
 //
-// Stored only in this browser (localStorage, one versioned key). Nothing
+// Stored only in this browser (localStorage). The real directory and the
+// demo each have their own key, so demo progress can never appear against a
+// real listing (ids are also checked against the current mode). Nothing
 // is sent anywhere. Only listing ids, a progress stage, an outcome and
 // yes/no checklist ticks are kept -- never free text, names, emails,
 // phone numbers or any other contact details.
@@ -8,7 +10,10 @@
 // Every value read back is validated; anything unexpected is dropped, so
 // a hand-edited or corrupted entry can never break the page.
 
-export const STORAGE_KEY = "msm.festivalHub.v1";
+export const STORAGE_KEYS = Object.freeze({
+  real: "msm.festivalHub.real.v1",
+  demo: "msm.festivalHub.demo.v1",
+});
 export const STORAGE_VERSION = 1;
 export const MAX_SAVED = 200;
 export const ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -88,12 +93,12 @@ function getStorage(win) {
 }
 
 // Returns { items, problem } where problem is null | "unavailable" | "corrupt".
-export function loadSaved(win = typeof window !== "undefined" ? window : undefined, knownIds) {
+export function loadSaved(win = typeof window !== "undefined" ? window : undefined, knownIds, key = STORAGE_KEYS.real) {
   const storage = getStorage(win);
   if (!storage) return { items: {}, problem: "unavailable" };
   let text;
   try {
-    text = storage.getItem(STORAGE_KEY);
+    text = storage.getItem(key);
   } catch {
     return { items: {}, problem: "unavailable" };
   }
@@ -109,12 +114,12 @@ export function loadSaved(win = typeof window !== "undefined" ? window : undefin
 }
 
 // Returns true if the write succeeded.
-export function persistSaved(items, win = typeof window !== "undefined" ? window : undefined) {
+export function persistSaved(items, win = typeof window !== "undefined" ? window : undefined, key = STORAGE_KEYS.real) {
   const storage = getStorage(win);
   if (!storage) return false;
   const clean = sanitiseState({ version: STORAGE_VERSION, items }).items;
   try {
-    storage.setItem(STORAGE_KEY, JSON.stringify({ version: STORAGE_VERSION, items: clean }));
+    storage.setItem(key, JSON.stringify({ version: STORAGE_VERSION, items: clean }));
     return true;
   } catch {
     return false;

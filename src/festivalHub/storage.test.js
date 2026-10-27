@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { STORAGE_KEY, MAX_SAVED, loadSaved, persistSaved, sanitiseEntry, sanitiseState, isValidId, checklistProgress, emptyEntry } from "./storage.js";
+import { STORAGE_KEYS, MAX_SAVED, loadSaved, persistSaved, sanitiseEntry, sanitiseState, isValidId, checklistProgress, emptyEntry } from "./storage.js";
 
 function fakeWindow({ throwOnGet = false, throwOnSet = false, throwOnAccess = false, initial } = {}) {
-  const map = new Map(initial === undefined ? [] : [[STORAGE_KEY, initial]]);
+  const map = new Map(initial === undefined ? [] : [[STORAGE_KEYS.real, initial]]);
   const storage = {
     getItem: (k) => { if (throwOnGet) throw new Error("SecurityError"); return map.has(k) ? map.get(k) : null; },
     setItem: (k, v) => { if (throwOnSet) throw new Error("QuotaExceededError"); map.set(k, String(v)); },
@@ -55,7 +55,7 @@ describe("load / persist", () => {
     expect(loadSaved(win)).toEqual({ items: {}, problem: null });
     const items = { "demo-highland": { stage: "applied", outcome: "pending", checklist: { epk: true } } };
     expect(persistSaved(items, win)).toBe(true);
-    expect(JSON.parse(map.get(STORAGE_KEY))).toEqual({ version: 1, items });
+    expect(JSON.parse(map.get(STORAGE_KEYS.real))).toEqual({ version: 1, items });
     expect(loadSaved(win)).toEqual({ items, problem: null });
   });
   it("reports corrupt JSON or invalid content without throwing", () => {
@@ -73,9 +73,21 @@ describe("load / persist", () => {
   it("sanitises on write too", () => {
     const { win, map } = fakeWindow();
     persistSaved({ "demo-a": { stage: "applied", email: "x@y.z" }, "BAD": {} }, win);
-    expect(map.get(STORAGE_KEY)).not.toMatch(/x@y\.z|BAD/);
+    expect(map.get(STORAGE_KEYS.real)).not.toMatch(/x@y\.z|BAD/);
   });
   it("checklist progress", () => {
     expect(checklistProgress({ checklist: { epk: true, bio: true } })).toEqual({ done: 2, total: 7 });
+  });
+  it("real and demo stores are separate keys", () => {
+    const { win, map } = fakeWindow();
+    persistSaved({ "demo-x": emptyEntry() }, win, STORAGE_KEYS.demo);
+    expect(loadSaved(win, undefined, STORAGE_KEYS.real)).toEqual({ items: {}, problem: null });
+    expect(Object.keys(loadSaved(win, undefined, STORAGE_KEYS.demo).items)).toEqual(["demo-x"]);
+    expect(STORAGE_KEYS.real).not.toBe(STORAGE_KEYS.demo);
+    expect([...map.keys()]).toEqual([STORAGE_KEYS.demo]);
+  });
+  it("ids from the other mode are dropped on load", () => {
+    const { win } = fakeWindow({ initial: JSON.stringify({ version: 1, items: { "demo-x": {}, "twyfest": {} } }) });
+    expect(Object.keys(loadSaved(win, new Set(["twyfest"])).items)).toEqual(["twyfest"]);
   });
 });

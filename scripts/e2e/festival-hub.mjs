@@ -8,6 +8,8 @@
 // calendar regression checks can render) and recorded. Nothing ever
 // reaches a live backend.
 //
+// Date is frozen at 27 Oct 2026 12:00 UK time in every context (FROZEN_NOW).
+//
 // Optional: OLD_DIST=/path/to/dist-built-from-main measures the "stale
 // calendar service worker" case (a browser that still has the pre-hub
 // service worker installed). E2E_OUT=dir for screenshots.
@@ -65,8 +67,16 @@ const isFont = (u) => /^https:\/\/fonts\.(googleapis|gstatic)\.com\//.test(u);
 // The calendar app bundle lives at /assets/index-*.js; the hub's own bundle is under /festival-hub/assets/.
 const isCalendarBundle = (u) => /^\/assets\/index-[^/]+\.js$/.test(new URL(u).pathname);
 
+// Every browser context runs with Date frozen at the research check time
+// (27 Oct 2026, 12:00 UK time = 11:00 UTC, BST), so the 13-open count,
+// deadline windows and "checked N days ago" don't change as real time
+// passes. Expiry, freshness and DST boundaries are unit-tested separately
+// (status.test.js, curated.test.js) with explicit instants.
+const FROZEN_NOW = new Date("2026-10-27T11:00:00Z");
+
 async function newContext(opts = {}) {
   const ctx = await browser.newContext({ serviceWorkers: "allow", ...opts });
+  await ctx.clock.setFixedTime(FROZEN_NOW);
   const log = { requests: [], supabase: [], external: [], pageErrors: [] };
   ctx.on("request", (r) => {
     const u = r.url();
@@ -89,7 +99,7 @@ async function newContext(opts = {}) {
   return { ctx, log, reset() { for (const k of Object.keys(log)) log[k].length = 0; } };
 }
 
-const banner = (page) => page.getByRole("note").filter({ hasText: "Demo data" });
+const banner = (page) => page.getByRole("note").filter({ hasText: "Staging preview" });
 const countText = (page) => page.getByRole("status").first().textContent();
 const activeInfo = (page) => page.evaluate(() => {
   const el = document.activeElement;
@@ -115,50 +125,52 @@ function assertHubNetworkClean(log, label) {
   return `${log.requests.filter(isLocal).length} local requests, 0 backend, ${log.external.length} font requests (blocked)`;
 }
 
-// ── Hub: desktop keyboard flow ─────────────────────────────────────
+// ── Hub: real directory (default), desktop, keyboard ───────────────
 console.log(`Festival Hub e2e against ${DIST} at ${ORIGIN}`);
-console.log("Hub — desktop, keyboard only");
+console.log("Hub — real directory, desktop, keyboard only");
+const REAL_KEY = "msm.festivalHub.real.v1";
+const DEMO_KEY = "msm.festivalHub.demo.v1";
 {
   const { ctx, log } = await newContext({ viewport: { width: 1280, height: 900 } });
   const page = await ctx.newPage();
   await page.goto(`${ORIGIN}/festival-hub`);
 
-  await check("renders hub with demo banner, noindex and no calendar", async () => {
+  await check("real directory is the default: 26 listings, 13 open, staging + noindex, no demo data", async () => {
     await banner(page).waitFor();
-    assert(await page.getByRole("heading", { level: 1 }).textContent().then((t) => t.includes("Festival Hub")), "missing h1");
+    assert(/26 listings · 13 open now/.test(await countText(page)), await countText(page));
     assert(await page.locator('meta[name="robots"]').getAttribute("content") === "noindex, nofollow", "noindex missing");
-    assert(/8 demo listings/.test(await countText(page)), "expected 8 listings");
+    assert(await page.locator(".fh-badge-demo").count() === 0, "demo badge in real mode");
+    assert(!(await page.content()).includes("Example Festival"), "demo listing in real mode");
     assert(new URL(page.url()).pathname === "/festival-hub", `url changed: ${page.url()}`);
-    await page.screenshot({ path: join(OUT, "desktop-list.png"), fullPage: true });
+    await page.screenshot({ path: join(OUT, "real-list.png"), fullPage: true });
   });
 
-  await check("search reachable and usable by keyboard", async () => {
+  await check("calendar links are labelled live and point at the live calendar in a new tab", async () => {
+    const links = page.getByRole("link", { name: /live site/ });
+    assert(await links.count() >= 4, "live links missing");
+    for (const href of await links.evaluateAll((els) => els.map((e) => `${e.getAttribute("href")}|${e.target}`))) {
+      assert(/^https:\/\/calendar\.musicscenemagazine\.co\.uk\/(claim)?\|_blank$/.test(href), href);
+    }
+    assert(await page.locator('a[href="/"], a[href="/claim"]').count() === 0, "relative calendar link (would hit the preview's production-connected calendar)");
+    assert(await page.locator('a[href^="mailto:"]').count() === 0, "mailto link present");
+  });
+
+  await check("search and filters by keyboard; empty state and reset", async () => {
     await tabTo(page, (i) => i.tag === "INPUT" && i.type === "search");
-    await page.keyboard.type("highland");
-    assert(/^1 demo listing/.test(await countText(page)), await countText(page));
+    await page.keyboard.type("dorset");
+    assert(/Showing 2 of 26 listings/.test(await countText(page)), await countText(page));
     await page.keyboard.press("Control+A"); await page.keyboard.press("Backspace");
-    assert(/8 demo listings/.test(await countText(page)), "search not cleared");
-  });
-
-  await check("region/status filters, empty state and reset", async () => {
-    await page.getByLabel("Region").focus(); await page.getByLabel("Region").selectOption("Wales");
-    await page.getByLabel("Status").selectOption("open");
-    await page.getByText("No demo listings match these filters.").waitFor();
-    await page.screenshot({ path: join(OUT, "desktop-empty.png") });
+    await page.getByLabel("Region").selectOption("Wales");
+    await page.getByLabel("Status").selectOption("closed");
+    await page.getByText("No listings match these filters.").waitFor();
     await page.locator(".fh-empty button").focus();
     await page.keyboard.press("Enter");
-    assert(/8 demo listings/.test(await countText(page)), "reset failed");
-    assert(await page.getByLabel("Region").inputValue() === "all", "region not reset");
-    assert(await page.getByRole("button", { name: "Reset filters" }).isDisabled(), "reset should be disabled at defaults");
-  });
-
-  await check("genre + deadline filters", async () => {
-    await page.getByLabel("Genre").selectOption("Indie");
-    assert(/3 demo listings/.test(await countText(page)), await countText(page));
-    await page.getByLabel("Genre").selectOption("all");
+    assert(/26 listings/.test(await countText(page)), "reset failed");
+    await page.getByLabel("Genre").selectOption("Jazz");
+    assert(/Showing 4 of 26/.test(await countText(page)), `genre: ${await countText(page)}`);
+    await page.getByRole("button", { name: "Reset filters" }).click();
     await page.getByLabel("Deadline").selectOption("90");
-    const n = await page.locator(".fh-card").count();
-    assert(n >= 1, "deadline filter returned nothing");
+    assert(/Showing 3 of 26/.test(await countText(page)), `deadline: ${await countText(page)}`);
     await page.getByRole("button", { name: "Reset filters" }).click();
   });
 
@@ -170,58 +182,122 @@ console.log("Hub — desktop, keyboard only");
     assert(page.url().endsWith(href), `hash not set: ${page.url()}`);
     await page.keyboard.press("Escape");
     await page.getByRole("dialog").waitFor({ state: "detached" });
-    const a = await activeInfo(page);
-    assert(a.href === href, `focus not returned (on ${JSON.stringify(a)})`);
-    assert(!page.url().includes("#"), "hash not cleared");
+    assert((await activeInfo(page)).href === href, "focus not returned");
   });
 
-  await check("detail shows labelled example links, never auto-submits", async () => {
-    await page.goto(`${ORIGIN}/festival-hub#festival=demo-highland`);
+  await check("open listing (Hanwell): exact 21:00 deadline, source wording, recheck note, apply page, sources", async () => {
+    await page.goto(`${ORIGIN}/festival-hub#festival=hanwell-hootie`);
     const dlg = page.getByRole("dialog");
     await dlg.waitFor();
-    const apply = dlg.getByRole("link", { name: /Example application link \(demo\)/ });
-    assert(await apply.getAttribute("href") === "https://example.org/festival-hub-demo/highland/apply", "apply href");
-    assert(await apply.getAttribute("target") === "_blank" && /noopener/.test(await apply.getAttribute("rel")), "apply link target/rel");
-    assert(await dlg.getByRole("link", { name: /Example source link \(demo, not a real page\)/ }).count() === 1, "source label");
-    assert(await dlg.locator("form[action], [type=submit]").count() === 0, "dialog contains a submit control");
-    for (const t of ["Festival dates", "Location", "Eligibility", "Fees", "Last checked", "28 March 2027"]) {
-      assert((await dlg.textContent()).includes(t), `detail missing ${t}`);
-    }
-    await page.screenshot({ path: join(OUT, "desktop-detail.png") });
+    const t = await dlg.textContent();
+    for (const s of ["1 December 2026 (year inferred), 21:00 UK time", "“before 9pm Tuesday 1 December”", "Open as checked on 27 October 2026",
+      "MSM hasn't tested external application forms", "Paid — Official post says musicians are paid.", "source page dated 21 October 2026",
+      "MSM has not tested that form"]) assert(t.includes(s), `missing: ${s}`);
+    const apply = dlg.getByRole("link", { name: /^Official application page/ });
+    assert(await apply.getAttribute("href") === "https://www.hanwellhootie.co.uk/", "apply href");
+    assert(await apply.getAttribute("target") === "_blank" && /noopener/.test(await apply.getAttribute("rel")), "target/rel");
+    assert(await dlg.locator("form[action], [type=submit]").count() === 0, "submit control in dialog");
+    await page.screenshot({ path: join(OUT, "real-detail-open.png") });
   });
 
-  await check("save, progress and checklist by keyboard; persists across reload", async () => {
+  await check("date-only deadline says time not stated; no-deadline listing says so", async () => {
+    await page.goto(`${ORIGIN}/festival-hub#festival=kelburn-garden-party`);
+    assert((await page.getByRole("dialog").textContent()).includes("15 December 2026 (year inferred) (time not stated — apply earlier)"), "kelburn deadline");
+    await page.goto(`${ORIGIN}/festival-hub#festival=boho-festival`);
+    const t = await page.getByRole("dialog").textContent();
+    assert(t.includes("No deadline published") && t.includes("Not announced / not known"), "boho unknowns");
+  });
+
+  await check("unpaid slot warning appears before the outbound link; email shown as text only", async () => {
+    await page.goto(`${ORIGIN}/festival-hub#festival=twyfest`);
+    const dlg = page.getByRole("dialog");
+    await dlg.waitFor();
+    const order = await dlg.evaluate((d) => {
+      const warn = [...d.querySelectorAll(".fh-notice")].find((n) => n.textContent.includes("Unpaid performance"));
+      const link = d.querySelector(".fh-actions a");
+      return warn && link ? !!(warn.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING) : null;
+    });
+    assert(order === true, "unpaid warning not before link");
+    assert((await dlg.textContent()).includes("bands@twyfest.uk"), "email missing");
+    assert(await dlg.locator('a[href^="mailto:"]').count() === 0, "mailto link");
+    await page.screenshot({ path: join(OUT, "real-detail-unpaid.png") });
+  });
+
+  await check("non-open listings: no apply button, official info + sources shown", async () => {
+    for (const id of ["donnyfest", "hastings-fat-tuesday", "manorfest", "wychwood", "milford-on-sea-music-festival"]) {
+      await page.goto(`${ORIGIN}/festival-hub#festival=${id}`);
+      const dlg = page.getByRole("dialog");
+      await dlg.waitFor();
+      assert(await dlg.getByRole("link", { name: /^Official application page/ }).count() === 0, `${id}: apply button`);
+      assert(await dlg.getByRole("link", { name: /View official information/ }).count() === 1, `${id}: official info link`);
+      assert(/application window — checked 27 October 2026/.test(await dlg.textContent()), `${id}: window source`);
+    }
+    await page.goto(`${ORIGIN}/festival-hub#festival=donnyfest`);
+    assert(/disagree/.test(await page.getByRole("dialog").textContent()), "donnyfest reason");
+    await page.screenshot({ path: join(OUT, "real-detail-unverified.png") });
+  });
+
+  await check("save/progress/checklist by keyboard persist in the REAL store only", async () => {
+    await page.goto(`${ORIGIN}/festival-hub#festival=teddy-rocks`);
     const dlg = page.getByRole("dialog");
     await tabTo(page, (i) => i.tag === "BUTTON" && /Save to shortlist/.test(i.label));
     await page.keyboard.press("Enter");
-    await dlg.getByRole("button", { name: /Remove from shortlist/ }).waitFor();
-    await dlg.getByLabel("Stage", { exact: true }).focus();
-    await dlg.getByLabel("Stage", { exact: true }).selectOption("outcome");
-    await dlg.getByLabel("Outcome").selectOption("offered");
+    await dlg.getByLabel("Stage", { exact: true }).selectOption("applied");
     await tabTo(page, (i) => i.tag === "INPUT" && i.type === "checkbox" && /EPK/.test(i.label));
     await page.keyboard.press("Space");
-    assert(/1 of 7 ready/.test(await dlg.textContent()), "checklist count");
-    const stored = await page.evaluate(() => localStorage.getItem("msm.festivalHub.v1"));
-    assert(stored === JSON.stringify({ version: 1, items: { "demo-highland": { stage: "outcome", outcome: "offered", checklist: { epk: true } } } }), `stored: ${stored}`);
+    const stores = await page.evaluate(([r, d]) => [localStorage.getItem(r), localStorage.getItem(d)], [REAL_KEY, DEMO_KEY]);
+    assert(stores[0] === JSON.stringify({ version: 1, items: { "teddy-rocks": { stage: "applied", outcome: "pending", checklist: { epk: true } } } }), `real: ${stores[0]}`);
+    assert(stores[1] === null, "demo store written from real mode");
     await page.reload();
     await dlg.waitFor();
-    assert(await dlg.getByLabel("Stage", { exact: true }).inputValue() === "outcome", "stage lost on reload");
-    assert(await dlg.getByLabel(/EPK/).isChecked(), "checklist lost on reload");
+    assert(await dlg.getByLabel("Stage", { exact: true }).inputValue() === "applied", "lost on reload");
     await page.keyboard.press("Escape");
     assert(/1 on your shortlist/.test(await countText(page)), "shortlist count");
-    await page.getByLabel("Shortlist only").check();
-    assert(/^1 demo listing/.test(await countText(page)), "shortlist filter");
-    await page.getByLabel("Shortlist only").uncheck();
   });
 
-  await check("unknown listing link shows not-found, not a crash", async () => {
-    await page.goto(`${ORIGIN}/festival-hub#festival=does-not-exist`);
+  await check("unknown listing link shows not-found; demo ids don't resolve in real mode", async () => {
+    await page.goto(`${ORIGIN}/festival-hub#festival=demo-highland`);
     await page.getByRole("dialog").getByText("Listing not found").waitFor();
     await page.goto(`${ORIGIN}/festival-hub#festival=%E0%A4%A`);
     await page.getByRole("dialog").getByText("Listing not found").waitFor();
   });
 
-  await check("network: no backend, no external (fonts blocked), no calendar code", async () => assertHubNetworkClean(log, "desktop"));
+  await check("real-mode network: no backend, no external (fonts blocked), no calendar code", async () => assertHubNetworkClean(log, "real"));
+  await ctx.close();
+}
+
+// ── Hub: demo mode (explicit toggle) ───────────────────────────────
+console.log("Hub — demo mode");
+{
+  const { ctx, log } = await newContext({ viewport: { width: 1280, height: 900 } });
+  const page = await ctx.newPage();
+  await page.goto(`${ORIGIN}/festival-hub`);
+  await check("demo only via explicit toggle; clearly labelled; never mixed with real listings", async () => {
+    await page.getByRole("link", { name: /View the demo/ }).click();
+    await page.waitForURL(/\?demo=1$/);
+    await page.getByRole("note").filter({ hasText: "Demo data" }).waitFor();
+    assert(/10 demo listings/.test(await countText(page)), await countText(page));
+    assert(await page.locator(".fh-card").count() === await page.locator(".fh-card .fh-badge-demo").count(), "card without DEMO badge");
+    assert(!(await page.content()).includes("Hanwell Hootie"), "real listing in demo mode");
+    await page.screenshot({ path: join(OUT, "demo-list.png"), fullPage: true });
+  });
+  await check("demo links are labelled demo examples; historical form labelled", async () => {
+    await page.goto(`${ORIGIN}/festival-hub?demo=1#festival=demo-harbour`);
+    const dlg = page.getByRole("dialog");
+    await dlg.waitFor();
+    assert(await dlg.getByRole("link", { name: /2026 application page \(historical — not for 2027\) \(demo example\)/ }).count() === 1, "historical label");
+    assert(await dlg.getByRole("link", { name: /^Official application page/ }).count() === 0, "apply on not-yet-announced");
+  });
+  await check("demo saves go to the demo store only", async () => {
+    await page.goto(`${ORIGIN}/festival-hub?demo=1#festival=demo-coastline`);
+    await page.getByRole("dialog").getByRole("button", { name: /Save to shortlist/ }).click();
+    const stores = await page.evaluate(([r, d]) => [localStorage.getItem(r), localStorage.getItem(d)], [REAL_KEY, DEMO_KEY]);
+    assert(stores[0] === null && /demo-coastline/.test(stores[1]), JSON.stringify(stores));
+    await page.goto(`${ORIGIN}/festival-hub`);
+    await banner(page).waitFor();
+    assert(!/on your shortlist/.test(await countText(page)), "demo save visible in real mode");
+  });
+  await check("demo-mode network clean", async () => assertHubNetworkClean(log, "demo"));
   await ctx.close();
 }
 
@@ -255,7 +331,7 @@ console.log("Hub — storage failures");
   const { ctx, log } = await newContext();
   await ctx.addInitScript(() => { Storage.prototype.setItem = () => { throw new DOMException("full", "QuotaExceededError"); }; });
   const page = await ctx.newPage();
-  await page.goto(`${ORIGIN}/festival-hub#festival=demo-northfields`);
+  await page.goto(`${ORIGIN}/festival-hub#festival=twyfest`);
   await check("write failure shows a visible notice", async () => {
     await page.getByRole("dialog").getByRole("button", { name: /Save to shortlist/ }).click();
     await page.getByRole("alert").filter({ hasText: "couldn't be saved" }).waitFor();
@@ -271,7 +347,7 @@ console.log("Hub — storage failures");
   await page.goto(`${ORIGIN}/festival-hub`);
   await check("blocked storage shows notice on load and page still works", async () => {
     await page.getByRole("alert").filter({ hasText: "Saving isn't available" }).waitFor();
-    assert(/8 demo listings/.test(await countText(page)), "list missing");
+    assert(/26 listings/.test(await countText(page)), "list missing");
   });
   await ctx.close();
 }
@@ -279,18 +355,18 @@ console.log("Hub — storage failures");
   const { ctx } = await newContext();
   const page = await ctx.newPage();
   await page.goto(`${ORIGIN}/festival-hub`);
-  await page.evaluate(() => localStorage.setItem("msm.festivalHub.v1", JSON.stringify({ version: 1, items: { "demo-valleys": { stage: "applied", email: "x@example.com" }, "<script>": {} } })));
+  await page.evaluate(() => localStorage.setItem("msm.festivalHub.real.v1", JSON.stringify({ version: 1, items: { "dorsetfest": { stage: "applied", email: "x@example.com" }, "<script>": {}, "demo-valleys": {} } })));
   await page.reload();
   await check("invalid stored data is ignored with a notice; no contact details survive a save", async () => {
     await page.getByRole("alert").filter({ hasText: "couldn't be read" }).waitFor();
     assert(/1 on your shortlist/.test(await countText(page)), "valid entry should survive");
-    await page.goto(`${ORIGIN}/festival-hub#festival=demo-valleys`);
+    await page.goto(`${ORIGIN}/festival-hub#festival=dorsetfest`);
     await page.getByRole("dialog").getByLabel("Stage", { exact: true }).selectOption("outcome");
-    const stored = await page.evaluate(() => localStorage.getItem("msm.festivalHub.v1"));
-    assert(!/example\.com|script/.test(stored), `stored: ${stored}`);
+    const stored = await page.evaluate(() => localStorage.getItem("msm.festivalHub.real.v1"));
+    assert(!/example\.com|script|demo-/.test(stored), `stored: ${stored}`);
   });
   await page.goto(`${ORIGIN}/festival-hub`);
-  await page.evaluate(() => localStorage.setItem("msm.festivalHub.v1", "{corrupt"));
+  await page.evaluate(() => localStorage.setItem("msm.festivalHub.real.v1", "{corrupt"));
   await page.reload();
   await check("corrupt JSON shows notice and empty shortlist", async () => {
     await page.getByRole("alert").filter({ hasText: "couldn't be read" }).waitFor();
@@ -305,10 +381,10 @@ console.log("Guard — calendar shell on hub paths");
   const { ctx, log } = await newContext();
   const page = await ctx.newPage();
   await check("unknown /festival-hub/* path (Vercel catch-all) redirects to hub without starting the calendar", async () => {
-    await page.goto(`${ORIGIN}/festival-hub/some/deep/path?x=1#festival=demo-highland`);
+    await page.goto(`${ORIGIN}/festival-hub/some/deep/path?x=1#festival=twyfest`);
     await banner(page).waitFor();
     assert(new URL(page.url()).pathname === "/festival-hub/index.html", page.url());
-    assert(page.url().endsWith("?x=1#festival=demo-highland"), `query/hash lost: ${page.url()}`);
+    assert(page.url().endsWith("?x=1#festival=twyfest"), `query/hash lost: ${page.url()}`);
     await page.getByRole("dialog").waitFor();
     assert(log.supabase.length === 0, `backend requests: ${log.supabase}`);
     const guardErr = log.pageErrors.filter((e) => !/MSM calendar not started on a Festival Hub path/.test(e));
@@ -347,7 +423,7 @@ console.log("Warm service worker — current build");
     await banner(page).waitFor();
     await page.reload();
     await banner(page).waitFor();
-    await page.goto(`${ORIGIN}/festival-hub#festival=demo-coastline`);
+    await page.goto(`${ORIGIN}/festival-hub#festival=dart-music-festival`);
     await page.getByRole("dialog").getByRole("button", { name: /Save to shortlist/ }).click();
     await page.goto(`${ORIGIN}/festival-hub/`);
     await banner(page).waitFor();
