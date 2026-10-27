@@ -37,7 +37,7 @@ html{font-size:16px}
 body{background:${C.bg};color:${C.white};font-family:${F.body};line-height:1.5;-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent}
 a{color:${C.white}}
 :focus-visible{outline:3px solid ${C.red};outline-offset:2px}
-.fh-skip{position:absolute;left:-9999px;top:8px;background:${C.red};color:#fff;padding:8px 14px;z-index:20;border-radius:4px}
+.fh-skip{position:absolute;left:-9999px;top:8px;background:${C.redFill};color:#fff;padding:8px 14px;z-index:20;border-radius:4px}
 .fh-skip:focus{left:8px}
 .fh-header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 24px;border-bottom:1px solid ${C.borderStrong};background:#0a0a0a;flex-wrap:wrap}
 .fh-brand{display:flex;align-items:center;gap:14px;text-decoration:none;color:inherit}
@@ -45,7 +45,7 @@ a{color:${C.white}}
 .fh-title span{color:${C.red}}
 .fh-nav{display:flex;gap:10px;flex-wrap:wrap}
 .fh-staging{background:#fff;color:#000;padding:6px 24px;font-weight:600;font-size:13px}
-.fh-banner{background:${C.red};color:#fff;padding:10px 24px;font-weight:600;font-size:14px}
+.fh-banner{background:${C.redFill};color:#fff;padding:10px 24px;font-weight:600;font-size:14px}
 .fh-banner-real{background:${C.surfaceHigh};color:#fff;border-bottom:1px solid ${C.borderStrong};font-weight:500}
 .fh-banner a{color:#fff}
 .fh-main{max-width:1200px;margin:0 auto;padding:24px}
@@ -60,7 +60,7 @@ a{color:${C.white}}
 .fh-small{color:${C.muted};font-size:13px}
 .fh-btn{appearance:none;-webkit-appearance:none;display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:44px;padding:10px 18px;border-radius:5px;border:1px solid ${C.borderStrong};background:transparent;color:${C.white};font-family:${F.display};letter-spacing:2px;font-size:16px;cursor:pointer;text-decoration:none;text-align:center}
 .fh-btn:hover{border-color:${C.red}}
-.fh-btn-primary{background:${C.red};border-color:${C.red};color:#fff}
+.fh-btn-primary{background:${C.redFill};border-color:${C.redFill};color:#fff}
 .fh-btn-primary:hover{background:#c91a31}
 .fh-btn small{font-family:${F.body};letter-spacing:0;font-size:12px;opacity:.85}
 .fh-filters{display:grid;grid-template-columns:2fr repeat(4,1fr);gap:12px;align-items:end;margin:28px 0 12px;padding:16px;border:1px solid ${C.borderStrong};border-radius:8px;background:${C.surface}}
@@ -68,6 +68,7 @@ a{color:${C.white}}
 .fh-field label,.fh-legend{font-size:12px;letter-spacing:1.5px;text-transform:uppercase;color:${C.muted}}
 .fh-input{width:100%;min-height:44px;padding:10px 12px;background:rgba(255,255,255,0.10);border:1px solid rgba(255,255,255,0.2);border-radius:5px;color:#fff;font-size:16px;font-family:${F.body}}
 select.fh-input option{background:#111;color:#fff}
+.fh-input::placeholder{color:${C.placeholder};opacity:1}
 .fh-filter-row{display:flex;gap:16px;align-items:center;flex-wrap:wrap;grid-column:1/-1}
 .fh-check{display:inline-flex;align-items:center;gap:8px;min-height:44px;cursor:pointer}
 .fh-check input{width:20px;height:20px;accent-color:${C.red}}
@@ -79,9 +80,9 @@ select.fh-input option{background:#111;color:#fff}
 .fh-meta{color:${C.muted};font-size:14px}
 .fh-badges{display:flex;gap:6px;flex-wrap:wrap}
 .fh-badge{display:inline-block;padding:2px 8px;border-radius:3px;font-size:12px;font-weight:600;letter-spacing:1px;text-transform:uppercase;border:1px solid ${C.borderStrong};color:${C.white}}
-.fh-badge-demo{border-color:${C.red};color:${C.red}}
+.fh-badge-demo{border-color:${C.red};color:${C.redTextOnDark}}
 .fh-badge-unpaid{border-color:#fff;background:#fff;color:#000}
-.fh-st-open{background:${C.red};border-color:${C.red};color:#fff}
+.fh-st-open{background:${C.redFill};border-color:${C.redFill};color:#fff}
 .fh-st-not-yet-open,.fh-st-not-yet-announced{border-color:#fff}
 .fh-st-closed{color:${C.dim}}
 .fh-st-unverified{border-style:dashed;border-color:#fff}
@@ -250,8 +251,12 @@ function SourceItem({ label, v }) {
   );
 }
 
-function DetailDialog({ listing, missing, info, entry, demo, onClose, onToggleSave, onUpdate }) {
+function DetailDialog({ listing, missing, info, entry, demo, storageProblem, saveStatus, onClose, onToggleSave, onUpdate }) {
   const ref = useRef(null);
+  // A storage warning already present when the dialog opened is shown as
+  // plain text; one that appears while it is open is announced (role=alert).
+  const [problemAtOpen] = useState(storageProblem);
+  const writeProblem = storageProblem === "failed" || storageProblem === "unavailable" ? storageProblem : null;
   const headingId = useId();
   const stageId = useId();
   const outcomeId = useId();
@@ -328,6 +333,10 @@ function DetailDialog({ listing, missing, info, entry, demo, onClose, onToggleSa
                 {entry ? "★ Remove from shortlist" : "☆ Save to shortlist"}
               </button>
             </div>
+            {writeProblem && (
+              <div className="fh-notice" role={writeProblem !== problemAtOpen ? "alert" : undefined}>{DIALOG_STORAGE_WARNINGS[writeProblem]}</div>
+            )}
+            <p className="fh-small" role="status" aria-live="polite">{saveStatus}</p>
             <p className="fh-small">{NO_AUTO_SUBMIT}</p>
 
             <section className="fh-panel" aria-label="Sources">
@@ -380,6 +389,13 @@ function DetailDialog({ listing, missing, info, entry, demo, onClose, onToggleSa
   );
 }
 
+// Shown inside the detail dialog (the page behind a modal dialog is hidden
+// from view and from screen readers). Never claims the change was saved.
+const DIALOG_STORAGE_WARNINGS = {
+  failed: "Not saved. This browser couldn't store your shortlist, so this change is kept on this page only and will be lost when you reload or leave.",
+  unavailable: "Saving isn't available in this browser. Shortlist changes are kept on this page only and will be lost when you reload or leave.",
+};
+
 const STORAGE_MESSAGES = {
   unavailable: "Saving isn't available in this browser (storage is blocked or full). Your shortlist will only last until you leave this page.",
   failed: "Your last change couldn't be saved in this browser (storage is blocked or full). It will be lost when you leave this page.",
@@ -406,7 +422,9 @@ export default function FestivalHubApp({ now: nowProp } = {}) {
   const [storageProblem, setStorageProblem] = useState(initialProblem);
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
   const [openId, setOpenId] = useState(() => readHashId());
+  const [saveStatus, setSaveStatus] = useState("");
   const lastTrigger = useRef(null);
+  const focusResultsAfterReset = useRef(false);
 
   useEffect(() => {
     const onHash = () => setOpenId(readHashId());
@@ -416,6 +434,14 @@ export default function FestivalHubApp({ now: nowProp } = {}) {
 
   const setFilter = useCallback((key, value) => setFilters((f) => ({ ...f, [key]: value })), []);
   const resetFilters = useCallback(() => setFilters(DEFAULT_FILTERS), []);
+  // The empty state's reset button disappears once results return, so move
+  // focus to the results region after that render (next Tab: first card).
+  const resetFromEmptyState = useCallback(() => { focusResultsAfterReset.current = true; resetFilters(); }, [resetFilters]);
+  useEffect(() => {
+    if (!focusResultsAfterReset.current) return;
+    focusResultsAfterReset.current = false;
+    document.getElementById("fh-results")?.focus();
+  }, [filters]);
 
   const regions = useMemo(() => regionsOf(listings), [listings]);
   const genres = useMemo(() => genresOf(listings), [listings]);
@@ -423,11 +449,15 @@ export default function FestivalHubApp({ now: nowProp } = {}) {
   const results = useMemo(() => applyFilters(listings, filters, { now, savedIds }), [listings, filters, now, savedIds]);
   const openCount = useMemo(() => listings.filter((l) => applicationStatus(l, now).status === STATUS.OPEN).length, [listings, now]);
 
+  // Returns whether the change was written to this browser's storage.
   const commit = useCallback((next) => {
     setSaved(next);
     const ok = persistSaved(next, window, storageKey);
     setStorageProblem((p) => (ok ? (p === "corrupt" ? "corrupt" : null) : (p === "unavailable" ? "unavailable" : "failed")));
+    return ok;
   }, [storageKey]);
+
+  useEffect(() => { setSaveStatus(""); }, [openId]);
 
   const openListing = openId ? listings.find((l) => l.id === openId) : null;
 
@@ -451,10 +481,17 @@ export default function FestivalHubApp({ now: nowProp } = {}) {
 
   const toggleSave = () => {
     if (!openListing) return;
+    const removing = !!saved[openListing.id];
     const next = { ...saved };
-    if (next[openListing.id]) delete next[openListing.id];
+    if (removing) delete next[openListing.id];
     else next[openListing.id] = emptyEntry();
-    commit(next);
+    const warningAlreadyShown = storageProblem === "failed" || storageProblem === "unavailable";
+    const ok = commit(next);
+    // Polite status for the outcome. On a NEW write failure the dialog's
+    // role=alert warning announces it instead, so nothing is said twice.
+    if (ok) setSaveStatus(removing ? "Removed from your shortlist in this browser." : "Saved to your shortlist in this browser.");
+    else if (warningAlreadyShown) setSaveStatus(removing ? "Removed on this page only — not saved, so it may reappear when you reload." : "Added on this page only — not saved, so it will be lost when you reload.");
+    else setSaveStatus("");
   };
   const updateEntry = (patch) => {
     if (!openListing || !saved[openListing.id]) return;
@@ -503,9 +540,11 @@ export default function FestivalHubApp({ now: nowProp } = {}) {
         </section>
 
         {storageProblem && (
-          <div className="fh-notice" role="alert">{STORAGE_MESSAGES[storageProblem]}</div>
+          // Announced only while no modal is open; the dialog carries its own warning.
+          <div className="fh-notice" role={openId === null ? "alert" : undefined}>{STORAGE_MESSAGES[storageProblem]}</div>
         )}
 
+        <h2 className="fh-sr">Festival listings</h2>
         {listings.length === 0 ? (
           <div className="fh-empty" id="fh-results" tabIndex={-1} style={{ marginTop: 24 }}>
             <p><strong style={{ color: "#fff" }}>No verified listings yet.</strong> MSM is checking 2027 festival application windows against official sources. Listings appear here only once checked.</p>
@@ -524,7 +563,7 @@ export default function FestivalHubApp({ now: nowProp } = {}) {
               {results.length === 0 ? (
                 <div className="fh-empty">
                   <p>{filters.savedOnly && savedIds.size === 0 ? "Your shortlist is empty. Open a listing and choose “Save to shortlist”." : `No ${noun}s match these filters.`}</p>
-                  <button type="button" className="fh-btn fh-btn-primary" onClick={resetFilters}>Reset filters</button>
+                  <button type="button" className="fh-btn fh-btn-primary" onClick={resetFromEmptyState}>Reset filters</button>
                 </div>
               ) : (
                 <ul className="fh-grid" aria-label="Festival listings">
@@ -576,6 +615,8 @@ export default function FestivalHubApp({ now: nowProp } = {}) {
           info={openListing ? applicationStatus(openListing, now) : null}
           entry={openListing ? saved[openListing.id] : null}
           demo={demo}
+          storageProblem={storageProblem}
+          saveStatus={saveStatus}
           onClose={closeDetail}
           onToggleSave={toggleSave}
           onUpdate={updateEntry}

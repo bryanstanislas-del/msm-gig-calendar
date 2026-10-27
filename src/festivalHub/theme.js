@@ -15,6 +15,13 @@ export const C = Object.freeze({
   white: "#fff",
   muted: "#9a9a9a",
   dim: "#828282",
+  // Hub-only semantic tokens (not in App.jsx). White text on the brand red
+  // #e8203a is 4.47:1, just under WCAG AA 4.5:1, and the same red as small
+  // text on #111 is 4.23:1. The brand red stays for borders, accents and
+  // large text; these tokens cover the cases it can't:
+  redFill: "#dc1c35",       // background behind white text: 4.93:1
+  redTextOnDark: "#ff4d61", // small red text on the dark surfaces: 5.83:1 on #111
+  placeholder: "#9a9a9a",   // input placeholder on the input fill: 5.17:1
 });
 
 export const F = Object.freeze({
