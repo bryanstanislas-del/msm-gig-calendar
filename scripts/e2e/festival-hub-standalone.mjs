@@ -2,9 +2,13 @@
 //
 //   npm run test:e2e:hub-standalone
 //
-// 1. Simulates the deploy-branch upload (scripts/standalone/.vercelignore),
-//    builds the hub from ONLY those files with VERCEL=1 (so the output
+// 1. Default: simulates the deploy-branch upload (scripts/standalone/.vercelignore)
+//    and builds the hub from ONLY those files with VERCEL=1 (so the output
 //    verifier also enforces that api/ and supabase/ are absent).
+//    STANDALONE_CHECKOUT=<dir>: instead uses an actual git checkout of the
+//    deploy branch (with node_modules installed, e.g. `npm ci`), checks its
+//    TRACKED tree is hub-only, builds there with VERCEL=1 and serves with
+//    that checkout's own vercel.json -- what Vercel's Git integration does.
 // 2. Serves that output with the routing and headers read from
 //    scripts/standalone/vercel.json: filesystem first, then the exact
 //    rewrites, otherwise 404 -- the same order Vercel uses.
@@ -17,7 +21,7 @@
 // leaving the machine. Date is frozen at 27 Oct 2026 12:00 UK time.
 import http from "node:http";
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
@@ -27,7 +31,8 @@ const { chromium } = createRequire(import.meta.url)("playwright");
 const ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const OUT = resolve(process.env.E2E_OUT || join(tmpdir(), "festival-hub-standalone-e2e"));
 mkdirSync(OUT, { recursive: true });
-const VERCEL_JSON = JSON.parse(readFileSync(join(ROOT, "scripts/standalone/vercel.json"), "utf8"));
+const CHECKOUT = process.env.STANDALONE_CHECKOUT ? resolve(process.env.STANDALONE_CHECKOUT) : null;
+const VERCEL_JSON = JSON.parse(readFileSync(CHECKOUT ? join(CHECKOUT, "vercel.json") : join(ROOT, "scripts/standalone/vercel.json"), "utf8"));
 const FROZEN_NOW = new Date("2026-10-27T11:00:00Z");
 
 const results = [];
@@ -39,17 +44,35 @@ async function check(name, fn) {
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
 // ── 1. Build exactly what the deploy branch would upload ────────────
-console.log("Standalone — simulated Vercel upload and build");
+// Anything outside the hub build inputs: API, database, calendar code/config/HTML, calendar public files, tests.
+const NOT_HUB = /^(api|supabase)\/|^src\/(?!festivalHub\/)|^vite\.config\.js$|^vite\.festival-hub\.config\.js$|^index\.html$|^public\/(?!favicon\.ico$|brand\/MSM-Logo-Master\.png$)|\.test\.js$|(^|\/)sw\.js$|manifest/;
 const work = mkdtempSync(join(tmpdir(), "hub-standalone-"));
-const upload = JSON.parse(execFileSync(process.execPath, [join(ROOT, "scripts/standalone/simulate-vercel-upload.mjs"), join(work, "src")], { encoding: "utf8" }));
-const SRC = upload.dest;
-await check("upload allowlist excludes api/, supabase/ and all calendar code", async () => {
-  const bad = upload.files.filter((f) => /^(api|supabase)\/|^src\/(?!festivalHub\/)|^vite\.config\.js$|^vite\.festival-hub\.config\.js$|^index\.html$|\.test\.js$/.test(f));
-  assert(bad.length === 0, `unexpected upload files: ${bad.join(", ")}`);
-  assert(upload.files.includes("vercel.json") && upload.files.includes("src/festivalHub/main.jsx"), "build inputs missing");
-  return `${upload.files.length} files uploaded`;
-});
-cpSync(join(ROOT, "node_modules"), join(SRC, "node_modules"), { recursive: true, verbatimSymlinks: true });
+let SRC;
+if (CHECKOUT) {
+  console.log(`Standalone — actual git checkout ${CHECKOUT}`);
+  SRC = CHECKOUT;
+  const tracked = execFileSync("git", ["ls-files"], { cwd: SRC, encoding: "utf8" }).split("\n").filter(Boolean);
+  const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: SRC, encoding: "utf8" }).trim();
+  const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: SRC, encoding: "utf8" }).trim();
+  await check("tracked tree of the deploy checkout is hub-only (no api/, supabase/, calendar App/client/entry/public/SW)", async () => {
+    const bad = tracked.filter((f) => NOT_HUB.test(f));
+    assert(bad.length === 0, `non-hub tracked files: ${bad.join(", ")}`);
+    for (const dir of ["api", "supabase"]) assert(!existsSync(join(SRC, dir)), `${dir}/ exists in checkout`);
+    assert(tracked.includes("vercel.json") && tracked.includes("src/festivalHub/main.jsx"), "build inputs missing");
+    return `${branch} @ ${sha.slice(0, 7)}: ${tracked.length} tracked files`;
+  });
+} else {
+  console.log("Standalone — simulated Vercel upload and build");
+  const upload = JSON.parse(execFileSync(process.execPath, [join(ROOT, "scripts/standalone/simulate-vercel-upload.mjs"), join(work, "src")], { encoding: "utf8" }));
+  SRC = upload.dest;
+  await check("upload allowlist excludes api/, supabase/ and all calendar code", async () => {
+    const bad = upload.files.filter((f) => NOT_HUB.test(f));
+    assert(bad.length === 0, `unexpected upload files: ${bad.join(", ")}`);
+    assert(upload.files.includes("vercel.json") && upload.files.includes("src/festivalHub/main.jsx"), "build inputs missing");
+    return `${upload.files.length} files uploaded`;
+  });
+  cpSync(join(ROOT, "node_modules"), join(SRC, "node_modules"), { recursive: true, verbatimSymlinks: true });
+}
 let buildLog = "";
 await check("standalone build + output verifier pass with VERCEL=1", async () => {
   buildLog = execFileSync("npm", ["run", "build:hub-standalone"], { cwd: SRC, env: { ...process.env, VERCEL: "1" }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });

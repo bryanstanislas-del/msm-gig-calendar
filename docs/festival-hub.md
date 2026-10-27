@@ -178,12 +178,32 @@ fresh rendering at `/` and `/festival-hub(/)`, no service worker (a forced
 registration is blocked by CSP), no backend/API requests (forced fetches
 are blocked by CSP), local saves and real/demo separation.
 
-**Syncing the deploy branch (no merges):** the deploy branch is a
-`feature/festival-hub` commit plus one config commit. To update it, replay
-new `feature/festival-hub` commits onto it with `git cherry-pick <sha>…`
-(never `git merge`), run `npm run build:hub-standalone` and
-`npm run test:e2e:hub-standalone`, then push the deploy branch. It never
-gets a PR and is never merged anywhere.
+**The deploy branch is a minimal tracked tree.** Vercel's Git integration
+did not apply `.vercelignore` (first standalone deployment
+`9BcMzm9NB8nG77qgR1ChDVVpQ8wZ` failed safely: the verifier found `api/` and
+`supabase/` in the build checkout). So `feature/festival-hub-standalone` is a
+`feature/festival-hub` commit, plus the config commit, plus a commit that
+removes every tracked file outside the hub build allowlist on that branch
+only (`api/`, `supabase/`, calendar sources, entry, configs, `public/` except
+the logo and favicon, tests, docs). `feature/festival-hub` keeps the full
+tree. `.vercelignore` stays as a second layer, and the verifier's
+`api/`/`supabase/` check is unchanged.
+
+Test from an actual checkout of the deploy branch:
+
+```
+git clone --branch feature/festival-hub-standalone <repo> hub-deploy
+cd hub-deploy && npm ci && cd -
+STANDALONE_CHECKOUT=hub-deploy npm run test:e2e:hub-standalone   # run from feature/festival-hub
+```
+
+**Syncing the deploy branch (no merges):** cherry-pick only the new
+`feature/festival-hub` commits that change hub build inputs
+(`src/festivalHub/`, `festival-hub/`, `scripts/standalone/`, the standalone
+Vite config, package files) onto it with `git cherry-pick <sha>…` (never
+`git merge`). If a pick touches a file that is not in the deploy tree, keep
+it deleted (`git rm` it and continue). Then run the checkout test above and
+push the deploy branch. It never gets a PR and is never merged anywhere.
 
 ### Preview caveat
 
