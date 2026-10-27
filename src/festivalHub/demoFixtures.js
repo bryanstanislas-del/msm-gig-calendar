@@ -134,7 +134,7 @@ export const DEMO_LISTINGS = Object.freeze([
     verified: true,
     region: "Midlands",
     location: "Example city square, Midlands (demo)",
-    festivalDates: { start: "2027-08-27", end: "2027-08-29" },
+    festivalDates: { start: "2027-11-19", end: "2027-11-21" },
     genres: ["Hip-Hop", "R&B", "Soul"],
     application: { opens: "2026-10-01", closes: "2027-10-31" },
     eligibility: "Example criteria: Midlands-based hip-hop, R&B and soul acts.",

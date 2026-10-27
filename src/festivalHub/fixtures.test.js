@@ -37,4 +37,14 @@ describe("demo fixtures", () => {
       }
     }
   });
+  it("application deadline falls before the festival starts, and the festival ends on or after it starts", () => {
+    for (const l of DEMO_LISTINGS) {
+      const { start, end } = l.festivalDates;
+      if (end) expect(end >= start, `${l.id} end before start`).toBe(true);
+      const { opens, closes } = l.application;
+      if (closes) expect(closes < start, `${l.id} closes ${closes} on/after festival start ${start}`).toBe(true);
+      if (opens) expect(opens < start, `${l.id} opens ${opens} on/after festival start ${start}`).toBe(true);
+      if (opens && closes) expect(opens <= closes, `${l.id} opens after closes`).toBe(true);
+    }
+  });
 });
