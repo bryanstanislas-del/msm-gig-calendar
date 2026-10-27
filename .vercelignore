@@ -1,0 +1,24 @@
+# Festival Hub STANDALONE preview: upload ONLY what the hub build needs.
+# Everything is ignored first, then the build inputs are re-included.
+# api/ and supabase/ are never uploaded, so no serverless functions can be
+# detected or deployed (verify-output.mjs also fails the build if they exist).
+/*
+!/package.json
+!/package-lock.json
+!/vercel.json
+!/vite.festival-hub-standalone.config.js
+!/festival-hub/
+!/src/
+/src/*
+!/src/festivalHub/
+/src/festivalHub/*.test.js
+!/public/
+/public/*
+!/public/favicon.ico
+!/public/brand/
+/public/brand/*
+!/public/brand/MSM-Logo-Master.png
+!/scripts/
+/scripts/*
+!/scripts/standalone/
+/scripts/standalone/*.test.js
