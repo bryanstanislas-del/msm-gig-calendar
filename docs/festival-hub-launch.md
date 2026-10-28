@@ -80,6 +80,10 @@ ancestor.
 - **Release CSP:** `frame-ancestors https://musicscenemagazine.co.uk https://www.musicscenemagazine.co.uk`. That's exactly the two WordPress origins, with no wildcard, no calendar origin and no `X-Frame-Options`. Every other directive is unchanged.
 - **Staging template:** keeps `frame-ancestors 'none'`.
 - **Owner deployment:** the owner deployed the fix directly as `dpl_8MKe5W3m8Xj6U7Pj2YxSZv2wsKAK`. The owner's browser then loaded the Hub inside `iframe#msm-calendar` with no CSP errors.
+- **Stale cached responses:** the owner measured the cause. The HTML was unchanged, so its ETag stayed `"c431283eac0f5acb0c5e6a718d441245"`, and Vercel answers a matching `If-None-Match` with a **304 that carries no CSP**. A browser with the cached page therefore kept the old `frame-ancestors 'none'`.
+  - **Fix:** the launch HTML now carries `<meta name="msm-embed-policy" content="frame-ancestors-wordpress-2026-10-28" />`, so its ETag changes to `"18bba7fb5ce018518a705c7f67e0950d"` (Vercel's ETag is the file's MD5).
+  - Bump `EMBED_POLICY_MARKER` in `scripts/standalone/mode.mjs` whenever the framing policy changes.
+  - JS, assets, canonical and robots are unchanged.
 - **Not yet confirmed for every user:** a later user screenshot (09:59) still showed a refused frame. The cause is under investigation (a stale cached response, or a different URL or path); don't treat it as fixed for everyone.
 - **Test:** `npm run test:e2e:hub-embedding`, run as root. It needs port 443, because CSP host-sources match only the default port. It runs real HTTPS in Chromium:
   - the WordPress (apex and `www`) → calendar frame → FESTIVAL HUB click loads the Hub, and so does direct framing by WordPress;

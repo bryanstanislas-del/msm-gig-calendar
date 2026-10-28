@@ -2,7 +2,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import {
-  CANONICAL_URL, INDEXABLE_HOST, INDEXABLE_HOST_REGEX, LAUNCH_DESCRIPTION, LAUNCH_TITLE,
+  CANONICAL_URL, EMBED_POLICY_MARKER, INDEXABLE_HOST, INDEXABLE_HOST_REGEX, LAUNCH_DESCRIPTION, LAUNCH_TITLE,
   PUBLIC_ORIGIN, ROBOTS_TXT, SITEMAP_XML, applyLaunchHtml, isLaunchBuild,
 } from "./mode.mjs";
 
@@ -36,6 +36,12 @@ describe("launch HTML", () => {
     expect(html).toContain(`<meta property="og:url" content="${CANONICAL_URL}" />`);
     expect(html).toContain(`<title>${LAUNCH_TITLE}</title>`);
     expect(html).toContain(`<meta name="description" content="${LAUNCH_DESCRIPTION}" />`);
+  });
+  it("carries the framing-policy marker once (launch only), so the HTML's ETag changed with the frame-ancestors policy", () => {
+    expect(EMBED_POLICY_MARKER).toBe('<meta name="msm-embed-policy" content="frame-ancestors-wordpress-2026-10-28" />');
+    expect(html.split(EMBED_POLICY_MARKER)).toHaveLength(2);
+    expect(html).toContain(`<meta name="robots" content="index, follow" />\n    ${EMBED_POLICY_MARKER}\n`);
+    expect(HUB_HTML).not.toContain("msm-embed-policy");
   });
   it("leaves the rest of the page unchanged", () => {
     for (const keep of ['<html lang="en-GB">', '<meta name="theme-color" content="#0a0a0a" />', '<link rel="icon" type="image/x-icon" href="/favicon.ico" />', '<script type="module" src="/src/festivalHub/main.jsx"></script>'])

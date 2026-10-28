@@ -25,11 +25,21 @@ export const ROBOTS_TXT = `User-agent: *\nAllow: /\nSitemap: ${PUBLIC_ORIGIN}/si
 export const SITEMAP_XML =
   `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n  <url><loc>${CANONICAL_URL}</loc></url>\n</urlset>\n`;
 
+// Launch-only marker for the framing policy (frame-ancestors in vercel.release.json).
+// Bump the date whenever that policy changes, so the HTML's ETag changes too.
+export const EMBED_POLICY_MARKER = '<meta name="msm-embed-policy" content="frame-ancestors-wordpress-2026-10-28" />';
+
 // Head tags replaced in festival-hub/index.html for launch builds. Each `from`
 // must exist exactly once (the build fails otherwise).
 export const LAUNCH_HTML_REPLACEMENTS = [
   ["    <!-- Staging: keep out of search engines. -->\n", ""],
-  ['<meta name="robots" content="noindex, nofollow" />', '<meta name="robots" content="index, follow" />'],
+  [
+    '<meta name="robots" content="noindex, nofollow" />',
+    // EMBED_POLICY_MARKER changes the launch HTML (and so its ETag) whenever the
+    // framing policy changes: Vercel answers a matching If-None-Match with a 304
+    // that carries no CSP, so a browser would keep the cached old frame-ancestors.
+    `<meta name="robots" content="index, follow" />\n    ${EMBED_POLICY_MARKER}`,
+  ],
   [
     '<meta name="description" content="MSM Festival Hub (staging): 2027 UK festival application windows for grassroots bands, checked against official festival sources." />',
     `<meta name="description" content="${LAUNCH_DESCRIPTION}" />\n` +
