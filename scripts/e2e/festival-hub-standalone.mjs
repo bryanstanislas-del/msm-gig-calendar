@@ -45,7 +45,7 @@ function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
 // ── 1. Build exactly what the deploy branch would upload ────────────
 // Anything outside the hub build inputs: API, database, calendar code/config/HTML, calendar public files, tests.
-const NOT_HUB = /^(api|supabase)\/|^src\/(?!festivalHub\/)|^vite\.config\.js$|^vite\.festival-hub\.config\.js$|^index\.html$|^public\/(?!favicon\.ico$|brand\/MSM-Logo-Master\.png$)|\.test\.js$|(^|\/)sw\.js$|manifest/;
+const NOT_HUB = /^(api|supabase)\/|^src\/(?!festivalHub\/)|^vite\.config\.js$|^vite\.festival-hub\.config\.js$|^index\.html$|^public\/(?!favicon\.ico$)|\.test\.js$|(^|\/)sw\.js$|manifest/;
 const work = mkdtempSync(join(tmpdir(), "hub-standalone-"));
 let SRC;
 if (CHECKOUT) {
@@ -83,9 +83,10 @@ const DIST = join(SRC, VERCEL_JSON.outputDirectory);
 const walk = (d) => readdirSync(d).flatMap((n) => (statSync(join(d, n)).isDirectory() ? walk(join(d, n)).map((x) => `${n}/${x}`) : [n]));
 const distFiles = walk(DIST).sort();
 const hubJs = distFiles.find((f) => /^festival-hub\/assets\/.+\.js$/.test(f));
+const hubLogo = distFiles.find((f) => /^festival-hub\/assets\/msm-logo-hub-[\w-]+\.webp$/.test(f));
 
 // ── 2. Server mirroring scripts/standalone/vercel.json ──────────────
-const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".png": "image/png", ".ico": "image/x-icon" };
+const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".png": "image/png", ".webp": "image/webp", ".ico": "image/x-icon" };
 const HEADERS = Object.fromEntries(VERCEL_JSON.headers[0].headers.map((h) => [h.key, h.value]));
 const REWRITES = new Map(VERCEL_JSON.rewrites.map((r) => [r.source, r.destination]));
 const isFile = (p) => { try { return statSync(p).isFile(); } catch { return false; } };
@@ -106,7 +107,8 @@ const ORIGIN = `http://127.0.0.1:${server.address().port}`;
 console.log(`Standalone — routing and headers at ${ORIGIN}`);
 const get = (p) => fetch(ORIGIN + p, { redirect: "manual" });
 await check("output contains only hub files", async () => {
-  assert(JSON.stringify(distFiles) === JSON.stringify(["brand/MSM-Logo-Master.png", "favicon.ico", hubJs, "festival-hub/index.html"].sort()), distFiles.join(", "));
+  assert(JSON.stringify(distFiles) === JSON.stringify(["favicon.ico", hubJs, hubLogo, "festival-hub/index.html"].sort()), distFiles.join(", "));
+  assert(statSync(join(DIST, hubLogo)).size === 342906, "hub logo size");
   return distFiles.join(", ");
 });
 await check("hub HTML at /, /festival-hub, /festival-hub/, /festival-hub/index.html, /?demo=1", async () => {
@@ -117,14 +119,14 @@ await check("hub HTML at /, /festival-hub, /festival-hub/, /festival-hub/index.h
   }
 });
 await check("assets served with correct types", async () => {
-  for (const [p, type] of [[`/${hubJs}`, "text/javascript"], ["/brand/MSM-Logo-Master.png", "image/png"], ["/favicon.ico", "image/x-icon"]]) {
+  for (const [p, type] of [[`/${hubJs}`, "text/javascript"], [`/${hubLogo}`, "image/webp"], ["/favicon.ico", "image/x-icon"]]) {
     const r = await get(p);
     assert(r.status === 200 && r.headers.get("content-type").startsWith(type), `${p}: ${r.status} ${r.headers.get("content-type")}`);
   }
 });
 const NOT_FOUND = ["/api/og", "/api/gig", "/api/notify", "/api/sitemap", "/api/robots", "/sw.js", "/manifest.webmanifest", "/workbox-9c191d2f.js",
   "/assets/index-yiBhUoVF.js", "/index.html", "/gig/x", "/artist/x", "/venue/x", "/festival/x", "/promoter/x", "/claim", "/sitemap.xml",
-  "/robots.txt", "/icons/icon-192.png", "/google9ef7fb7e9cd22e56.html", "/brand/README.md", "/festival-hub/x", "/festival-hubs", "/random"];
+  "/robots.txt", "/icons/icon-192.png", "/google9ef7fb7e9cd22e56.html", "/brand/README.md", "/brand/MSM-Logo-Master.png", "/festival-hub/x", "/festival-hubs", "/random"];
 await check(`404 for unknown, calendar, API, SW and manifest paths (${NOT_FOUND.length})`, async () => {
   const wrong = [];
   for (const p of NOT_FOUND) { const r = await get(p); if (r.status !== 404) wrong.push(`${p}=${r.status}`); }
@@ -197,6 +199,7 @@ for (const path of ["/", "/festival-hub", "/festival-hub/"]) {
     const style = await page.evaluate(() => ({ bg: getComputedStyle(document.body).backgroundColor, font: getComputedStyle(document.body).fontFamily, banner: getComputedStyle(document.querySelector(".fh-staging")).backgroundColor }));
     assert(style.bg === "rgb(13, 13, 13)" && /Barlow/.test(style.font) && style.banner === "rgb(255, 255, 255)", JSON.stringify(style));
     assert(await page.getByAltText("Music Scene Magazine").evaluate((img) => img.complete && img.naturalWidth > 0), "logo not loaded");
+    assert(await page.getByAltText("Music Scene Magazine").evaluate((img) => new URL(img.src).pathname.startsWith("/festival-hub/assets/msm-logo-hub-") && img.naturalWidth === 1254), "hub logo is not the derived WebP");
     assert(log.fonts.some((u) => u.includes("fonts.googleapis.com")) && log.fonts.some((u) => u.includes("fonts.gstatic.com")), `fonts not requested: ${log.fonts}`);
     await page.locator(".fh-card").first().click();
     await page.getByRole("dialog").waitFor();

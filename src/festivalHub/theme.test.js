@@ -15,7 +15,9 @@ describe("hub brand tokens match the calendar", () => {
   it("fonts and logo", () => {
     expect(app).toContain(`display:"${F.display}"`);
     expect(app).toContain(`body:"${F.body}"`);
-    expect(app).toContain(`const MSM_LOGO_SRC = "${LOGO_SRC}"`);
+    // The calendar keeps the shared master; the Hub uses its own derived asset.
+    expect(app).toContain(`const MSM_LOGO_SRC = "/brand/MSM-Logo-Master.png"`);
+    expect(LOGO_SRC).toMatch(/msm-logo-hub\.webp$/);
     expect(app).toContain(`full:     { top: ${LOGO_CROP.top}, height: ${LOGO_CROP.height} }`);
   });
   it("no purple in the hub palette", () => {

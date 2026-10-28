@@ -29,7 +29,7 @@ const OUT = resolve(process.env.E2E_OUT || join(tmpdir(), "festival-hub-e2e"));
 await mkdir(OUT, { recursive: true });
 
 // ── Local server mirroring vercel.json ──────────────────────────────
-const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".ico": "image/x-icon", ".json": "application/json", ".webmanifest": "application/manifest+json", ".md": "text/plain" };
+const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".webp": "image/webp", ".ico": "image/x-icon", ".json": "application/json", ".webmanifest": "application/manifest+json", ".md": "text/plain" };
 const server = { root: DIST, misrouteHub: false };
 
 async function isFile(p) { try { return (await stat(p)).isFile(); } catch { return false; } }
@@ -486,6 +486,40 @@ for (const viewport of [{ width: 375, height: 760 }, { width: 1280, height: 900 
     const low = Object.entries(results).filter(([, r]) => r < 4.5);
     assert(low.length === 0, `below 4.5:1: ${JSON.stringify(low)}`);
     return JSON.stringify(results);
+  });
+  await ctx.close();
+}
+
+// ── Hub logo: derived lossless WebP vs the shared master ────────────
+// The calendar still serves /brand/MSM-Logo-Master.png; the Hub must load only
+// its own derived WebP, whose decoded pixels -- and therefore the rendered
+// logo -- are identical to the master at every pixel density.
+console.log("Hub logo — derived lossless WebP vs shared master");
+for (const dpr of [1, 2, 3]) {
+  const { ctx, log } = await newContext({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: dpr });
+  const page = await ctx.newPage();
+  await check(`DPR ${dpr}: Hub loads only the WebP logo; decoded pixels and rendered logo identical to the master`, async () => {
+    await page.goto(`${ORIGIN}/festival-hub`);
+    const img = page.getByAltText("Music Scene Magazine");
+    await img.evaluate((i) => i.decode());
+    const src = await img.evaluate((i) => new URL(i.src).pathname);
+    assert(/^\/festival-hub\/assets\/msm-logo-hub-[\w-]+\.webp$/.test(src), `logo src ${src}`);
+    assert(!log.requests.some((u) => u.includes("MSM-Logo-Master")), "Hub requested the master PNG");
+    const pixels = await page.evaluate(async (hubSrc) => {
+      const load = (u) => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = u; });
+      const [a, b] = await Promise.all([load(hubSrc), load("/brand/MSM-Logo-Master.png")]);
+      const data = (i) => { const c = document.createElement("canvas"); c.width = i.naturalWidth; c.height = i.naturalHeight; const x = c.getContext("2d"); x.drawImage(i, 0, 0); return x.getImageData(0, 0, c.width, c.height).data; };
+      const da = data(a), db = data(b);
+      let diff = 0; for (let k = 0; k < da.length; k++) if (da[k] !== db[k]) diff++;
+      return { size: [a.naturalWidth, a.naturalHeight, b.naturalWidth, b.naturalHeight], diff, length: da.length };
+    }, src);
+    assert(pixels.size.join() === "1254,1254,1254,1254" && pixels.diff === 0, JSON.stringify(pixels));
+    const box = page.locator(".fh-brand > span").first();
+    const hubShot = await box.screenshot();
+    await img.evaluate((i) => new Promise((res) => { i.onload = res; i.src = "/brand/MSM-Logo-Master.png"; }));
+    const masterShot = await box.screenshot();
+    assert(hubShot.equals(masterShot), "rendered logo differs from the master rendering");
+    return `${pixels.length / 4} pixels identical; ${dpr}× render byte-identical`;
   });
   await ctx.close();
 }

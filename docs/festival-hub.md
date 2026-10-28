@@ -104,6 +104,47 @@ checked. It is not a guarantee, and MSM has not tested external forms
 "Official application page" button; everything else links to official
 information.
 
+## Hub logo asset
+
+The Hub shows the MSM logo from its own **derived** asset,
+`src/festivalHub/assets/msm-logo-hub.webp`, imported in `theme.js` so Vite
+emits a hashed `festival-hub/assets/msm-logo-hub-*.webp` in the Hub builds
+only. The calendar keeps using the shared brand master
+`public/brand/MSM-Logo-Master.png`, which is unchanged.
+
+| | Shared master (calendar) | Hub derived copy |
+| --- | --- | --- |
+| File | `public/brand/MSM-Logo-Master.png` | `src/festivalHub/assets/msm-logo-hub.webp` |
+| Format | PNG, 1254×1254 RGB | WebP **lossless** (VP8L), 1254×1254 |
+| Bytes | 544,832 | 342,906 (−201,926 B, −37.1%) |
+| Decoded pixels | — | identical to the master |
+| Content credentials | C2PA `caBX` chunk (24,910 B) | **not carried over** |
+
+Provenance: the WebP is a lossless format conversion of the master, made
+with Pillow 12.3.0, and is **not** the original credentialled asset; for
+provenance, refer to the master. To regenerate (byte-for-byte reproducible
+with the same Pillow/libwebp), from the repo root:
+
+```
+python3 -c "from PIL import Image; Image.open('public/brand/MSM-Logo-Master.png').convert('RGB').save('src/festivalHub/assets/msm-logo-hub.webp', format='WEBP', lossless=True, quality=100, method=6, exact=True)"
+```
+
+Why lossless at full resolution: resampled versions (157–472 px) were much
+smaller but changed how the small "MAGAZINE" line renders at 1×; the
+lossless copy renders identically at 1×, 2× and 3×. Checks:
+`src/festivalHub/logoAsset.test.js` (format, dimensions, size, master
+unchanged) and the "Hub logo" browser checks in `scripts/e2e/festival-hub.mjs`
+(the Hub loads only the WebP; decoded pixels and the rendered logo at 1×, 2×
+and 3× are identical to the master). The standalone verifier allows exactly
+one such lossless WebP, at most 350,000 B. Browsers without WebP support
+(e.g. Safari before 14) would not show the logo; there is no PNG fallback.
+
+Lab audit behind this change (not field Core Web Vitals): local server with
+gzip, headless Chromium, throttled 150 ms RTT / 1.6 Mbps / 4× CPU — the
+master was 78% of the 683.3 KB first load and arrived last (~4.2 s). The
+font-loading alternatives tested (preconnect, a `<link>` in the head) were
+not adopted: no gain, or a later first paint.
+
 ## Isolation
 
 The live calendar's backend URL and key are hard-coded in `src/App.jsx` and
@@ -156,10 +197,10 @@ How it is built and served:
 
 | Piece | What it does |
 | --- | --- |
-| `vite.festival-hub-standalone.config.js` | Builds only `festival-hub/index.html` into `dist-hub-standalone/`: no PWA plugin, no service worker or manifest, no `public/` copy (only the logo and favicon), no source maps. Records the full module graph to `dist-hub-standalone.modules.json` (outside the output). |
-| `scripts/standalone/verify-output.mjs` | Runs after that build (`npm run build:hub-standalone`) and fails it unless the output is only the hub HTML, its JS/CSS, the logo and favicon; the module graph is only `src/festivalHub/*`, React/ReactDOM/scheduler and Vite helpers; content has no backend host/ref/JWT/secret names, service worker, manifest, API path, source map or calendar code; the HTML is noindex with a single external module script. On Vercel (`VERCEL=1`) it also fails if `api/` or `supabase/` exist in the checkout. |
+| `vite.festival-hub-standalone.config.js` | Builds only `festival-hub/index.html` into `dist-hub-standalone/`: no PWA plugin, no service worker or manifest, no `public/` copy (only the favicon; the logo is the Hub's imported WebP), no source maps. Records the full module graph to `dist-hub-standalone.modules.json` (outside the output). |
+| `scripts/standalone/verify-output.mjs` | Runs after that build (`npm run build:hub-standalone`) and fails it unless the output is only the hub HTML, its JS/CSS, exactly one lossless Hub-logo WebP of at most 350,000 B, and the favicon; the module graph is only `src/festivalHub/*`, React/ReactDOM/scheduler and Vite helpers; content has no backend host/ref/JWT/secret names, service worker, manifest, API path, source map or calendar code; the HTML is noindex with a single external module script. On Vercel (`VERCEL=1`) it also fails if `api/` or `supabase/` exist in the checkout. |
 | `scripts/standalone/vercel.json` (template) | On the deploy branch it becomes the root `vercel.json`: build command `npm run build:hub-standalone`, output `dist-hub-standalone`, rewrites **only** `/`, `/festival-hub`, `/festival-hub/` to the hub (no catch-all, so every other path is 404), and headers on every response: strict CSP (`default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self'; connect-src 'none'; worker-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'` …), `X-Robots-Tag: noindex, nofollow`, `nosniff`, referrer and permissions policies. `'unsafe-inline'` styles are needed because the hub's CSS is an inline `<style>` and React style attributes. |
-| `scripts/standalone/.vercelignore` (template) | On the deploy branch it becomes the root `.vercelignore`: ignore everything, re-include only the hub build inputs (package files, `vercel.json`, the standalone Vite config, `festival-hub/`, `src/festivalHub/` without tests, the logo, favicon and `scripts/standalone/`). `api/` and `supabase/` are never uploaded, so no serverless functions can be detected; if they ever were, the verifier fails the build so nothing deploys. |
+| `scripts/standalone/.vercelignore` (template) | On the deploy branch it becomes the root `.vercelignore`: ignore everything, re-include only the hub build inputs (package files, `vercel.json`, the standalone Vite config, `festival-hub/`, `src/festivalHub/` without tests (its `assets/` included), the favicon and `scripts/standalone/`). `api/` and `supabase/` are never uploaded, so no serverless functions can be detected; if they ever were, the verifier fails the build so nothing deploys. |
 
 What remains true: the project's `SUPABASE_*` environment variables are
 still present in the Vercel build environment (removing them would be a
@@ -185,7 +226,7 @@ did not apply `.vercelignore` (first standalone deployment
 `feature/festival-hub` commit, plus the config commit, plus a commit that
 removes every tracked file outside the hub build allowlist on that branch
 only (`api/`, `supabase/`, calendar sources, entry, configs, `public/` except
-the logo and favicon, tests, docs). `feature/festival-hub` keeps the full
+the favicon, tests, docs). `feature/festival-hub` keeps the full
 tree. `.vercelignore` stays as a second layer, and the verifier's
 `api/`/`supabase/` check is unchanged.
 

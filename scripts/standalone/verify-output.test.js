@@ -9,12 +9,15 @@ import { fileURLToPath } from "node:url";
 const VERIFY = fileURLToPath(new URL("./verify-output.mjs", import.meta.url));
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const HTML = '<!DOCTYPE html><html><head><meta name="robots" content="noindex, nofollow" /></head><body><div id="root"></div><script type="module" crossorigin src="/festival-hub/assets/index-abc.js"></script></body></html>';
-const GOOD_GRAPH = { "festival-hub/assets/index-abc.js": { modules: ["festival-hub/index.html", "src/festivalHub/main.jsx", "src/festivalHub/FestivalHubApp.jsx", "node_modules/react/index.js", "virtual:commonjsHelpers.js"], imports: [], dynamicImports: [] } };
+const GOOD_GRAPH = { "festival-hub/assets/index-abc.js": { modules: ["festival-hub/index.html", "src/festivalHub/main.jsx", "src/festivalHub/FestivalHubApp.jsx", "src/festivalHub/assets/msm-logo-hub.webp", "node_modules/react/index.js", "virtual:commonjsHelpers.js"], imports: [], dynamicImports: [] } };
+// Minimal lossless WebP header ("RIFF" size "WEBP" "VP8L" ...), padded to `size` bytes.
+const webp = (size = 64, kind = "VP8L") => { const b = Buffer.alloc(size); b.write("RIFF", 0, "latin1"); b.writeUInt32LE(size - 8, 4); b.write("WEBP", 8, "latin1"); b.write(kind, 12, "latin1"); return b; };
+const LOGO = "festival-hub/assets/msm-logo-hub-abc123.webp";
 
 let dir;
 function fixture({ files = {}, graph = GOOD_GRAPH } = {}) {
   const out = join(dir, "out");
-  const all = { "festival-hub/index.html": HTML, "festival-hub/assets/index-abc.js": "console.log('hub')", "favicon.ico": "x", "brand/MSM-Logo-Master.png": "x", ...files };
+  const all = { "festival-hub/index.html": HTML, "festival-hub/assets/index-abc.js": "console.log('hub')", "favicon.ico": "x", [LOGO]: webp(), ...files };
   for (const [name, body] of Object.entries(all)) {
     if (body === null) continue;
     mkdirSync(join(out, name, ".."), { recursive: true });
@@ -35,6 +38,9 @@ describe("standalone output verifier", () => {
     const r = verify(fixture());
     expect(r.status, r.stderr).toBe(0);
   });
+  it("accepts a logo exactly at the 350,000 B budget", () => {
+    expect(verify(fixture({ files: { [LOGO]: webp(350000) } })).status).toBe(0);
+  });
   it("accepts CSS assets", () => {
     expect(verify(fixture({ files: { "festival-hub/assets/index-abc.css": "body{}" } })).status).toBe(0);
   });
@@ -47,6 +53,14 @@ describe("standalone output verifier", () => {
     "calendar bundle": { files: { "assets/index-xyz.js": "x" } },
     "api file": { files: { "api/og.js": "x" } },
     "public directory copy": { files: { "robots.txt": "x", "icons/icon-192.png": "x" } },
+    "the shared master PNG": { files: { "brand/MSM-Logo-Master.png": "x" } },
+    "a PNG in the hub assets": { files: { "festival-hub/assets/logo-abc.png": "x" } },
+    "a second WebP": { files: { "festival-hub/assets/msm-logo-hub-def456.webp": webp() } },
+    "a missing logo": { files: { [LOGO]: null } },
+    "a logo over the 350,000 B budget": { files: { [LOGO]: webp(350001) } },
+    "a lossy WebP logo": { files: { [LOGO]: webp(64, "VP8 ") } },
+    "an extended-format WebP logo": { files: { [LOGO]: webp(64, "VP8X") } },
+    "an unexpected image module in the graph": { graph: { "festival-hub/assets/index-abc.js": { ...GOOD_GRAPH["festival-hub/assets/index-abc.js"], modules: [...GOOD_GRAPH["festival-hub/assets/index-abc.js"].modules, "public/brand/MSM-Logo-Master.png"] } } },
     "backend host in bundle": { files: { "festival-hub/assets/index-abc.js": "fetch('https://abc.supabase.co')" } },
     "JWT in bundle": { files: { "festival-hub/assets/index-abc.js": "const k='eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYW5vbiJ9.sig'" } },
     "service worker registration": { files: { "festival-hub/assets/index-abc.js": "navigator.serviceWorker.register('/sw.js')" } },
@@ -102,7 +116,7 @@ describe("standalone deploy templates", () => {
     const lines = readFileSync(new URL("./.vercelignore", import.meta.url), "utf8").split("\n").filter((l) => l && !l.startsWith("#"));
     expect(lines[0]).toBe("/*");
     const included = lines.filter((l) => l.startsWith("!"));
-    expect(included.some((l) => /api|supabase/.test(l))).toBe(false);
+    expect(included.some((l) => /api|supabase|brand/.test(l))).toBe(false);
     expect(included).toContain("!/src/festivalHub/");
     // gitignore syntax: re-include src/, re-ignore its contents, then allow only src/festivalHub/.
     expect(lines.indexOf("/src/*")).toBe(lines.indexOf("!/src/") + 1);
