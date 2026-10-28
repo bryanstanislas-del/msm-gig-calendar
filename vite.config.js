@@ -35,7 +35,9 @@ export default defineConfig({
       },
       workbox: {
         navigateFallback: '/index.html',
-        navigateFallbackDenylist: [/^\/api\//],
+        // /festival-hub is a separate page (vite.festival-hub.config.js):
+        // never answer its navigations with the calendar's app shell.
+        navigateFallbackDenylist: [/^\/api\//, /^\/festival-hub(\/|$)/],
       },
     }),
   ],

@@ -1,3 +1,6 @@
+// Must stay the first import: stops the calendar booting on /festival-hub
+// paths (see festivalHubPathGuard.js).
+import './festivalHubPathGuard.js'
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { registerSW } from 'virtual:pwa-register'

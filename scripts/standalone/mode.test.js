@@ -1,0 +1,123 @@
+// Build-mode rules and the release deploy template.
+import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import {
+  CANONICAL_URL, EMBED_POLICY_MARKER, INDEXABLE_HOST, INDEXABLE_HOST_REGEX, LAUNCH_DESCRIPTION, LAUNCH_TITLE,
+  PUBLIC_ORIGIN, ROBOTS_TXT, SITEMAP_XML, applyLaunchHtml, isLaunchBuild,
+} from "./mode.mjs";
+
+const json = (name) => JSON.parse(readFileSync(new URL(name, import.meta.url), "utf8"));
+const HUB_HTML = readFileSync(new URL("../../festival-hub/index.html", import.meta.url), "utf8");
+const pkg = json("../../package.json");
+
+describe("isLaunchBuild", () => {
+  const cases = [
+    [{}, false],
+    [{ VERCEL_ENV: "production" }, false], // standalone template on a production deploy stays staging
+    [{ HUB_RELEASE: "1" }, false],
+    [{ HUB_RELEASE: "1", VERCEL_ENV: "preview" }, false],
+    [{ HUB_RELEASE: "1", VERCEL_ENV: "development" }, false],
+    [{ HUB_RELEASE: "true", VERCEL_ENV: "production" }, false],
+    [{ HUB_RELEASE: "1", VERCEL_ENV: "production" }, true],
+    [{ HUB_LAUNCH: "1" }, true],
+    [{ HUB_LAUNCH: "1", VERCEL_ENV: "preview" }, true],
+    [{ HUB_LAUNCH: "0", VERCEL_ENV: "preview" }, false],
+  ];
+  for (const [env, want] of cases) it(`${JSON.stringify(env)} -> ${want ? "launch" : "staging"}`, () => expect(isLaunchBuild(env)).toBe(want));
+});
+
+describe("launch HTML", () => {
+  const html = applyLaunchHtml(HUB_HTML);
+  it("is indexable with the approved canonical, title and social tags", () => {
+    expect(html).toContain('<meta name="robots" content="index, follow" />');
+    expect(html).not.toMatch(/noindex|staging/i);
+    expect(html.match(/rel="canonical"/g)).toHaveLength(1);
+    expect(html).toContain(`<link rel="canonical" href="${CANONICAL_URL}" />`);
+    expect(html).toContain(`<meta property="og:url" content="${CANONICAL_URL}" />`);
+    expect(html).toContain(`<title>${LAUNCH_TITLE}</title>`);
+    expect(html).toContain(`<meta name="description" content="${LAUNCH_DESCRIPTION}" />`);
+  });
+  it("carries the framing-policy marker once (launch only), so the HTML's ETag changed with the frame-ancestors policy", () => {
+    expect(EMBED_POLICY_MARKER).toBe('<meta name="msm-embed-policy" content="frame-ancestors-wordpress-2026-10-28" />');
+    expect(html.split(EMBED_POLICY_MARKER)).toHaveLength(2);
+    expect(html).toContain(`<meta name="robots" content="index, follow" />\n    ${EMBED_POLICY_MARKER}\n`);
+    expect(HUB_HTML).not.toContain("msm-embed-policy");
+  });
+  it("leaves the rest of the page unchanged", () => {
+    for (const keep of ['<html lang="en-GB">', '<meta name="theme-color" content="#0a0a0a" />', '<link rel="icon" type="image/x-icon" href="/favicon.ico" />', '<script type="module" src="/src/festivalHub/main.jsx"></script>'])
+      expect(html).toContain(keep);
+  });
+  it("fails loudly if the staging head it replaces has changed", () => {
+    expect(() => applyLaunchHtml(HUB_HTML.replace("<title>MSM Festival Hub (Staging)</title>", "<title>x</title>"))).toThrow(/expected exactly one/);
+    expect(() => applyLaunchHtml(html)).toThrow(/expected exactly one/);
+  });
+  it("robots.txt allows all and points at the sitemap; the sitemap lists only the canonical URL", () => {
+    expect(PUBLIC_ORIGIN).toBe("https://festivals.musicscenemagazine.co.uk");
+    expect(ROBOTS_TXT).toBe("User-agent: *\nAllow: /\nSitemap: https://festivals.musicscenemagazine.co.uk/sitemap.xml\n");
+    expect(SITEMAP_XML.match(/<loc>/g)).toHaveLength(1);
+    expect(SITEMAP_XML).toContain("<loc>https://festivals.musicscenemagazine.co.uk/</loc>");
+  });
+});
+
+describe("indexable host regex", () => {
+  const re = new RegExp(INDEXABLE_HOST_REGEX);
+  it("matches only the exact approved hostname", () => {
+    expect(re.test(INDEXABLE_HOST)).toBe(true);
+    for (const host of [
+      "www.festivals.musicscenemagazine.co.uk", "festivals.musicscenemagazine.co.uk.evil.example",
+      "festivalsXmusicscenemagazine.co.uk", "festivals.musicscenemagazineXcoXuk", "evil-festivals.musicscenemagazine.co.uk",
+      "musicscenemagazine.co.uk", "msm-festival-hub.vercel.app", "msm-festival-hub-git-release-festival-hub.vercel.app",
+      "localhost", "",
+    ]) expect(re.test(host), host).toBe(false);
+  });
+});
+
+describe("release deploy template", () => {
+  const release = json("./vercel.release.json");
+  const standalone = json("./vercel.json");
+
+  it("builds with build:hub-release, which only adds HUB_RELEASE=1 to the verified standalone build", () => {
+    expect(release.buildCommand).toBe("npm run build:hub-release");
+    expect(pkg.scripts["build:hub-release"]).toBe("HUB_RELEASE=1 npm run build:hub-standalone");
+    expect(pkg.scripts["build:hub-standalone"]).toMatch(/verify-output\.mjs$/);
+  });
+  const cspOf = (t) => t.headers[0].headers.find((h) => h.key === "Content-Security-Policy").value;
+  const directives = (csp) => Object.fromEntries(csp.split(";").map((d) => d.trim().split(/\s+/)).map(([k, ...v]) => [k, v]));
+  // The WordPress page (https://musicscenemagazine.co.uk/gig-calendar/) frames the
+  // calendar, and the calendar's FESTIVAL HUB link replaces it in that frame, so
+  // the WordPress page is the Hub's only ancestor. Browser check:
+  // scripts/e2e/festival-hub-embedding.mjs.
+  const WP_ANCESTORS = ["https://musicscenemagazine.co.uk", "https://www.musicscenemagazine.co.uk"];
+
+  it("matches the standalone template apart from the build command, the robots header and frame-ancestors", () => {
+    const { buildCommand: _a, headers: relHeaders, ...rel } = release;
+    const { buildCommand: _b, headers: stdHeaders, ...std } = standalone;
+    expect(rel).toEqual(std);
+    const strip = (rule) => ({ ...rule, headers: rule.headers.filter((h) => h.key !== "X-Robots-Tag" && h.key !== "Content-Security-Policy") });
+    expect(strip(relHeaders[0])).toEqual(strip(stdHeaders[0]));
+    const { "frame-ancestors": relFa, ...relRest } = directives(cspOf(release));
+    const { "frame-ancestors": stdFa, ...stdRest } = directives(cspOf(standalone));
+    expect(relRest).toEqual(stdRest);
+    expect(relHeaders).toHaveLength(2);
+  });
+  it("release CSP lets exactly the two WordPress origins frame the Hub; staging allows no framing", () => {
+    expect(directives(cspOf(release))["frame-ancestors"]).toEqual(WP_ANCESTORS);
+    expect(directives(cspOf(standalone))["frame-ancestors"]).toEqual(["'none'"]);
+    // Exact list: no wildcard, scheme-only, 'self', calendar or http source.
+    expect(release.headers.flatMap((r) => r.headers.map((h) => h.key.toLowerCase()))).not.toContain("x-frame-options");
+  });
+  it("sends noindex on every host except the approved one (Vercel `missing` host condition)", () => {
+    expect(release.headers[1]).toEqual({
+      source: "/(.*)",
+      missing: [{ type: "host", value: INDEXABLE_HOST_REGEX }],
+      headers: [{ key: "X-Robots-Tag", value: "noindex, nofollow" }],
+    });
+    expect(release.headers[0].headers.some((h) => h.key === "X-Robots-Tag")).toBe(false);
+  });
+  it("adds no HSTS, redirects or catch-all", () => {
+    const keys = release.headers.flatMap((r) => r.headers.map((h) => h.key));
+    expect(keys).not.toContain("Strict-Transport-Security");
+    expect(release.redirects).toBeUndefined();
+    expect(release.rewrites.map((r) => r.source)).toEqual(["/", "/festival-hub", "/festival-hub/"]);
+  });
+});

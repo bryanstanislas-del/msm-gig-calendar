@@ -1,0 +1,59 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "buildCommand": "npm run build:hub-release",
+  "outputDirectory": "dist-hub-standalone",
+  "cleanUrls": false,
+  "rewrites": [
+    {
+      "source": "/",
+      "destination": "/festival-hub/index.html"
+    },
+    {
+      "source": "/festival-hub",
+      "destination": "/festival-hub/index.html"
+    },
+    {
+      "source": "/festival-hub/",
+      "destination": "/festival-hub/index.html"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self'; connect-src 'none'; worker-src 'none'; manifest-src 'none'; frame-src 'none'; media-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors https://musicscenemagazine.co.uk https://www.musicscenemagazine.co.uk"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "camera=(), microphone=(), geolocation=(), payment=()"
+        }
+      ]
+    },
+    {
+      "source": "/(.*)",
+      "missing": [
+        {
+          "type": "host",
+          "value": "^festivals\\.musicscenemagazine\\.co\\.uk$"
+        }
+      ],
+      "headers": [
+        {
+          "key": "X-Robots-Tag",
+          "value": "noindex, nofollow"
+        }
+      ]
+    }
+  ]
+}
