@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { C, F, LOGO_SRC, LOGO_CROP } from "./theme.js";
 import { DEMO_DATA_NOTICE } from "./demoFixtures.js";
-import { MODES, getDirectory, modeFromSearch } from "./listings.js";
+import { MODES, getDirectory, hubBasePath, modeFromSearch } from "./listings.js";
 import { HUB_EDITION_YEAR, PERFORMER_PAY, ALL_GENRES } from "./constants.js";
 import { STATUS, STATUS_LABEL, applicationStatus, deadlineOf, deadlineSummary, formatDeadline, formatDateOnly } from "./status.js";
 import { ALL, DEFAULT_FILTERS, DEADLINE_OPTIONS, applyFilters, genresOf, isDefaultFilters, regionsOf } from "./filters.js";
@@ -498,7 +498,7 @@ export default function FestivalHubApp({ now: nowProp } = {}) {
     commit({ ...saved, [openListing.id]: { ...saved[openListing.id], ...patch } });
   };
 
-  const path = window.location.pathname;
+  const path = hubBasePath(window.location.pathname);
   const otherModeHref = demo ? path : `${path}?demo=1`;
   const noun = demo ? "demo listing" : "listing";
 
