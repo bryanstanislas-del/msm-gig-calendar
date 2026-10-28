@@ -75,12 +75,30 @@ describe("release deploy template", () => {
     expect(pkg.scripts["build:hub-release"]).toBe("HUB_RELEASE=1 npm run build:hub-standalone");
     expect(pkg.scripts["build:hub-standalone"]).toMatch(/verify-output\.mjs$/);
   });
-  it("matches the standalone template apart from the build command and the robots header", () => {
+  const cspOf = (t) => t.headers[0].headers.find((h) => h.key === "Content-Security-Policy").value;
+  const directives = (csp) => Object.fromEntries(csp.split(";").map((d) => d.trim().split(/\s+/)).map(([k, ...v]) => [k, v]));
+  // The WordPress page (https://musicscenemagazine.co.uk/gig-calendar/) frames the
+  // calendar, and the calendar's FESTIVAL HUB link replaces it in that frame, so
+  // the WordPress page is the Hub's only ancestor. Browser check:
+  // scripts/e2e/festival-hub-embedding.mjs.
+  const WP_ANCESTORS = ["https://musicscenemagazine.co.uk", "https://www.musicscenemagazine.co.uk"];
+
+  it("matches the standalone template apart from the build command, the robots header and frame-ancestors", () => {
     const { buildCommand: _a, headers: relHeaders, ...rel } = release;
     const { buildCommand: _b, headers: stdHeaders, ...std } = standalone;
     expect(rel).toEqual(std);
-    expect(relHeaders[0]).toEqual({ ...stdHeaders[0], headers: stdHeaders[0].headers.filter((h) => h.key !== "X-Robots-Tag") });
+    const strip = (rule) => ({ ...rule, headers: rule.headers.filter((h) => h.key !== "X-Robots-Tag" && h.key !== "Content-Security-Policy") });
+    expect(strip(relHeaders[0])).toEqual(strip(stdHeaders[0]));
+    const { "frame-ancestors": relFa, ...relRest } = directives(cspOf(release));
+    const { "frame-ancestors": stdFa, ...stdRest } = directives(cspOf(standalone));
+    expect(relRest).toEqual(stdRest);
     expect(relHeaders).toHaveLength(2);
+  });
+  it("release CSP lets exactly the two WordPress origins frame the Hub; staging allows no framing", () => {
+    expect(directives(cspOf(release))["frame-ancestors"]).toEqual(WP_ANCESTORS);
+    expect(directives(cspOf(standalone))["frame-ancestors"]).toEqual(["'none'"]);
+    // Exact list: no wildcard, scheme-only, 'self', calendar or http source.
+    expect(release.headers.flatMap((r) => r.headers.map((h) => h.key.toLowerCase()))).not.toContain("x-frame-options");
   });
   it("sends noindex on every host except the approved one (Vercel `missing` host condition)", () => {
     expect(release.headers[1]).toEqual({

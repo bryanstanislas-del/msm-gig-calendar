@@ -69,7 +69,25 @@ duplicate `onClick` on the "GIGS" `Btn`. It's at `src/App.jsx` 4341–4342 on
 `c49ef05`, the same lines as `main`'s 4339–4340 (moved down 2 lines by the
 new constant). It's already on `main` and doesn't stop the build.
 
-### ⚠ Calendar navigation persistence
+### Embedding: framing by the WordPress pages
+
+`https://musicscenemagazine.co.uk/gig-calendar/` frames the calendar in
+`iframe#msm-calendar` (src `https://msm-gig-calendar.vercel.app`). The
+calendar's FESTIVAL HUB link is a plain same-tab link, so it replaces the
+calendar **inside that same frame**, and the WordPress page is the Hub's only
+ancestor.
+
+- **Release CSP:** `frame-ancestors https://musicscenemagazine.co.uk https://www.musicscenemagazine.co.uk`. That's exactly the two WordPress origins, with no wildcard, no calendar origin and no `X-Frame-Options`. Every other directive is unchanged.
+- **Staging template:** keeps `frame-ancestors 'none'`.
+- **Owner deployment:** the owner deployed the fix directly as `dpl_8MKe5W3m8Xj6U7Pj2YxSZv2wsKAK`. The owner's browser then loaded the Hub inside `iframe#msm-calendar` with no CSP errors.
+- **Not yet confirmed for every user:** a later user screenshot (09:59) still showed a refused frame. The cause is under investigation (a stale cached response, or a different URL or path); don't treat it as fixed for everyone.
+- **Test:** `npm run test:e2e:hub-embedding`, run as root. It needs port 443, because CSP host-sources match only the default port. It runs real HTTPS in Chromium:
+  - the WordPress (apex and `www`) → calendar frame → FESTIVAL HUB click loads the Hub, and so does direct framing by WordPress;
+  - `evil.example`, a look-alike host, the calendar origin, and a Hub nested inside the calendar frame are all refused;
+  - the staging template refuses framing.
+  - Against the old `'none'` policy, the four "loads" checks fail.
+
+
 
 The calendar's production deployment runs `c49ef05`, which is **not on
 `main`**. **Any future production deployment of `main` will remove the FESTIVAL
