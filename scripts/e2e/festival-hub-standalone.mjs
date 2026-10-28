@@ -410,6 +410,38 @@ for (const path of ["/", "/festival-hub", "/festival-hub/"]) {
   await ctx.close();
 }
 
+{
+  // Narrowest real embed: a 320px phone showing the Hub in a WordPress column with
+  // 20px side padding gives a 280px frame. Width-safe grids and a wrapping dialog
+  // head keep everything inside it (no overflow:hidden masking).
+  const { ctx, log } = await newContext({ viewport: { width: 280, height: 700 }, isMobile: true, hasTouch: true });
+  const page = await ctx.newPage();
+  await check("280px (320px phone, WordPress frame): no horizontal overflow; cards, footer and all detail dialogs fit with 16px+ gutters", async () => {
+    await page.goto(`${ORIGIN}/`);
+    await ready(page);
+    const edges = await page.evaluate(() => {
+      const vw = document.documentElement.clientWidth;
+      const box = (sel) => [...document.querySelectorAll(sel)].map((e) => e.getBoundingClientRect()).reduce((m, r) => ({ l: Math.min(m.l, r.left), r: Math.min(m.r, vw - r.right) }), { l: Infinity, r: Infinity });
+      return { overflow: document.documentElement.scrollWidth - vw, cards: box(".fh-card"), footer: (() => { const e = document.querySelector(".fh-footer"), s = getComputedStyle(e); return parseFloat(s.paddingLeft); })() };
+    });
+    assert(edges.overflow <= 0 && edges.cards.l >= 16 && edges.cards.r >= 16 && edges.footer === 16, JSON.stringify(edges));
+    const n = await page.locator(".fh-card").count();
+    for (let i = 0; i < n; i++) {
+      await page.locator(".fh-card").nth(i).click();
+      await page.waitForSelector(".fh-dialog[open]");
+      const d = await page.evaluate(() => { const dlg = document.querySelector(".fh-dialog[open]"); const vw = document.documentElement.clientWidth;
+        const close = [...dlg.querySelectorAll("button")].find((b) => /Close/.test(b.textContent)).getBoundingClientRect();
+        return { title: dlg.querySelector("h2").textContent, overflow: dlg.scrollWidth - dlg.clientWidth, closeRight: Math.round(vw - close.right) }; });
+      assert(d.overflow <= 0 && d.closeRight >= 16, JSON.stringify(d));
+      await page.keyboard.press("Escape");
+      await page.waitForSelector(".fh-dialog[open]", { state: "detached" });
+    }
+    await page.screenshot({ path: join(OUT, `standalone-280-${EXPECT}.png`) });
+    return assertClean(log, "280px") || `${n} dialogs fit`;
+  });
+  await ctx.close();
+}
+
 // ── 3c. Mode links stay on this site even at unexpected paths ───────
 // A deliberately MISROUTING local server serves the hub page for any path,
 // to exercise the in-app fallback (the exact-path server above 404s these).
