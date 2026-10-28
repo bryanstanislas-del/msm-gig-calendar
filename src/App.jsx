@@ -1362,6 +1362,8 @@ async function recordGigNotificationEvents(gig, eventType) {
 // functions, so one value covers all three. Falls back to the correct
 // canonical domain if the env var isn't set.
 const BASE_URL = import.meta.env.VITE_BASE_URL || "https://calendar.musicscenemagazine.co.uk";
+// MSM Festival Hub: a separate static site, linked from the nav tabs (same tab).
+const FESTIVAL_HUB_URL = "https://festivals.musicscenemagazine.co.uk/";
 
 // Shared fallback share image, used wherever a profile/gig has no photo of
 // its own -- matches the same URL api/og.js and api/gig.js already use.
@@ -9254,7 +9256,7 @@ export const GLOBAL_CSS = `
     .msm-slogan { display:none !important; }
     .msm-gig-counter { margin-left:0 !important; }
     .msm-nav { padding:0 8px !important; gap:3px !important; overflow-x:auto; }
-    .msm-nav button { padding:14px 12px !important; font-size:13px !important; font-weight:600 !important; white-space:nowrap; }
+    .msm-nav button, .msm-nav a { padding:14px 12px !important; font-size:13px !important; font-weight:600 !important; white-space:nowrap; }
     .msm-main { padding:16px 10px !important; }
     .msm-filters { flex-direction:column !important; gap:8px !important; padding:12px !important; }
     .msm-filters > div { flex:unset !important; width:100% !important; }
@@ -10014,7 +10016,11 @@ function MainApp() {
       {/* ── Nav tabs ── */}
       <div className="msm-nav" style={{ background:"#0a0a0a", borderBottom:`1px solid ${C.border}`, padding:"0 28px", display:"flex", gap:4, overflowX:"auto", whiteSpace:"nowrap" }}>
         {tabDef.map(({ id, label }) => (
-          <button key={id} data-tab={id} onClick={()=>setTab(id)} style={navTabStyle(id)}>{label}</button>
+          <React.Fragment key={id}>
+            <button data-tab={id} onClick={()=>setTab(id)} style={navTabStyle(id)}>{label}</button>
+            {/* Right after the browse tabs, so it is on screen on mobile too. */}
+            {id === "list" && <a href={FESTIVAL_HUB_URL} style={{ ...navTabStyle(null), display:"inline-block", lineHeight:"normal", textDecoration:"none" }}>FESTIVAL HUB</a>}
+          </React.Fragment>
         ))}
       </div>
 
