@@ -91,7 +91,10 @@ const HEADERS = Object.fromEntries(VERCEL_JSON.headers[0].headers.map((h) => [h.
 const REWRITES = new Map(VERCEL_JSON.rewrites.map((r) => [r.source, r.destination]));
 const isFile = (p) => { try { return statSync(p).isFile(); } catch { return false; } };
 const server = http.createServer((req, res) => {
-  const path = decodeURIComponent(new URL(req.url, "http://x").pathname);
+  // Raw request path, matched exactly like Vercel's rewrites. (No URL
+  // re-parsing: new URL("//host/", base) would read it as protocol-relative.)
+  let path;
+  try { path = decodeURIComponent(req.url.split("?")[0]); } catch { path = ""; }
   const fsPath = normalize(join(DIST, path));
   let target = null;
   if (fsPath.startsWith(DIST) && isFile(fsPath)) target = fsPath;
@@ -126,7 +129,8 @@ await check("assets served with correct types", async () => {
 });
 const NOT_FOUND = ["/api/og", "/api/gig", "/api/notify", "/api/sitemap", "/api/robots", "/sw.js", "/manifest.webmanifest", "/workbox-9c191d2f.js",
   "/assets/index-yiBhUoVF.js", "/index.html", "/gig/x", "/artist/x", "/venue/x", "/festival/x", "/promoter/x", "/claim", "/sitemap.xml",
-  "/robots.txt", "/icons/icon-192.png", "/google9ef7fb7e9cd22e56.html", "/brand/README.md", "/brand/MSM-Logo-Master.png", "/festival-hub/x", "/festival-hubs", "/random"];
+  "/robots.txt", "/icons/icon-192.png", "/google9ef7fb7e9cd22e56.html", "/brand/README.md", "/brand/MSM-Logo-Master.png", "/festival-hub/x", "/festival-hubs", "/random",
+  "//evil.example/", "//evil.example", "/\\evil.example/", "/festival-hub//evil.example/"];
 await check(`404 for unknown, calendar, API, SW and manifest paths (${NOT_FOUND.length})`, async () => {
   const wrong = [];
   for (const p of NOT_FOUND) { const r = await get(p); if (r.status !== 404) wrong.push(`${p}=${r.status}`); }
@@ -292,6 +296,57 @@ for (const path of ["/", "/festival-hub", "/festival-hub/"]) {
   });
   await ctx.close();
 }
+
+// ── 3c. Mode toggles stay on this site even at unexpected paths ─────
+// A deliberately MISROUTING local server serves the hub page for any path,
+// to exercise the in-app fallback (the exact-path server above 404s these).
+console.log("Standalone — mode toggles at known and unexpected paths (misrouting local server)");
+const anyPathServer = http.createServer((req, res) => {
+  const raw = req.url.split("?")[0];
+  const fsPath = normalize(join(DIST, raw));
+  const target = fsPath.startsWith(DIST + "/") && isFile(fsPath) ? fsPath : join(DIST, "festival-hub/index.html");
+  res.writeHead(200, { ...HEADERS, "content-type": TYPES[extname(target)] || "application/octet-stream" });
+  res.end(readFileSync(target));
+});
+await new Promise((r) => anyPathServer.listen(0, "127.0.0.1", r));
+const ANY = `http://127.0.0.1:${anyPathServer.address().port}`;
+{
+  const ctx = await browser.newContext();
+  await ctx.clock.setFixedTime(FROZEN_NOW);
+  const offSite = [];
+  await ctx.route("**/*", (route) => {
+    const u = route.request().url();
+    if (u.startsWith(ANY + "/")) return route.continue();
+    if (!/^https:\/\/fonts\.(googleapis|gstatic)\.com\//.test(u)) offSite.push(u);
+    return route.abort("blockedbyclient");
+  });
+  const page = await ctx.newPage();
+  const CASES = [
+    ["/", "/"], ["/festival-hub", "/festival-hub"], ["/festival-hub/", "/festival-hub/"], ["/festival-hub/index.html", "/festival-hub/index.html"],
+    ["//evil.example/", "/festival-hub/"], ["//evil.example", "/festival-hub/"], ["/\\evil.example/", "/festival-hub/"],
+    ["/festival-hub//evil.example/", "/festival-hub/"], ["/unexpected/path", "/festival-hub/"], ["/festival-hub/extra", "/festival-hub/"],
+  ];
+  await check(`toggles resolve on this site to the expected path for ${CASES.length} known/unexpected paths; no off-site navigation`, async () => {
+    const seen = [];
+    for (const [p, expected] of CASES) {
+      await page.goto(ANY + p);
+      await staging(page).waitFor();
+      const toDemo = new URL(await page.getByRole("link", { name: /View the demo/ }).evaluate((a) => a.href));
+      assert(toDemo.origin === ANY && toDemo.pathname === expected && toDemo.search === "?demo=1", `${p}: demo toggle → ${toDemo.href}`);
+      await page.getByRole("link", { name: /View the demo/ }).click();
+      await page.getByRole("note").filter({ hasText: "Demo data" }).waitFor();
+      const inDemo = new URL(page.url());
+      assert(inDemo.origin === ANY && inDemo.pathname === expected && inDemo.search === "?demo=1", `${p}: landed on ${page.url()}`);
+      const backs = await page.getByRole("link", { name: /Back to the real directory/ }).evaluateAll((as) => as.map((a) => a.href));
+      assert(backs.length >= 1 && backs.every((h) => { const u = new URL(h); return u.origin === ANY && u.pathname === expected && u.search === ""; }), `${p}: back links ${backs}`);
+      seen.push(`${p} → ${expected}`);
+    }
+    assert(offSite.length === 0, `off-site requests: ${offSite.join(", ")}`);
+    return seen.join("; ");
+  });
+  await ctx.close();
+}
+anyPathServer.close();
 
 await browser.close();
 server.close();

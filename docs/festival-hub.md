@@ -164,6 +164,35 @@ this branch**, so the hub uses no backend at all:
 | Search engines | `<meta name="robots" content="noindex, nofollow">`; not in the sitemap. A "Staging preview" banner is always shown. |
 | Calendar links | Absolute links to `https://calendar.musicscenemagazine.co.uk` (the live site), new tab, labelled "live site". Never relative links to the preview's own calendar pages. |
 
+### Release-candidate security review (local, Hub runtime)
+
+Source review plus local probes only (no live systems or external sites):
+
+- External links: every data URL must pass `schema.js` (https only, no
+  placeholder hosts in real data) or the record is not shown; 96/96 hostile
+  URL cases (`javascript:` variants, `data:`, `vbscript:`, `file:`, `http:`,
+  protocol-relative, relative, empty, non-strings) were rejected. Every
+  `target="_blank"` link has `rel="noopener noreferrer"`.
+- No `dangerouslySetInnerHTML`/`innerHTML`/`eval`/`document.write`, no
+  `fetch`/XHR/beacon/WebSocket/cookies/`postMessage`/`window.open` in the Hub
+  runtime; React escapes all text (poisoned storage and malformed hashes did
+  not execute anything even with the CSP removed).
+- Browser storage: ids, stage/outcome and checklist booleans only, validated
+  on read and write (bounded slug ids, known values, max 200, no prototype
+  keys, no contact or free text).
+- Malformed `#festival=` / `?demo=` values, back/forward and deep links in
+  the other mode show "Listing not found" or nothing; no errors.
+- Hardening (Low, latent): the demo/real toggles reuse the current path only
+  if it is a known hub path (`/`, `/festival-hub`, `/festival-hub/`,
+  `/festival-hub/index.html`), otherwise `/festival-hub/`, so a hub page
+  served at an unexpected path such as `//host/` could not produce an
+  off-site link. The current deployments serve the hub only at exact paths,
+  so this was not exploitable on the current host.
+- Informational: the https check accepts credentials-in-URL, punycode hosts
+  and non-standard ports (curated data only); Google Fonts requests reveal
+  visitor IP/UA to Google (self-hosting fonts would avoid it; not in scope);
+  the CSP keeps `'unsafe-inline'` for styles (inline Hub CSS, no user CSS).
+
 ### Known failure: stale pre-hub service worker
 
 A browser that already has a calendar service worker from **before** this

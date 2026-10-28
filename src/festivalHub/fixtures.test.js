@@ -3,7 +3,7 @@ import { DEMO_LISTINGS } from "./demoFixtures.js";
 import { CURATED_LISTINGS } from "./curatedListings.js";
 import { validateDirectory } from "./schema.js";
 import { applicationStatus, STATUS } from "./status.js";
-import { getDirectory, modeFromSearch, MODES } from "./listings.js";
+import { getDirectory, hubBasePath, HUB_FALLBACK_PATH, modeFromSearch, MODES } from "./listings.js";
 
 const NOW = new Date("2026-10-27T12:00:00Z");
 
@@ -52,5 +52,12 @@ describe("modes never mix", () => {
   it("only ?demo=1 selects demo mode", () => {
     expect(modeFromSearch("?demo=1")).toBe(MODES.DEMO);
     for (const q of ["", "?demo=0", "?demo=true", "?x=1"]) expect(modeFromSearch(q)).toBe(MODES.REAL);
+  });
+  it("mode toggles reuse only known hub paths", () => {
+    for (const p of ["/", "/festival-hub", "/festival-hub/", "/festival-hub/index.html"]) expect(hubBasePath(p)).toBe(p);
+    for (const p of ["//evil.example/", "//evil.example", "/\\evil.example/", "/festival-hub//x", "/festival-hub/x", "/x", "", "festival-hub", "/FESTIVAL-HUB/"]) {
+      expect(hubBasePath(p)).toBe(HUB_FALLBACK_PATH);
+    }
+    expect(HUB_FALLBACK_PATH).toBe("/festival-hub/");
   });
 });
