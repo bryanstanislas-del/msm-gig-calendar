@@ -10016,9 +10016,12 @@ function MainApp() {
       {/* ── Nav tabs ── */}
       <div className="msm-nav" style={{ background:"#0a0a0a", borderBottom:`1px solid ${C.border}`, padding:"0 28px", display:"flex", gap:4, overflowX:"auto", whiteSpace:"nowrap" }}>
         {tabDef.map(({ id, label }) => (
-          <button key={id} data-tab={id} onClick={()=>setTab(id)} style={navTabStyle(id)}>{label}</button>
+          <React.Fragment key={id}>
+            <button data-tab={id} onClick={()=>setTab(id)} style={navTabStyle(id)}>{label}</button>
+            {/* Right after the browse tabs, so it is on screen on mobile too. */}
+            {id === "list" && <a href={FESTIVAL_HUB_URL} style={{ ...navTabStyle(null), display:"inline-block", lineHeight:"normal", textDecoration:"none" }}>FESTIVAL HUB</a>}
+          </React.Fragment>
         ))}
-        <a href={FESTIVAL_HUB_URL} style={{ ...navTabStyle(null), display:"inline-block", lineHeight:"normal", textDecoration:"none" }}>FESTIVAL HUB</a>
       </div>
 
       {/* ── Main ── */}
