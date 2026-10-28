@@ -15,12 +15,19 @@
 //      references, calendar code markers, API paths or source-map comments
 //   4. HTML: noindex, one module script from festival-hub/assets, no inline
 //      scripts, no manifest link
+//   6. build mode (scripts/standalone/mode.mjs), checked strictly:
+//      staging -- noindex meta, staging title, no canonical, no robots.txt or
+//        sitemap.xml (4 files);
+//      launch  -- index/follow meta, the exact canonical/og:url, launch title,
+//        no "staging" text, no demo data or demo UI in the JS, and exact
+//        robots.txt + sitemap.xml (6 files).
 //   5. on Vercel (VERCEL=1): the api/ and supabase/ directories must not
 //      exist in the build checkout (.vercelignore keeps them out), so
 //      serverless functions cannot be detected and deployed.
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { CANONICAL_URL, LAUNCH_TITLE, ROBOTS_TXT, SITEMAP_XML, isLaunchBuild } from "./mode.mjs";
 
 const ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const OUT = resolve(ROOT, process.argv[2] || "dist-hub-standalone");
@@ -36,6 +43,8 @@ function walk(dir) {
 }
 
 // 1. Files
+const LAUNCH = isLaunchBuild(process.env);
+const LAUNCH_FILES = ["robots.txt", "sitemap.xml"];
 const ALLOWED_FILES = [
   /^festival-hub\/index\.html$/,
   /^festival-hub\/assets\/[\w-]+\.(js|css)$/,
@@ -46,7 +55,9 @@ const ALLOWED_FILES = [
 export const LOGO_BUDGET = 350000;
 if (!existsSync(OUT)) fail(`output directory missing: ${OUT}`);
 const files = existsSync(OUT) ? walk(OUT) : [];
-for (const f of files) if (!ALLOWED_FILES.some((re) => re.test(f))) fail(`unexpected file in output: ${f}`);
+for (const f of files) if (!ALLOWED_FILES.some((re) => re.test(f)) && !(LAUNCH && LAUNCH_FILES.includes(f))) fail(`unexpected file in output: ${f}`);
+const expectedCount = LAUNCH ? 6 : 4;
+if (files.length !== expectedCount) fail(`expected ${expectedCount} files for a ${LAUNCH ? "launch" : "staging"} build, found ${files.length}`);
 if (!files.includes("festival-hub/index.html")) fail("festival-hub/index.html missing");
 if (!files.some((f) => /^festival-hub\/assets\/.+\.js$/.test(f))) fail("hub JS bundle missing");
 const logos = files.filter((f) => /\.webp$/.test(f));
@@ -100,7 +111,18 @@ for (const f of files.filter((x) => /\.(js|css|html)$/.test(x))) {
 const htmlPath = join(OUT, "festival-hub/index.html");
 if (existsSync(htmlPath)) {
   const html = readFileSync(htmlPath, "utf8");
-  if (!/<meta name="robots" content="noindex, nofollow"/.test(html)) fail("hub HTML missing noindex meta");
+  const canonicals = [...html.matchAll(/<link rel="canonical" href="([^"]*)"/g)].map((m) => m[1]);
+  if (LAUNCH) {
+    if (!/<meta name="robots" content="index, follow" \/>/.test(html) || /noindex/.test(html)) fail("launch HTML must be index, follow (and never noindex)");
+    if (canonicals.length !== 1 || canonicals[0] !== CANONICAL_URL) fail(`launch HTML canonical must be exactly ${CANONICAL_URL}: ${canonicals}`);
+    if (!html.includes(`<meta property="og:url" content="${CANONICAL_URL}" />`)) fail("launch HTML og:url missing or wrong");
+    if (!html.includes(`<title>${LAUNCH_TITLE}</title>`)) fail("launch HTML title missing or wrong");
+    if (/staging/i.test(html)) fail("launch HTML mentions staging");
+  } else {
+    if (!/<meta name="robots" content="noindex, nofollow"/.test(html)) fail("hub HTML missing noindex meta");
+    if (!/<title>MSM Festival Hub \(Staging\)<\/title>/.test(html)) fail("staging HTML title missing");
+    if (canonicals.length) fail("staging HTML must not declare a canonical URL");
+  }
   const scripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)];
   if (scripts.length !== 1) fail(`expected one script tag, found ${scripts.length}`);
   for (const [, attrs, body] of scripts) {
@@ -108,6 +130,21 @@ if (existsSync(htmlPath)) {
     if (!/type="module"/.test(attrs) || !/src="\/festival-hub\/assets\/[\w-]+\.js"/.test(attrs)) fail(`unexpected script tag: ${attrs}`);
   }
   if (/rel="manifest"/.test(html)) fail("manifest link in hub HTML");
+}
+
+// 6. Launch-only files and demo exclusion
+if (LAUNCH) {
+  for (const [f, want] of [["robots.txt", ROBOTS_TXT], ["sitemap.xml", SITEMAP_XML]]) {
+    const p = join(OUT, f);
+    if (!existsSync(p)) fail(`launch build missing ${f}`);
+    else if (readFileSync(p, "utf8") !== want) fail(`${f} content differs from the approved text`);
+  }
+  for (const f of files.filter((x) => /\.js$/.test(x))) {
+    const text = readFileSync(join(OUT, f), "utf8");
+    for (const [re, what] of [[/festival-hub-demo/, "demo fixture links"], [/demo-[a-z]+-?[a-z]*"/, "demo listing ids"], [/Demo data:/, "demo notice"], [/View the demo/, "demo link"], [/Staging preview/, "staging banner"]]) {
+      if (re.test(text)) fail(`${f}: launch bundle contains ${what}`);
+    }
+  }
 }
 
 // 5. Deployment checkout
@@ -119,4 +156,4 @@ if (problems.length) {
   console.error(`Festival Hub standalone output FAILED verification (${problems.length}):\n  - ${problems.join("\n  - ")}`);
   process.exit(1);
 }
-console.log(`Festival Hub standalone output verified: ${files.length} files (${files.join(", ")}); module graph and content clean.`);
+console.log(`Festival Hub standalone output verified (${LAUNCH ? "LAUNCH" : "staging"} mode): ${files.length} files (${files.join(", ")}); module graph and content clean.`);

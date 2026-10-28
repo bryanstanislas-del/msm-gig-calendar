@@ -9,17 +9,19 @@ import { CURATED_LISTINGS } from "./curatedListings.js";
 import { DEMO_LISTINGS } from "./demoFixtures.js";
 import { validateDirectory } from "./schema.js";
 import { londonDateOf } from "./dates.js";
+import { DEMO_ENABLED } from "./launch.js";
 
 export const MODES = Object.freeze({ REAL: "real", DEMO: "demo" });
 
-export function getDirectory(mode, { today = londonDateOf(), real = CURATED_LISTINGS, demo = DEMO_LISTINGS } = {}) {
-  const isDemo = mode === MODES.DEMO;
+export function getDirectory(mode, { today = londonDateOf(), real = CURATED_LISTINGS, demo = DEMO_ENABLED ? DEMO_LISTINGS : [] } = {}) {
+  const isDemo = DEMO_ENABLED && mode === MODES.DEMO;
   const { valid, problems } = validateDirectory(isDemo ? demo : real, { demo: isDemo, today });
   return { mode: isDemo ? MODES.DEMO : MODES.REAL, listings: valid, problems };
 }
 
-// ?demo=1 selects demo mode; anything else is the real directory.
-export const modeFromSearch = (search) => (new URLSearchParams(search).get("demo") === "1" ? MODES.DEMO : MODES.REAL);
+// ?demo=1 selects demo mode (staging builds only); anything else, and every
+// launch build, is the real directory.
+export const modeFromSearch = (search) => (DEMO_ENABLED && new URLSearchParams(search).get("demo") === "1" ? MODES.DEMO : MODES.REAL);
 
 // Paths the hub page is actually served at (vercel.json rewrites and the
 // static file). Links that switch mode reuse the current path only if it is
