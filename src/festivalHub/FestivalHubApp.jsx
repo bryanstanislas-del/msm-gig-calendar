@@ -19,7 +19,7 @@ import { STATUS, STATUS_LABEL, applicationStatus, deadlineOf, deadlineSummary, f
 import { ALL, DEFAULT_FILTERS, DEADLINE_OPTIONS, applyFilters, genresOf, isDefaultFilters, regionsOf } from "./filters.js";
 import { CHECKLIST, OUTCOMES, STAGES, STORAGE_KEYS, checklistProgress, emptyEntry, isValidId, loadSaved, persistSaved } from "./storage.js";
 import { ctaLinks } from "./cta.js";
-import { CALENDAR_LINKS, LIVE_LINK_NOTE, MSM_BENEFITS, NO_AUTO_SUBMIT, NO_GUARANTEE, OPEN_RECHECK_NOTE, PREP_TIPS, STORAGE_NOTE } from "./copy.js";
+import { ABOUT_HUB_URL, CALENDAR_LINKS, LIVE_LINK_NOTE, MSM_BENEFITS, NAV_LABELS, NO_AUTO_SUBMIT, NO_GUARANTEE, OPEN_RECHECK_NOTE, PREP_TIPS, STORAGE_NOTE } from "./copy.js";
 
 const HASH_PREFIX = "#festival=";
 
@@ -404,6 +404,10 @@ const STORAGE_MESSAGES = {
 };
 
 function LiveLink({ href, children, primary }) {
+  // The public site navigates between MSM properties in the same tab, with
+  // plain labels; staging keeps the new-tab "(live site)" marking because it
+  // leaves the preview.
+  if (LAUNCH_MODE) return <a className={`fh-btn${primary ? " fh-btn-primary" : ""}`} href={href}>{children}</a>;
   return (
     <a className={`fh-btn${primary ? " fh-btn-primary" : ""}`} href={href} target="_blank" rel="noopener noreferrer">
       {children} ↗ <small>(live site)</small><span className="fh-sr"> — {LIVE_LINK_NOTE}, in a new tab</span>
@@ -512,9 +516,9 @@ export default function FestivalHubApp({ now: nowProp } = {}) {
           <Logo />
           <span className="fh-title">Festival <span>Hub</span></span>
         </span>
-        <nav className="fh-nav" aria-label="MSM live calendar">
-          <LiveLink href={CALENDAR_LINKS.calendar}>Gig calendar</LiveLink>
-          <LiveLink href={CALENDAR_LINKS.claim}>Claim a profile</LiveLink>
+        <nav className="fh-nav" aria-label="Music Scene Magazine">
+          <LiveLink href={CALENDAR_LINKS.calendar}>{NAV_LABELS.calendar}</LiveLink>
+          <a className="fh-btn" href={ABOUT_HUB_URL}>{NAV_LABELS.about}</a>
         </nav>
       </header>
       {!LAUNCH_MODE && <div className="fh-staging" role="note">Staging preview — not public and not indexed. Calendar links open the live MSM site.</div>}
