@@ -1,32 +1,100 @@
-# Festival Hub – launch runbook (festivals.musicscenemagazine.co.uk)
+# Festival Hub – launch record and runbook (festivals.musicscenemagazine.co.uk)
 
-Status: **prepared and tested; final production deployment and domain
-activation are held** until Bryan approves a tested candidate. Nothing in this
-document has been done to the new Vercel project, its domains or DNS. All of
-those steps are for the project owner.
+Status: **LIVE since 28 Oct 2026.** The production deployment, DNS, the
+WordPress page and the calendar promotion were all done by the project owner
+in the Vercel, Cloudflare and WordPress dashboards. Claude made no provider
+deployments, DNS or WordPress changes, and no database, settings, ads or `main`
+writes.
 
-The hub will be served by its own Vercel project, `msm-festival-hub`
-(team `msm-gig-calendar-s-projects`). It is currently **empty**: it has no Git
-connection, no import and no deployments. It has **no Supabase environment
-variables, backend or functions**, and must not get any: the hub has no
-backend.
+## Launch record (owner-reported, 28 Oct 2026)
 
-Recorded setup facts (reported by the project owner; nothing here was done
-from this repo or by Claude):
+| Item | Fact |
+| --- | --- |
+| Hub project | `msm-festival-hub`, project ID `prj_ez2TpZnlU8UFaG4Lk4KIov5sWOje`, team `msm-gig-calendar-s-projects`. **No environment variables, no backend, no functions.** |
+| Hub production | deployment `DitwSHqgTyyfXLDvMgirdofTzaqs`, Ready, built in 11 s from `release/festival-hub` @ `1c215411aa6d1476025d55af149eaec3bbebe755` (a fast-forward from `f19ab2c`; never merged) |
+| Hub build log | `verified (LAUNCH mode)`, 6 static files, no Functions |
+| Hub URL | https://festivals.musicscenemagazine.co.uk/ (also served at the project's `*.vercel.app` URLs, which must send `noindex`) |
+| DNS | Cloudflare **CNAME** `festivals` → `666124bca49cbb84.vercel-dns-017.com`, DNS only (proxy off); Vercel shows the domain as valid. Don't use the domain's Environment binding: the UI errored with "Invalid customEnvironmentId". |
+| WordPress | page ID 6915, published at https://musicscenemagazine.co.uk/festival-hub/ (copy draft: `docs/festival-hub-wp-explainer.md`) |
+| Calendar | the preview build of `calendar/festival-hub-link` @ `c49ef0552179401f6e79346b6df13ec5e6fa1e8d` was **promoted to Production**, using the Production environment variables (confirmed in the Vercel dialog): deployment `dpl_8RBzFuUgdcQ9981kM3U8xyQ6viA9`, Ready, 17 s. `main` is unchanged at `13db12b`. |
 
-- `msm-festival-hub`, project ID `prj_ez2TpZnlU8UFaG4Lk4KIov5sWOje`: empty, no Git, no deployment.
-- `festivals.musicscenemagazine.co.uk` is associated with that empty project as
-  a Production domain only, and shows *Invalid Configuration*. No data or code is
-  served, and no DNS record has been written.
-- The record Vercel shows for it: **CNAME** `festivals` →
-  `666124bca49cbb84.vercel-dns-017.com`. It goes at Cloudflare (the confirmed
-  authoritative DNS) with the proxy **disabled** (DNS only). Use exactly this
-  value; re-read it from Vercel if the project changes.
-- Do not use the domain's Environment binding: the UI errored with
-  "Invalid customEnvironmentId".
+**Navigation (all same tab, no "live site" suffix):**
+- the calendar's nav has **FESTIVAL HUB** right after CALENDAR / LIST VIEW, linking to the Hub;
+- the Hub header has **Gig Calendar** and **About Festival Hub**, linking to the calendar and the WordPress page;
+- the WordPress page links to the Hub and the Gig Calendar.
 
-The calendar (`main`, its Vercel project, its production deployment
-and calendar.musicscenemagazine.co.uk) is untouched by all of this.
+### What was checked, and by whom
+
+**Verified after launch, by the owner in a browser:**
+- the Hub shows 26 listings, 13 open, with no staging banner and no demo;
+- the nav is correct;
+- in the DOM, the canonical is exactly `https://festivals.musicscenemagazine.co.uk/` and the robots meta is `index, follow`;
+- Hub → WordPress → Hub, and calendar ↔ Hub, all navigate in the same tab;
+- the live calendar loads (1,618 gigs) and shows the FESTIVAL HUB link;
+- the build log shows the LAUNCH mode with 6 files.
+
+**NOT verified after launch: the HTTP response checks.** These are:
+- the status code and CSP header;
+- **no `X-Robots-Tag` on the custom hostname**;
+- `X-Robots-Tag: noindex, nofollow` on the `*.vercel.app` deployment URL;
+- the exact `robots.txt` and `sitemap.xml`;
+- 404 for `/api/og` and `/sw.js`.
+
+Why they weren't measured:
+- the Claude dev environment's network policy refuses both hosts (no workaround was attempted);
+- the owner's in-browser Vercel fetch was rejected by automated review, because it could create an authenticated share URL;
+- no access changes or retries were made.
+
+Before launch, these same behaviours were verified **locally** on byte-identical code:
+- fresh-clone end-to-end tests of `1c21541` with `VERCEL_ENV=production`: 18/18;
+- the template's host rules, emulated for 8 hosts.
+
+They remain an **open post-launch check**. Run these from any terminal:
+
+```sh
+H=https://festivals.musicscenemagazine.co.uk
+curl -sSI $H/ | grep -iE '^HTTP|^x-robots-tag|^content-security-policy'   # 200, NO x-robots-tag, CSP present
+curl -sS $H/robots.txt; curl -sS $H/sitemap.xml                          # exact approved text, one <loc>
+for p in /api/og /sw.js; do curl -s -o /dev/null -w "$p %{http_code}\n" $H$p; done   # 404 404
+curl -sSI https://<project>.vercel.app/ | grep -i '^x-robots-tag'          # noindex, nofollow (or 401 if protected)
+```
+
+**Known, pre-existing, not changed:** the calendar's Vercel build warns about a
+duplicate `onClick` on the "GIGS" `Btn`. It's at `src/App.jsx` 4341–4342 on
+`c49ef05`, the same lines as `main`'s 4339–4340 (moved down 2 lines by the
+new constant). It's already on `main` and doesn't stop the build.
+
+### ⚠ Calendar navigation persistence
+
+The calendar's production deployment runs `c49ef05`, which is **not on
+`main`**. **Any future production deployment of `main` will remove the FESTIVAL
+HUB link** until the draft PR `calendar/festival-hub-link` → `main` is merged.
+That includes a push or merge to `main`, a redeploy of `main`, or an Instant
+Rollback to a pre-`c49ef05` deployment. Until then:
+- don't deploy `main` to production; or
+- deploy only a `main` that already contains `c49ef05`, which needs merge approval.
+
+### Rollback
+
+- **Hub:**
+  - this is the first production deployment, so there is nothing to roll back to;
+  - to take it offline, remove `festivals.musicscenemagazine.co.uk` from the project, or delete or disable the Cloudflare CNAME;
+  - for a bad future release, use Vercel Instant Rollback to `DitwSHqgTyyfXLDvMgirdofTzaqs`;
+  - to revert code, cherry-pick a revert onto `release/festival-hub` (no merges, no force-push). If Git is connected with that branch as production, the push redeploys production.
+- **Calendar:** Instant Rollback to the previous production deployment (built from `main` @ `13db12b`). This removes only the nav link.
+- **WordPress:** return page 6915 to Draft.
+- The Hub, the calendar and WordPress roll back independently. None of them uses the live database for the Hub.
+
+### No live database
+
+- **The Hub** is static:
+  - no backend, functions or environment variables;
+  - its CSP sets `connect-src 'none'`;
+  - the build verifier fails on any backend host, key or API path;
+  - shortlists are kept only in each visitor's browser.
+- **The calendar change** is one nav link, with no data, API or settings changes.
+
+---
 
 ## Build modes
 
@@ -39,7 +107,7 @@ has two modes, decided at build time by `scripts/standalone/mode.mjs`:
 | **launch** | `HUB_RELEASE=1` **and** `VERCEL_ENV=production` (i.e. `npm run build:hub-release` on a production deployment), or the explicit override `HUB_LAUNCH=1` | 6 files: the 4 above plus `robots.txt` and `sitemap.xml` with exact approved content. `index, follow` meta, exactly one canonical `https://festivals.musicscenemagazine.co.uk/`, matching `og:url`, launch title and description, no staging text, no staging banner, **no demo** (the demo fixtures, links, notice and `?demo=1` handling are compiled out; the verifier fails the build if any demo or staging marker is in the JS). |
 
 `VITE_HUB_LAUNCH` is injected by the Vite config (`define`), so the mode can't
-be switched at runtime. The "(live site)" labels on festival links are unchanged.
+be switched at runtime. In launch builds, links to MSM properties (calendar, WordPress page) open in the same tab with plain labels; staging builds keep the new-tab "(live site)" marking.
 
 ## Indexing: only the approved hostname
 
@@ -80,8 +148,10 @@ No HSTS header is added (not needed now).
 | --- | --- | --- |
 | `feature/festival-hub` | calendar (full tree) | development, draft PR. |
 | `feature/festival-hub-standalone` | standalone template | existing staging preview. Never merged. |
-| `release/festival-hub` | **release** template (`npm run build:hub-release`) | the candidate for the new project's **production branch**. In any preview it builds **staging**. Only a production deployment builds **launch**. |
-| `release/festival-hub-launch-check` | release template, build command `HUB_LAUNCH=1 npm run build:hub-release` | review only: a **preview** that forces the launch build so the public page, robots.txt and sitemap.xml can be checked before production. Its `*.vercel.app` URL still sends `noindex`. Never a production branch. |
+| `release/festival-hub` | **release** template (`npm run build:hub-release`) | **production branch of `msm-festival-hub`; live at `1c21541`.** In any preview it builds **staging**. Only a production deployment builds **launch**. |
+| `candidate/festival-hub-nav` (+ `-launch-check`) | release template (+ forced launch) | the reviewed nav candidate `1c21541` (launch-check `a9ca080`); `release/festival-hub` was fast-forwarded to it. |
+| `calendar/festival-hub-link` | calendar (from `main` @ `13db12b`) | the calendar's FESTIVAL HUB link, `c49ef05`, **promoted to calendar production**. Draft PR to `main` for persistence. |
+| `release/festival-hub-launch-check` | release template, build command `HUB_LAUNCH=1 npm run build:hub-release` | review only (pre-nav, `148b443`): a **preview** that forces the launch build so the public page, robots.txt and sitemap.xml can be checked before production. Its `*.vercel.app` URL still sends `noindex`. Never a production branch. |
 
 The release branches are minimal hub-only trees, built the same way as the
 standalone branch (no `api/`, `supabase/`, calendar sources or tests) and synced
@@ -100,31 +170,22 @@ git clone --branch release/festival-hub-launch-check <repo> hub-check && (cd hub
 STANDALONE_CHECKOUT=hub-check HUB_EXPECT=launch npm run test:e2e:hub-standalone
 ```
 
-## Steps for the project owner (held – not done)
+## Connecting the project safely (as used for launch)
 
-1. **Never import `main`** into `msm-festival-hub` and never trigger a production
-   deployment of it (it would be the calendar, with no Supabase env, and would
-   fail). Keep Git **unconnected** until the controlled strategy is chosen.
-2. Choose the strategy. For example: set the project's production branch to
-   `release/festival-hub` *before* (or as) Git is connected, so `main` never
-   builds there. Confirm in the project settings that
-   framework = Other, no environment variables are set, and the build uses the
-   repo's `vercel.json`.
-3. Review the launch-check preview, and a staging preview of `release/festival-hub`.
-4. Production deployment of `release/festival-hub` (launch build). Check its
-   `*.vercel.app` URL: launch page, `robots.txt`, `sitemap.xml`, and `X-Robots-Tag: noindex`.
-5. The domain is already associated (Production, no environment binding).
-   Create the Cloudflare record Vercel shows for that project, **CNAME**
-   `festivals` → `666124bca49cbb84.vercel-dns-017.com`, DNS only (proxy off).
-   Do not use any generic target. Once it resolves, check that the domain
-   sends **no** `X-Robots-Tag`, and that `/robots.txt` and `/sitemap.xml` are served.
-6. Optionally submit the sitemap in Search Console.
+- **Ignored Build Step** (Settings → Git):
+  `[ "$VERCEL_GIT_COMMIT_REF" = "release/festival-hub" ] && exit 1 || exit 0`.
+  Exit 1 builds and exit 0 skips, so `main` and every other branch are skipped.
+- **Production branch:** `release/festival-hub`. Never import or deploy `main` in this project.
+- **Build settings:** Framework Other, Root Directory blank, no build/output
+  overrides (`vercel.json`: `npm run build:hub-release` → `dist-hub-standalone`),
+  and no environment variables.
 
-## Rollback
+This record doesn't confirm whether the guard and production-branch settings
+were applied exactly as above; check them in the project settings.
 
-- Bad build: Vercel *Instant Rollback* / promote the previous production deployment.
-- Stop indexing quickly: remove the domain from the project, or redeploy with
-  the standalone template (noindex on every host).
-- Code: revert on `release/festival-hub` (cherry-pick a revert; no merges, no
-  force-push), which redeploys production.
-- The calendar is independent and is not affected by any of these steps.
+## Updating the Hub later
+
+Change `feature/festival-hub` and run the tests (`docs/festival-hub.md`,
+"Running"). Then cherry-pick the runtime commits onto a candidate branch from
+`release/festival-hub` and test a fresh clone (above). After approval,
+fast-forward `release/festival-hub`.
