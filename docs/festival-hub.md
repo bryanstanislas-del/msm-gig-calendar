@@ -227,7 +227,7 @@ How it is built and served:
 | Piece | What it does |
 | --- | --- |
 | `vite.festival-hub-standalone.config.js` | Builds only `festival-hub/index.html` into `dist-hub-standalone/`: no PWA plugin, no service worker or manifest, no `public/` copy (only the favicon; the logo is the Hub's imported WebP), no source maps. Records the full module graph to `dist-hub-standalone.modules.json` (outside the output). |
-| `scripts/standalone/verify-output.mjs` | Runs after that build (`npm run build:hub-standalone`) and fails it unless the output is only the hub HTML, its JS/CSS, exactly one lossless Hub-logo WebP of at most 350,000 B, and the favicon; the module graph is only `src/festivalHub/*`, React/ReactDOM/scheduler and Vite helpers; content has no backend host/ref/JWT/secret names, service worker, manifest, API path, source map or calendar code; the HTML is noindex with a single external module script. On Vercel (`VERCEL=1`) it also fails if `api/` or `supabase/` exist in the checkout. |
+| `scripts/standalone/verify-output.mjs` | Runs after that build (`npm run build:hub-standalone`) and fails it unless the output is only the hub HTML, its single JS bundle, exactly one lossless Hub-logo WebP of at most 350,000 B, and the favicon; the module graph is only `src/festivalHub/*`, React/ReactDOM/scheduler and Vite helpers; content has no backend host/ref/JWT/secret names, service worker, manifest, API path, source map or calendar code; the HTML has a single external module script; and the build mode (staging: noindex, staging title, no canonical, exactly 4 files; launch: see [the launch runbook](festival-hub-launch.md), exactly 6 files) holds. On Vercel (`VERCEL=1`) it also fails if `api/` or `supabase/` exist in the checkout. |
 | `scripts/standalone/vercel.json` (template) | On the deploy branch it becomes the root `vercel.json`: build command `npm run build:hub-standalone`, output `dist-hub-standalone`, rewrites **only** `/`, `/festival-hub`, `/festival-hub/` to the hub (no catch-all, so every other path is 404), and headers on every response: strict CSP (`default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self'; connect-src 'none'; worker-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'` …), `X-Robots-Tag: noindex, nofollow`, `nosniff`, referrer and permissions policies. `'unsafe-inline'` styles are needed because the hub's CSS is an inline `<style>` and React style attributes. |
 | `scripts/standalone/.vercelignore` (template) | On the deploy branch it becomes the root `.vercelignore`: ignore everything, re-include only the hub build inputs (package files, `vercel.json`, the standalone Vite config, `festival-hub/`, `src/festivalHub/` without tests (its `assets/` included), the favicon and `scripts/standalone/`). `api/` and `supabase/` are never uploaded, so no serverless functions can be detected; if they ever were, the verifier fails the build so nothing deploys. |
 
@@ -275,6 +275,12 @@ Vite config, package files) onto it with `git cherry-pick <sha>…` (never
 it deleted (`git rm` it and continue). Then run the checkout test above and
 push the deploy branch. It never gets a PR and is never merged anywhere.
 
+### Launch (festivals.musicscenemagazine.co.uk)
+
+Launch mode, the release template with host-conditional `noindex`, the
+`release/festival-hub` and `release/festival-hub-launch-check` branches and the
+held production/domain steps are in [festival-hub-launch.md](festival-hub-launch.md).
+
 ### Preview caveat
 
 On the Preview deployment, every calendar page (`/`, `/claim`, profiles,
@@ -289,7 +295,9 @@ npm run dev:hub          # hub dev server, open /festival-hub/index.html
 npm run build            # calendar build, then hub build
 npm test                 # unit tests (includes src/festivalHub/*)
 npm run test:e2e:hub     # Playwright checks against dist/ (needs a build)
-npm run build:hub-standalone      # hub-only build + output verifier
+npm run build:hub-standalone      # hub-only build + output verifier (staging mode)
+npm run build:hub-release         # same; launch mode only on a Vercel production deployment
+HUB_LAUNCH=1 npm run build:hub-standalone   # force a local launch build
 npm run test:e2e:hub-standalone   # standalone upload/build/routing/CSP checks
 OLD_DIST=/path/to/dist-from-main npm run test:e2e:hub   # also measure the stale-worker case
 ```

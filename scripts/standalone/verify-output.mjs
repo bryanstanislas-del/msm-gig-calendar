@@ -3,7 +3,7 @@
 // the deployment -- if anything other than the hub is present.
 //
 // Checks:
-//   1. files: only the hub HTML, its JS/CSS assets, exactly one image -- the
+//   1. files: only the hub HTML, its JS bundle (the hub has no CSS file), exactly one image -- the
 //      Hub logo, a lossless WebP of at most LOGO_BUDGET bytes -- and the
 //      favicon (no source maps, service worker, workbox, manifest, calendar
 //      bundle, API, robots/sitemap, master PNG or other public/ files)
@@ -47,7 +47,7 @@ const LAUNCH = isLaunchBuild(process.env);
 const LAUNCH_FILES = ["robots.txt", "sitemap.xml"];
 const ALLOWED_FILES = [
   /^festival-hub\/index\.html$/,
-  /^festival-hub\/assets\/[\w-]+\.(js|css)$/,
+  /^festival-hub\/assets\/[\w-]+\.js$/,
   /^festival-hub\/assets\/msm-logo-hub-[\w-]+\.webp$/,
   /^favicon\.ico$/,
 ];

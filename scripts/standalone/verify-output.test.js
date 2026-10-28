@@ -5,14 +5,21 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { CANONICAL_URL, ROBOTS_TXT, SITEMAP_XML, applyLaunchHtml } from "./mode.mjs";
 
 const VERIFY = fileURLToPath(new URL("./verify-output.mjs", import.meta.url));
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
-const HTML = '<!DOCTYPE html><html><head><meta name="robots" content="noindex, nofollow" /></head><body><div id="root"></div><script type="module" crossorigin src="/festival-hub/assets/index-abc.js"></script></body></html>';
+const HTML = '<!DOCTYPE html><html><head><meta name="robots" content="noindex, nofollow" /><title>MSM Festival Hub (Staging)</title></head><body><div id="root"></div><script type="module" crossorigin src="/festival-hub/assets/index-abc.js"></script></body></html>';
 const GOOD_GRAPH = { "festival-hub/assets/index-abc.js": { modules: ["festival-hub/index.html", "src/festivalHub/main.jsx", "src/festivalHub/FestivalHubApp.jsx", "src/festivalHub/assets/msm-logo-hub.webp", "node_modules/react/index.js", "virtual:commonjsHelpers.js"], imports: [], dynamicImports: [] } };
 // Minimal lossless WebP header ("RIFF" size "WEBP" "VP8L" ...), padded to `size` bytes.
 const webp = (size = 64, kind = "VP8L") => { const b = Buffer.alloc(size); b.write("RIFF", 0, "latin1"); b.writeUInt32LE(size - 8, 4); b.write("WEBP", 8, "latin1"); b.write(kind, 12, "latin1"); return b; };
 const LOGO = "festival-hub/assets/msm-logo-hub-abc123.webp";
+
+// Launch HTML: the real festival-hub/index.html through the launch transform,
+// with the dev entry swapped for a built bundle as Vite does.
+const LAUNCH_HTML = applyLaunchHtml(readFileSync(join(ROOT, "festival-hub/index.html"), "utf8"))
+  .replace('<script type="module" src="/src/festivalHub/main.jsx"></script>', '<script type="module" crossorigin src="/festival-hub/assets/index-abc.js"></script>');
+const LAUNCH_FILES = { "festival-hub/index.html": LAUNCH_HTML, "robots.txt": ROBOTS_TXT, "sitemap.xml": SITEMAP_XML };
 
 let dir;
 function fixture({ files = {}, graph = GOOD_GRAPH } = {}) {
@@ -27,7 +34,8 @@ function fixture({ files = {}, graph = GOOD_GRAPH } = {}) {
   return [out, join(dir, "graph.json")];
 }
 function verify(args, env = {}) {
-  const { VERCEL, ...rest } = process.env;
+  // Never inherit a build mode from the shell running the tests.
+  const rest = Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== "VERCEL" && k !== "VERCEL_ENV" && !k.startsWith("HUB_")));
   return spawnSync(process.execPath, [VERIFY, ...args], { cwd: ROOT, env: { ...rest, ...env }, encoding: "utf8" });
 }
 
@@ -41,8 +49,9 @@ describe("standalone output verifier", () => {
   it("accepts a logo exactly at the 350,000 B budget", () => {
     expect(verify(fixture({ files: { [LOGO]: webp(350000) } })).status).toBe(0);
   });
-  it("accepts CSS assets", () => {
-    expect(verify(fixture({ files: { "festival-hub/assets/index-abc.css": "body{}" } })).status).toBe(0);
+  it("staging mode reports itself and expects exactly 4 files", () => {
+    const r = verify(fixture());
+    expect(r.stdout).toMatch(/verified \(staging mode\): 4 files/);
   });
 
   const rejects = {
@@ -52,7 +61,13 @@ describe("standalone output verifier", () => {
     "source map": { files: { "festival-hub/assets/index-abc.js.map": "{}" } },
     "calendar bundle": { files: { "assets/index-xyz.js": "x" } },
     "api file": { files: { "api/og.js": "x" } },
-    "public directory copy": { files: { "robots.txt": "x", "icons/icon-192.png": "x" } },
+    "public directory copy": { files: { "icons/icon-192.png": "x" } },
+    "a CSS asset (the hub has none; the file count is exact)": { files: { "festival-hub/assets/index-abc.css": "body{}" } },
+    "robots.txt in a staging build": { files: { "robots.txt": ROBOTS_TXT } },
+    "sitemap.xml in a staging build": { files: { "sitemap.xml": SITEMAP_XML } },
+    "a staging build with launch head tags": { files: { "festival-hub/index.html": LAUNCH_HTML } },
+    "a staging build with a canonical URL": { files: { "festival-hub/index.html": HTML.replace("</head>", `<link rel="canonical" href="${CANONICAL_URL}" /></head>`) } },
+    "a staging build without the staging title": { files: { "festival-hub/index.html": HTML.replace(/<title>.*<\/title>/, "<title>MSM Festival Hub</title>") } },
     "the shared master PNG": { files: { "brand/MSM-Logo-Master.png": "x" } },
     "a PNG in the hub assets": { files: { "festival-hub/assets/logo-abc.png": "x" } },
     "a second WebP": { files: { "festival-hub/assets/msm-logo-hub-def456.webp": webp() } },
@@ -81,6 +96,48 @@ describe("standalone output verifier", () => {
       expect(r.stderr).toMatch(/FAILED verification/);
     });
   }
+
+  describe("launch mode (HUB_LAUNCH=1, or HUB_RELEASE=1 with VERCEL_ENV=production)", () => {
+    const launch = (spec = {}) => verify(fixture({ ...spec, files: { ...LAUNCH_FILES, ...spec.files } }), { HUB_LAUNCH: "1" });
+
+    it("accepts the 6-file launch output", () => {
+      const r = launch();
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toMatch(/verified \(LAUNCH mode\): 6 files/);
+    });
+    it("uses launch mode for a release build on a production deployment only", () => {
+      const out = fixture({ files: LAUNCH_FILES });
+      expect(verify(out, { HUB_RELEASE: "1", VERCEL_ENV: "production" }).status).toBe(0);
+      expect(verify(out, { HUB_RELEASE: "1", VERCEL_ENV: "preview" }).status).toBe(1);
+      expect(verify(out, { VERCEL_ENV: "production" }).status).toBe(1);
+    });
+
+    const launchRejects = {
+      "missing robots.txt": { files: { "robots.txt": null } },
+      "missing sitemap.xml": { files: { "sitemap.xml": null } },
+      "edited robots.txt": { files: { "robots.txt": ROBOTS_TXT.replace("Allow: /", "Disallow: /") } },
+      "edited sitemap.xml": { files: { "sitemap.xml": SITEMAP_XML.replace(CANONICAL_URL, "https://example.com/") } },
+      "an extra file": { files: { "humans.txt": "x" } },
+      "staging HTML": { files: { "festival-hub/index.html": HTML } },
+      "a noindex meta": { files: { "festival-hub/index.html": LAUNCH_HTML.replace("index, follow", "noindex, nofollow") } },
+      "a wrong canonical": { files: { "festival-hub/index.html": LAUNCH_HTML.replace(`<link rel="canonical" href="${CANONICAL_URL}"`, '<link rel="canonical" href="https://www.festivals.musicscenemagazine.co.uk/"') } },
+      "two canonicals": { files: { "festival-hub/index.html": LAUNCH_HTML.replace("</head>", `<link rel="canonical" href="${CANONICAL_URL}" /></head>`) } },
+      "a wrong og:url": { files: { "festival-hub/index.html": LAUNCH_HTML.replace(`<meta property="og:url" content="${CANONICAL_URL}"`, '<meta property="og:url" content="https://example.com/"') } },
+      "staging text in the HTML": { files: { "festival-hub/index.html": LAUNCH_HTML.replace("</body>", "<p>Staging</p></body>") } },
+      "demo fixture links in the JS": { files: { "festival-hub/assets/index-abc.js": "const u='/festival-hub-demo/'" } },
+      "demo listing ids in the JS": { files: { "festival-hub/assets/index-abc.js": 'const id="demo-coastline"' } },
+      "the demo notice in the JS": { files: { "festival-hub/assets/index-abc.js": "'Demo data: fictional'" } },
+      "the demo link in the JS": { files: { "festival-hub/assets/index-abc.js": "'View the demo'" } },
+      "the staging banner in the JS": { files: { "festival-hub/assets/index-abc.js": "'Staging preview'" } },
+    };
+    for (const [name, spec] of Object.entries(launchRejects)) {
+      it(`rejects ${name}`, () => {
+        const r = launch(spec);
+        expect(r.status).toBe(1);
+        expect(r.stderr).toMatch(/FAILED verification/);
+      });
+    }
+  });
 
   it("on Vercel, fails if api/ is present in the checkout (.vercelignore not applied)", () => {
     const r = verify(fixture(), { VERCEL: "1" }); // this repo checkout has api/
