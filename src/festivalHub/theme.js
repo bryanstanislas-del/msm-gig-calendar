@@ -5,6 +5,16 @@
 // calendar's backend client. theme.test.js keeps these values in sync
 // with App.jsx. Black / white / red only.
 
+// Hub-only DERIVED copy of public/brand/MSM-Logo-Master.png: a full-resolution
+// (1254x1254) lossless WebP whose decoded pixels are identical to the master,
+// 342,906 B instead of 544,832 B. It is not the original credentialled asset:
+// the master's C2PA content-credentials chunk is not carried over, and the
+// master itself (used by the calendar) is unchanged. Imported so Vite emits a
+// hashed file in the Hub builds only. Regenerate with Pillow, from the repo root:
+//   python3 -c "from PIL import Image; Image.open('public/brand/MSM-Logo-Master.png').convert('RGB').save('src/festivalHub/assets/msm-logo-hub.webp', format='WEBP', lossless=True, quality=100, method=6, exact=True)"
+// See docs/festival-hub.md ("Hub logo asset").
+import logoUrl from "./assets/msm-logo-hub.webp";
+
 export const C = Object.freeze({
   bg: "#0d0d0d",
   surface: "#111",
@@ -29,7 +39,7 @@ export const F = Object.freeze({
   body: "'Barlow',sans-serif",
 });
 
-export const LOGO_SRC = "/brand/MSM-Logo-Master.png";
+export const LOGO_SRC = logoUrl;
 // Same crop as the calendar's MSMLogo (monogram + wordmark band of the
 // square master asset).
 export const LOGO_CROP = Object.freeze({ top: 0.24, height: 0.56 });

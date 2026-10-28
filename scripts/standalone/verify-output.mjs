@@ -3,9 +3,10 @@
 // the deployment -- if anything other than the hub is present.
 //
 // Checks:
-//   1. files: only the hub HTML, its JS/CSS assets, the logo and favicon
-//      (no source maps, service worker, workbox, manifest, calendar bundle,
-//      API, robots/sitemap or other public/ files)
+//   1. files: only the hub HTML, its JS/CSS assets, exactly one image -- the
+//      Hub logo, a lossless WebP of at most LOGO_BUDGET bytes -- and the
+//      favicon (no source maps, service worker, workbox, manifest, calendar
+//      bundle, API, robots/sitemap, master PNG or other public/ files)
 //   2. module graph (recorded by vite.festival-hub-standalone.config.js):
 //      only src/festivalHub/*, the hub HTML, React/ReactDOM/scheduler and
 //      Vite/Rollup helpers -- no App.jsx, calendar entry, backend client,
@@ -38,19 +39,30 @@ function walk(dir) {
 const ALLOWED_FILES = [
   /^festival-hub\/index\.html$/,
   /^festival-hub\/assets\/[\w-]+\.(js|css)$/,
-  /^brand\/MSM-Logo-Master\.png$/,
+  /^festival-hub\/assets\/msm-logo-hub-[\w-]+\.webp$/,
   /^favicon\.ico$/,
 ];
+// Hub logo: derived lossless WebP (see src/festivalHub/theme.js); 342,906 B today.
+export const LOGO_BUDGET = 350000;
 if (!existsSync(OUT)) fail(`output directory missing: ${OUT}`);
 const files = existsSync(OUT) ? walk(OUT) : [];
 for (const f of files) if (!ALLOWED_FILES.some((re) => re.test(f))) fail(`unexpected file in output: ${f}`);
 if (!files.includes("festival-hub/index.html")) fail("festival-hub/index.html missing");
 if (!files.some((f) => /^festival-hub\/assets\/.+\.js$/.test(f))) fail("hub JS bundle missing");
+const logos = files.filter((f) => /\.webp$/.test(f));
+if (logos.length !== 1) fail(`expected exactly one Hub logo .webp, found ${logos.length}`);
+for (const f of logos) {
+  const buf = readFileSync(join(OUT, f));
+  if (buf.length > LOGO_BUDGET) fail(`${f}: ${buf.length} B exceeds the ${LOGO_BUDGET} B logo budget`);
+  // RIFF....WEBPVP8L = lossless WebP (a lossy "VP8 " or extended "VP8X" file is rejected).
+  if (buf.toString("latin1", 0, 4) !== "RIFF" || buf.toString("latin1", 8, 12) !== "WEBP" || buf.toString("latin1", 12, 16) !== "VP8L") fail(`${f}: not a simple lossless WebP (RIFF/WEBP/VP8L)`);
+}
 
 // 2. Module graph
 const ALLOWED_MODULES = [
   /^festival-hub\/index\.html$/,
   /^src\/festivalHub\/(?!.*\.test\.)[\w-]+\.(js|jsx)$/,
+  /^src\/festivalHub\/assets\/msm-logo-hub\.webp$/,
   /^node_modules\/(react|react-dom|scheduler)\/[\w./-]+\.js$/,
   /^virtual:node_modules\/(react|react-dom|scheduler)\/[\w./-]+\.js\?commonjs-(module|exports|proxy|es-import)$/,
   /^virtual:(vite\/modulepreload-polyfill\.js|commonjsHelpers\.js)$/,

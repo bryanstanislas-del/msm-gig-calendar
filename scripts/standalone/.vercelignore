@@ -15,9 +15,6 @@
 !/public/
 /public/*
 !/public/favicon.ico
-!/public/brand/
-/public/brand/*
-!/public/brand/MSM-Logo-Master.png
 !/scripts/
 /scripts/*
 !/scripts/standalone/
