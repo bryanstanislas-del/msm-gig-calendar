@@ -13,6 +13,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { C, F, LOGO_SRC, LOGO_CROP } from "./theme.js";
 import { DEMO_DATA_NOTICE } from "./demoFixtures.js";
 import { MODES, getDirectory, hubBasePath, modeFromSearch } from "./listings.js";
+import { DEMO_ENABLED, LAUNCH_MODE } from "./launch.js";
 import { HUB_EDITION_YEAR, PERFORMER_PAY, ALL_GENRES } from "./constants.js";
 import { STATUS, STATUS_LABEL, applicationStatus, deadlineOf, deadlineSummary, formatDeadline, formatDateOnly } from "./status.js";
 import { ALL, DEFAULT_FILTERS, DEADLINE_OPTIONS, applyFilters, genresOf, isDefaultFilters, regionsOf } from "./filters.js";
@@ -287,7 +288,7 @@ function DetailDialog({ listing, missing, info, entry, demo, storageProblem, sav
           <>
             <div className="fh-badges" style={{ marginTop: 10 }}>{demo && <DemoBadge />}<StatusBadge status={info.status} /></div>
             <p style={{ marginTop: 8 }}>{info.reason}</p>
-            {demo && <p className="fh-small">{DEMO_DATA_NOTICE}</p>}
+            {DEMO_ENABLED && demo && <p className="fh-small">{DEMO_DATA_NOTICE}</p>}
             {info.status === STATUS.OPEN && (
               <div className="fh-note" role="note">
                 Open as checked on {formatDateOnly(ap.checkedDate)}. {OPEN_RECHECK_NOTE}
@@ -413,7 +414,7 @@ function LiveLink({ href, children, primary }) {
 export default function FestivalHubApp({ now: nowProp } = {}) {
   const now = useMemo(() => nowProp || new Date(), [nowProp]);
   const mode = useMemo(() => modeFromSearch(window.location.search), []);
-  const demo = mode === MODES.DEMO;
+  const demo = DEMO_ENABLED && mode === MODES.DEMO;
   const { listings } = useMemo(() => getDirectory(mode), [mode]);
   const storageKey = STORAGE_KEYS[mode];
   const knownIds = useMemo(() => new Set(listings.map((l) => l.id)), [listings]);
@@ -516,8 +517,8 @@ export default function FestivalHubApp({ now: nowProp } = {}) {
           <LiveLink href={CALENDAR_LINKS.claim}>Claim a profile</LiveLink>
         </nav>
       </header>
-      <div className="fh-staging" role="note">Staging preview — not public and not indexed. Calendar links open the live MSM site.</div>
-      {demo ? (
+      {!LAUNCH_MODE && <div className="fh-staging" role="note">Staging preview — not public and not indexed. Calendar links open the live MSM site.</div>}
+      {DEMO_ENABLED && demo ? (
         <div className="fh-banner" role="note">
           {DEMO_DATA_NOTICE} <a href={otherModeHref}>Back to the real directory</a>
         </div>
@@ -548,7 +549,7 @@ export default function FestivalHubApp({ now: nowProp } = {}) {
         {listings.length === 0 ? (
           <div className="fh-empty" id="fh-results" tabIndex={-1} style={{ marginTop: 24 }}>
             <p><strong style={{ color: "#fff" }}>No verified listings yet.</strong> MSM is checking 2027 festival application windows against official sources. Listings appear here only once checked.</p>
-            {!demo && <a className="fh-btn" href={otherModeHref}>Preview the hub with demo data</a>}
+            {DEMO_ENABLED && !demo && <a className="fh-btn" href={otherModeHref}>Preview the hub with demo data</a>}
           </div>
         ) : (
           <>
@@ -603,7 +604,7 @@ export default function FestivalHubApp({ now: nowProp } = {}) {
         <p>{STORAGE_NOTE} {demo ? "Demo progress is stored separately from the real directory." : ""}</p>
         <p style={{ marginTop: 6 }}>Deadlines are shown in UK time. Where a festival gives only a date, the closing time isn't known — apply earlier.</p>
         <p style={{ marginTop: 6 }}>
-          {demo ? <a href={otherModeHref}>Back to the real directory</a> : <a href={otherModeHref}>View the demo (fictional example listings)</a>}
+          {demo ? <a href={otherModeHref}>Back to the real directory</a> : DEMO_ENABLED && <a href={otherModeHref}>View the demo (fictional example listings)</a>}
         </p>
       </footer>
 
