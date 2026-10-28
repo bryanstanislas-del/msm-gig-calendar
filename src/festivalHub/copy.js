@@ -12,6 +12,14 @@ export const CALENDAR_LINKS = Object.freeze({
 });
 export const LIVE_LINK_NOTE = "opens the live MSM Gig Calendar";
 
+// Site navigation (same tab, both ways): the Hub's public origin, and the
+// MSM WordPress page that introduces it.
+export const HUB_PUBLIC_URL = "https://festivals.musicscenemagazine.co.uk/";
+// PENDING: planned WordPress slug -- the owner confirms the exact published
+// URL before this is final.
+export const ABOUT_HUB_URL = "https://musicscenemagazine.co.uk/festival-hub/";
+export const NAV_LABELS = Object.freeze({ calendar: "Gig Calendar", hub: "Festival Hub", about: "About Festival Hub" });
+
 export const MSM_BENEFITS = Object.freeze([
   {
     title: "A free artist profile",
