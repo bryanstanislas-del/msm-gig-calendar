@@ -373,8 +373,23 @@ for (const path of ["/", "/festival-hub", "/festival-hub/"]) {
   await check("calendar links leave for the live site; no relative calendar routes", async () => {
     const hrefs = await page.locator("a").evaluateAll((as) => as.map((a) => a.getAttribute("href")));
     const calendar = hrefs.filter((h) => /calendar\.musicscenemagazine/.test(h));
-    assert(calendar.length >= 4 && calendar.every((h) => /^https:\/\/calendar\.musicscenemagazine\.co\.uk\/(claim)?$/.test(h)), calendar.join(", "));
+    assert(calendar.length >= 3 && calendar.every((h) => /^https:\/\/calendar\.musicscenemagazine\.co\.uk\/(claim)?$/.test(h)), calendar.join(", "));
     assert(!hrefs.some((h) => /^\/(claim|gig|artist|venue|api)\b/.test(h)), "relative calendar route link");
+  });
+  await check(`site navigation: "Gig Calendar" and "About Festival Hub" (${LAUNCH ? "same tab, no live-site suffix" : "staging: calendar links marked live, new tab"})`, async () => {
+    const nav = page.getByRole("navigation", { name: "Music Scene Magazine" });
+    const links = await nav.locator("a").evaluateAll((as) => as.map((a) => ({ text: a.textContent, href: a.getAttribute("href"), target: a.getAttribute("target") })));
+    assert(links.length === 2, JSON.stringify(links));
+    assert(links[1].text === "About Festival Hub" && links[1].href === "https://musicscenemagazine.co.uk/festival-hub/" && links[1].target === null, JSON.stringify(links[1]));
+    if (LAUNCH) {
+      assert(links[0].text === "Gig Calendar" && links[0].href === "https://calendar.musicscenemagazine.co.uk/" && links[0].target === null, JSON.stringify(links[0]));
+      const all = await page.locator("a").evaluateAll((as) => as.map((a) => ({ text: a.textContent, href: a.getAttribute("href"), target: a.getAttribute("target") })));
+      const msm = all.filter((a) => /^https:\/\/(calendar\.)?musicscenemagazine\.co\.uk\//.test(a.href));
+      assert(msm.length >= 4 && msm.every((a) => a.target === null && !/live site|↗/.test(a.text)), JSON.stringify(msm));
+      assert(!(await page.content()).includes("(live site)"), "live-site suffix in the launch page");
+    } else {
+      assert(/^Gig Calendar ↗ \(live site\)/.test(links[0].text) && links[0].target === "_blank", JSON.stringify(links[0]));
+    }
   });
   await ctx.close();
 }

@@ -147,7 +147,7 @@ const DEMO_KEY = "msm.festivalHub.demo.v1";
 
   await check("calendar links are labelled live and point at the live calendar in a new tab", async () => {
     const links = page.getByRole("link", { name: /live site/ });
-    assert(await links.count() >= 4, "live links missing");
+    assert(await links.count() >= 3, "live links missing");
     for (const href of await links.evaluateAll((els) => els.map((e) => `${e.getAttribute("href")}|${e.target}`))) {
       assert(/^https:\/\/calendar\.musicscenemagazine\.co\.uk\/(claim)?\|_blank$/.test(href), href);
     }
