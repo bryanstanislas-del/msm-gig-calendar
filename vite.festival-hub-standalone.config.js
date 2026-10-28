@@ -8,7 +8,8 @@ import { fileURLToPath } from 'node:url'
 //
 // Builds only festival-hub/index.html into dist-hub-standalone/, with no
 // calendar code, no PWA plugin / service worker, no manifest and no public/
-// directory copy -- just the two static files the hub references.
+// directory copy -- only the favicon. The logo is the Hub's own imported
+// asset (src/festivalHub/assets/msm-logo-hub.webp), emitted by Vite.
 // scripts/standalone/verify-output.mjs then checks the output and the
 // module graph recorded below, and fails the build if anything else is
 // present. The calendar's own build (vite.config.js, "npm run build") is
@@ -17,7 +18,7 @@ const ROOT = dirname(fileURLToPath(import.meta.url))
 const OUT_DIR = resolve(ROOT, 'dist-hub-standalone')
 // Written next to (not inside) the output so it is never deployed.
 export const MODULE_GRAPH_FILE = resolve(ROOT, 'dist-hub-standalone.modules.json')
-const STATIC_FILES = ['brand/MSM-Logo-Master.png', 'favicon.ico']
+const STATIC_FILES = ['favicon.ico']
 
 // "\0/abs/node_modules/react/index.js?commonjs-module" -> "virtual:node_modules/react/index.js?commonjs-module"
 function normaliseId(id) {
