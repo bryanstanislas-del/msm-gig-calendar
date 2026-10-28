@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "buildCommand": "npm run build:hub-release",
+  "buildCommand": "HUB_LAUNCH=1 npm run build:hub-release",
   "outputDirectory": "dist-hub-standalone",
   "cleanUrls": false,
   "rewrites": [
