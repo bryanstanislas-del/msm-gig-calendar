@@ -28,35 +28,40 @@ writes.
 **Verified after launch, by the owner in a browser:**
 - the Hub shows 26 listings, 13 open, with no staging banner and no demo;
 - the nav is correct;
-- in the DOM, the canonical is exactly `https://festivals.musicscenemagazine.co.uk/` and the robots meta is `index, follow`;
+- in the DOM, there is exactly **one canonical**, `https://festivals.musicscenemagazine.co.uk/`, and the robots meta is `index, follow`;
+- `/robots.txt` is exactly `User-agent: *` / `Allow: /` / `Sitemap: https://festivals.musicscenemagazine.co.uk/sitemap.xml`;
+- `/sitemap.xml` has the root `<loc>https://festivals.musicscenemagazine.co.uk/</loc>`;
+- `/sw.js` and `/api/og` each return Vercel's `404 NOT_FOUND`;
+- live search for "Hanwell" shows 1 of 26;
+- a shortlist save persisted across a reload, and the test entry was then removed;
 - Hub → WordPress → Hub, and calendar ↔ Hub, all navigate in the same tab;
 - the live calendar loads (1,618 gigs) and shows the FESTIVAL HUB link;
 - the build log shows the LAUNCH mode with 6 files.
 
-**NOT verified after launch: the HTTP response checks.** These are:
-- the status code and CSP header;
+**Verified after launch, from GitHub commit statuses:** the Hub project's
+Ignored Build Step works. Claude's docs push of `feature/festival-hub` @
+`0aeda29` was reported by `msm-festival-hub` as **"Canceled by Ignored Build
+Step"**, so nothing was built or deployed there.
+
+**NOT verified after launch: the response headers.** These are:
+- the `Content-Security-Policy` header (and the other security headers);
 - **no `X-Robots-Tag` on the custom hostname**;
-- `X-Robots-Tag: noindex, nofollow` on the `*.vercel.app` deployment URL;
-- the exact `robots.txt` and `sitemap.xml`;
-- 404 for `/api/og` and `/sw.js`.
+- `X-Robots-Tag: noindex, nofollow` on the `*.vercel.app` deployment URL.
 
 Why they weren't measured:
 - the Claude dev environment's network policy refuses both hosts (no workaround was attempted);
 - the owner's in-browser Vercel fetch was rejected by automated review, because it could create an authenticated share URL;
 - no access changes or retries were made.
 
-Before launch, these same behaviours were verified **locally** on byte-identical code:
+Before launch, these headers were verified **locally** on byte-identical code:
 - fresh-clone end-to-end tests of `1c21541` with `VERCEL_ENV=production`: 18/18;
 - the template's host rules, emulated for 8 hosts.
 
 They remain an **open post-launch check**. Run these from any terminal:
 
 ```sh
-H=https://festivals.musicscenemagazine.co.uk
-curl -sSI $H/ | grep -iE '^HTTP|^x-robots-tag|^content-security-policy'   # 200, NO x-robots-tag, CSP present
-curl -sS $H/robots.txt; curl -sS $H/sitemap.xml                          # exact approved text, one <loc>
-for p in /api/og /sw.js; do curl -s -o /dev/null -w "$p %{http_code}\n" $H$p; done   # 404 404
-curl -sSI https://<project>.vercel.app/ | grep -i '^x-robots-tag'          # noindex, nofollow (or 401 if protected)
+curl -sSI https://festivals.musicscenemagazine.co.uk/ | grep -iE '^HTTP|^x-robots-tag|^content-security-policy'   # 200, NO x-robots-tag, CSP present
+curl -sSI https://<project>.vercel.app/ | grep -iE '^HTTP|^x-robots-tag'   # x-robots-tag: noindex, nofollow (or 401 if protected)
 ```
 
 **Known, pre-existing, not changed:** the calendar's Vercel build warns about a
@@ -180,8 +185,15 @@ STANDALONE_CHECKOUT=hub-check HUB_EXPECT=launch npm run test:e2e:hub-standalone
   overrides (`vercel.json`: `npm run build:hub-release` → `dist-hub-standalone`),
   and no environment variables.
 
-This record doesn't confirm whether the guard and production-branch settings
-were applied exactly as above; check them in the project settings.
+**Confirmed saved (owner, 28 Oct 2026):**
+- Ignored Build Step: custom bash `[ "$VERCEL_GIT_COMMIT_REF" = "release/festival-hub" ] && exit 1 || exit 0`;
+- Production branch: `release/festival-hub`;
+- Node 22.x;
+- no environment variables;
+- Framework: Other.
+
+The guard was also confirmed independently: the `0aeda29` docs push was
+reported as "Canceled by Ignored Build Step".
 
 ## Updating the Hub later
 
