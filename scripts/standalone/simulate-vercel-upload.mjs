@@ -5,6 +5,9 @@
 // checks to build exactly what the deploy would receive.
 //
 //   node scripts/standalone/simulate-vercel-upload.mjs <destDir>
+//
+// STANDALONE_TEMPLATE=scripts/standalone/vercel.release.json selects which
+// template becomes the root vercel.json (default: scripts/standalone/vercel.json).
 import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -34,7 +37,7 @@ rmSync(scratch, { recursive: true, force: true });
 rmSync(dest, { recursive: true, force: true });
 for (const f of kept) {
   mkdirSync(dirname(join(dest, f)), { recursive: true });
-  const src = f === "vercel.json" ? "scripts/standalone/vercel.json" : f;
+  const src = f === "vercel.json" ? (process.env.STANDALONE_TEMPLATE || "scripts/standalone/vercel.json") : f;
   copyFileSync(join(ROOT, src), join(dest, f));
 }
 console.log(JSON.stringify({ dest, files: kept.sort() }));
