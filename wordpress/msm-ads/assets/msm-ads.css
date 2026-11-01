@@ -1,0 +1,11 @@
+/* MSM Ads - homepage adapter v0.1.0. Black/white/red only. */
+.msm-ad { position: relative; max-width: 1200px; margin: 0 auto; }
+.msm-ad__link { display: block; }
+.msm-ad img { display: block; width: 100%; height: auto; aspect-ratio: 1200 / 250; object-fit: cover; }
+.msm-ad__label {
+  position: absolute; top: 6px; left: 6px; z-index: 1; pointer-events: none;
+  padding: 2px 8px; font: 700 10px/1.6 sans-serif; letter-spacing: 1px; text-transform: uppercase;
+  color: #fff; background: rgba(0, 0, 0, 0.75);
+}
+.msm-ad__link:focus-visible { outline: 3px solid #e8203a; outline-offset: 2px; }
+@media (max-width: 600px) { .msm-ad img { aspect-ratio: 600 / 250; } }

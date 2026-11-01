@@ -39,7 +39,7 @@
 //    exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
 //  );
 //
-//  3. Replace SUPABASE_URL and SUPABASE_ANON_KEY below with your project values.
+//  3. Project URL/anon key: see src/supabaseConfig.js (one shared client in src/supabaseClient.js).
 //  4. To make someone an admin: update public.profiles set role='admin' where id='<uuid>';
 //
 // ════════════════════════════════════════════════════════════════════
@@ -102,9 +102,11 @@ import VenuePicker from "./venueSearch/VenuePicker.jsx";
 import { venueFieldsFromPickerState, cityConflictsWithSelection, buildVenueUpdatePayload, computeVenueEditSeed } from "./venueSearch/gigVenueFields.js";
 
 // ── Supabase config ────────────────────────────────────────────────
-const SUPABASE_URL = "https://fmlaaiolqwknowhtdeue.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZtbGFhaW9scXdrbm93aHRkZXVlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA3NTk2MTUsImV4cCI6MjA5NjMzNTYxNX0.0RyMAC4JVxGSErcAzTZaaWkWtzSpGpz8laaFye7r2Go";
-const USE_MOCK = SUPABASE_URL === "YOUR_SUPABASE_URL";
+// Project URL/key are NOT defined here any more: the whole app uses the one
+// shared client from ./supabaseClient (production by default, or a complete
+// VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY preview override). The built-in
+// mock mode was only reachable with the placeholder URL, i.e. never.
+const USE_MOCK = false;
 
 // ── Constants ──────────────────────────────────────────────────────
 // GENRES / GENRE_COLORS live in ./genres.js -- shared with src/smartImport
@@ -138,8 +140,8 @@ const MOCK_USERS = {
 };
 
 // ── Official Supabase client ────────────────────────────────────────
-import { createClient } from '@supabase/supabase-js';
-const supabase = USE_MOCK ? null : createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+import { supabase } from './supabaseClient';
+import { startAuthSync } from './authSync.js';
 import NewsletterAdmin  from './components/admin/NewsletterAdmin';
 import AdminFeatured    from './components/admin/AdminFeatured';
 import AdminEditorial   from './components/admin/AdminEditorial';
@@ -147,6 +149,10 @@ import AdminSupporters  from './components/admin/AdminSupporters';
 import AdminHallOfFame  from './components/admin/AdminHallOfFame';
 import AdminFestivals   from './components/admin/AdminFestivals';
 import AdminPromoSlots  from './components/admin/AdminPromoSlots';
+// MSM shared advertising platform, phase 1 (all toggles default OFF).
+import AdminAds from './components/admin/AdminAds';
+import AdvertiserPortal from './components/ads/AdvertiserPortal';
+import { getFlags as getAdsFlags } from './ads/adsClient.js';
 import AdminVenueEnrichment from './components/admin/AdminVenueEnrichment';
 import PromoSlot, { indexPromoSlotsBySlot, buildListViewItems } from './components/PromoSlot.jsx';
 import ClaimDirectoryPage from './components/ClaimDirectoryPage';
@@ -9782,7 +9788,9 @@ function MainApp() {
   // the only thing driving `tab` afterwards, so switching views still works
   // exactly as before on either breakpoint.
   const [tab,     setTab]     = useState(() =>
-    (typeof window !== "undefined" && window.innerWidth <= 600) ? "list" : "calendar"
+    // Advertising phase 1: Stripe Checkout returns to /?view=advertise.
+    (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("view") === "advertise") ? "advertise"
+    : (typeof window !== "undefined" && window.innerWidth <= 600) ? "list" : "calendar"
   ); // calendar | list | submit | admin
   const [selGig,  setSelGig]  = useState(null);
   const [filters, setFilters] = useState({ city:"All", venue:"All", genre:"All", dateFrom:"", dateTo:"" });
@@ -9795,6 +9803,16 @@ function MainApp() {
   // a missing key exactly like an inactive slot, so nothing renders until
   // (or unless) this loads, and nothing breaks if it never does.
   const [promoSlots, setPromoSlots] = useState({});
+  // Advertising phase 1: the ADVERTISE tab only appears when MSM has
+  // switched the portal on (ad_settings.ads_portal_enabled, default OFF).
+  // Independent of every Calendar fetch; a failure just keeps it hidden.
+  const [adsFlags, setAdsFlags] = useState({ portal: false });
+  useEffect(() => {
+    getAdsFlags().then((f) => {
+      setAdsFlags(f || { portal: false });
+      if (!f?.portal) setTab((t) => (t === "advertise" ? "calendar" : t));
+    });
+  }, []);
   const isMobile = useIsMobile();
 
   const isAdmin = auth?.profile?.role === "admin";
@@ -9806,33 +9824,17 @@ function MainApp() {
   // hardcoded to null with nothing reading the session the Supabase client
   // already persists to localStorage by default, so the user appeared
   // logged out every time even though their token was still valid.
+  // Startup getSession + a SYNCHRONOUS onAuthStateChange listener; profile
+  // loading is deferred out of the auth callback and stale results (after
+  // sign-out, an account switch or unmount) are dropped. See src/authSync.js.
   useEffect(() => {
-    if (USE_MOCK) return;
-    let active = true;
-
-    // 1) Explicit check on startup, per Supabase's recommended pattern.
-    supabase.auth.getSession().then(async ({ data, error }) => {
-      if (!active || error || !data.session) return;
-      const result = await DB.buildAuthFromSession(data.session);
-      if (active) setAuth(result);
+    if (USE_MOCK) return undefined;
+    return startAuthSync({
+      supabase,
+      buildAuth: (session) => DB.buildAuthFromSession(session),
+      setAuth,
+      onError: (e) => console.warn("Could not load the signed-in profile:", e?.message || "unknown error"),
     });
-
-    // 2) Keep auth state synchronized with Supabase's own auth state
-    // machine going forward -- INITIAL_SESSION (fired once when the client
-    // finishes restoring from storage, overlaps with #1 above but kept for
-    // robustness), SIGNED_IN (e.g. another tab, magic link), and
-    // SIGNED_OUT (e.g. token expiry, signed out in another tab).
-    const { data: listener } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (!active) return;
-      if (event === "SIGNED_OUT") {
-        setAuth(null);
-      } else if ((event === "INITIAL_SESSION" || event === "SIGNED_IN") && session) {
-        const result = await DB.buildAuthFromSession(session);
-        if (active) setAuth(result);
-      }
-    });
-
-    return () => { active = false; listener?.subscription?.unsubscribe(); };
   }, []);
 
   // SPRINT 4: unread notification badge. Fetched once whenever the signed-in
@@ -9932,7 +9934,7 @@ function MainApp() {
   const displayedGigs = tab === "list" ? listGigs : filteredGigs;
 
   // If user clicked Submit Gig or Admin tab and isn't logged in, show auth panel
-  if (!auth && (tab === "submit" || tab === "admin")) {
+  if (!auth && (tab === "submit" || tab === "admin" || (tab === "advertise" && adsFlags.portal))) {
     return <AuthPanel onAuth={handleAuth} onBack={()=>setTab("calendar")} />;
   }
 
@@ -9944,6 +9946,7 @@ function MainApp() {
     ...(auth ? [{ id:"profile", label: auth.profile?.profile_type === "venue" ? "MY VENUE" : "MY PROFILE" }] : []),
     ...(auth ? [{ id:"following", label:"MY FOLLOWING" }] : []),
     ...(auth ? [{ id:"notifications", label: unreadCount > 0 ? `NOTIFICATIONS (${unreadCount})` : "NOTIFICATIONS" }] : []),
+    ...(auth && adsFlags.portal ? [{ id:"advertise", label:"ADVERTISE" }] : []),
     ...(isAdmin ? [
       { id:"dashboard", label:"DASHBOARD" },
       { id:"admin",     label:`MODERATION (${gigCounts.pending})` },
@@ -9958,6 +9961,7 @@ function MainApp() {
       { id:"featured",      label:"FEATURED" },
       { id:"editorial",     label:"EDITORIAL" },
       { id:"promo-slots",   label:"PROMO SLOTS" },
+      { id:"ads",           label:"ADS" },
       { id:"supporters",    label:"SUPPORTERS" },
       { id:"hall-of-fame",  label:"HALL OF FAME" },
       { id:"festivals",     label:"FESTIVALS" },
@@ -10094,6 +10098,14 @@ function MainApp() {
         {/* PROMO SLOTS -- Editorial Promo + Future Advertising Positions, Phase 1 */}
         {tab==="promo-slots" && isAdmin && (
           <AdminPromoSlots />
+        )}
+
+        {/* ADVERTISING (phase 1) -- portal gated by ads_portal_enabled; admin always reachable to manage toggles */}
+        {tab==="advertise" && auth && adsFlags.portal && (
+          <AdvertiserPortal user={auth.user} logo={<MSMLogo height={56} />} />
+        )}
+        {tab==="ads" && isAdmin && (
+          <AdminAds />
         )}
 
         {/* FOUNDING SUPPORTERS */}
